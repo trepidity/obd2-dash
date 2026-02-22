@@ -1,0 +1,257 @@
+# obd2-dash
+
+A real-time OBD-II vehicle diagnostics TUI dashboard built with Rust. Connects to an ELM327 adapter over serial or Bluetooth LE, or runs in mock mode with realistic vehicle simulations. Features a customizable widget-based dashboard, data recording/replay, dual fuel economy calculations, driving behavior analysis, and DTC diagnostic analysis.
+
+```
+ ┌─ 2006 MINI Cooper S ─── VIN: WMWRE335... ── W11B16 ── Connected ── 12.8V ─┐
+ └────────────────────────────────────────────────────────────────────────────┘
+ ┌═══ GAUGES + ENGINE ══════════════════════┐┌═══ TEMPERATURES ═══════════════┐
+ │ ▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░░░░ 2847 rpm          ││ Coolant      92.1°C           │
+ │ ▓▓▓▓▓▓▓▓░░░░░░░░░░░░ 59 km/h           ││ Oil          87.3°C           │
+ │ Load   42.1%   Thrtl  35.2%             ││ Trans        78.5°C           │
+ │ MAP    65 kPa  MAF    12.3 g/s          ││ Cat B1S1    412.0°C           │
+ └──────────────────────────────────────────┘└───────────────────────────────┘
+ ┌── FUEL SYSTEM ─────┐┌── SYSTEM / VEHICLE ──┐┌── DTCs (2) ────────────────┐
+ │ Tank    74.2%      ││ Batt Voltage  12.8V  ││ P0420  Catalyst system ... │
+ │ STFT B1  +2.3%    ││ VIN  WMWRE335...     ││ P0171  System too lean ... │
+ │ LTFT B1  +1.1%    ││ Engine  W11B16 ...   ││                            │
+ └────────────────────┘└──────────────────────┘└────────────────────────────┘
+ ┌══ FUEL ECONOMY ═══════════════════════════════════════════════════════════┐
+ │ ECU (Gold Standard)          │ Calculated (Advanced)                     │
+ │  Source:  Direct Fuel Rate   │  Method:   Speed-Density                 │
+ │  Instant: 28.3 MPG          │  Instant:  27.1 MPG                      │
+ │  Average: 26.7 MPG          │  Average:  25.9 MPG                      │
+ └═══════════════════════════════════════════════════════════════════════════┘
+ ┌ Status: OK │ Poll: 250ms │ f: compact │ e:edit │ r:rec R:replay ────────┐
+ └──────────────────────────────────────────────────────────────────────────┘
+```
+
+<img width="1396" height="769" alt="image" src="https://github.com/user-attachments/assets/87daa0bb-94b4-49be-9b30-0e32380eea56" />
+
+<img width="1396" height="769" alt="image" src="https://github.com/user-attachments/assets/db7b8d58-7dbb-4fdb-91cc-8b6525a3ef09" />
+
+<img width="1424" height="905" alt="image" src="https://github.com/user-attachments/assets/5700c4f3-b5d9-4587-8f96-03e42f8bc76b" />
+
+## Features
+
+- **25 OBD-II PIDs**: RPM, speed, coolant temp, engine load, fuel trims (all 4 banks), MAF, MAP, throttle, fuel pressure, catalyst temps (4 sensors), oil temp/pressure, transmission temp, fuel level/rate, voltages, and more
+- **Customizable widget dashboard**: 27 widget types across 8 categories, configurable grid layout with JSON persistence, real-time edit mode to add/remove/resize widgets
+- **Two layouts**: Compact (4-gauge view) and Full (configurable widget grid)
+- **Data recording**: Binary recording format captures all PID, voltage, and DTC data to disk with automatic gzip compression and storage management
+- **Session replay**: Play back recorded sessions with adjustable speed (0.5x--4x), seek, and pause controls through a session picker UI
+- **Dual fuel economy**: ECU gold-standard MPG alongside speed-density calculated MPG with 7 real-time correction factors
+- **Threshold alerts**: Vehicle-specific and engine-family-specific warning/critical thresholds with color-coded gauges, loaded from a SQLite database
+- **DTC diagnostics**: Reads stored trouble codes with contextual analysis -- correlated sensor snapshots, other active DTCs, common causes, and suggested repair actions
+- **Sparkline histories**: Rolling 30-second trend graphs for RPM, speed, throttle, and load
+- **Interactive panels**: Tab between widgets, arrow-key select items, Enter for detail popups
+- **Mock mode**: Built-in vehicle simulator with realistic drive patterns, warmup cycles, and DTC scenarios for demo/development without hardware
+- **Vehicle profiles**: Pre-configured profiles for a 2006 MINI Cooper S (W11B16) and 2004 Chevy 2500HD Duramax (LLY) with engine-family-specific thresholds
+- **BLE connectivity**: Connect to ELM327/STN adapters over Bluetooth Low Energy in addition to USB serial, with a built-in device scanner/picker
+- **Driving behavior**: Real-time smoothness scoring, hard brake detection, and jackrabbit start tracking
+- **Debug log viewer**: In-app scrollable log overlay (`l` key) backed by a 2000-line ring buffer
+- **Headless mode**: Non-interactive stdout output when piped or with `--headless`
+- **File logging**: Structured logs via `tracing` written to `logs/` (stdout is reserved for the TUI)
+
+## Requirements
+
+- Rust 1.70+ (edition 2021)
+- For real hardware: an ELM327-compatible OBD-II adapter connected via USB serial or Bluetooth LE
+
+## Building
+
+```bash
+cd obd2-dash
+cargo build --release
+```
+
+## Quick Start
+
+```bash
+# Mock mode -- no hardware needed
+cargo run -- --mock
+
+# Mock with a specific vehicle profile
+cargo run -- --mock --mock-vehicle mini
+cargo run -- --mock --mock-vehicle chevy
+
+# Real ELM327 adapter (auto-detect port)
+cargo run
+
+# Specify serial port
+cargo run -- --port /dev/cu.usbserial-0001 --baud 115200
+
+# Connect via Bluetooth LE
+cargo run -- --ble
+```
+
+See [MANUAL.md](MANUAL.md) for the full user guide.
+
+## CLI Options
+
+```
+Options:
+  -p, --port <PORT>                Serial port path (e.g. /dev/ttyUSB0)
+  -b, --baud <BAUD>               Baud rate [default: 115200]
+      --ble                        Connect via Bluetooth LE instead of serial
+      --ble-name <NAME>            BLE adapter name filter
+      --ble-scan-secs <SECS>       BLE scan timeout in seconds [default: 5]
+      --mock                       Use mock data instead of a real adapter
+      --mock-vehicle <PROFILE>     Mock vehicle: mini, chevy, or generic [default: generic]
+      --poll-ms <MS>               Polling interval in milliseconds [default: 250]
+      --db-path <PATH>             SQLite database path [default: obd2-dash.db]
+      --headless                   Non-interactive stdout mode
+      --config <PATH>              Dashboard layout config JSON [default: dashboard.json]
+      --recordings-dir <PATH>      Directory for recorded sessions [default: recordings]
+      --max-storage-mb <MB>        Max recording storage in MB [default: 500]
+```
+
+## Keyboard Controls
+
+### Normal Mode
+
+| Key | Action |
+|-----|--------|
+| `q` / `Esc` | Quit (or dismiss popup / deselect / unfocus) |
+| `Ctrl+C` | Quit |
+| `f` | Toggle Compact / Full layout |
+| `p` | Pause / resume data display |
+| `u` | Toggle units (metric / imperial) |
+| `d` | Cycle DTC scenarios (mock mode) |
+| `+` / `-` | Increase / decrease poll rate (50ms steps) |
+| `Tab` / `Shift+Tab` | Focus next / previous widget (Full layout) |
+| `Up` / `Down` | Select items within focused widget |
+| `Enter` | Open detail popup for selected item |
+| `e` | Enter edit mode (Full layout) |
+| `r` | Toggle recording on/off |
+| `R` | Open session picker for replay |
+| `s` / `S` | Open device scanner/picker |
+| `l` | Open debug log viewer |
+
+### Edit Mode
+
+| Key | Action |
+|-----|--------|
+| `a` | Add a new widget (opens category picker) |
+| `x` | Delete widget at cursor |
+| `s` | Save layout to JSON and exit edit mode |
+| `Up` / `Down` | Navigate widgets or picker items |
+| `Enter` | Confirm selection in pickers |
+| `Esc` | Go back one step, or cancel and exit edit mode |
+
+### Replay Mode
+
+| Key | Action |
+|-----|--------|
+| `Space` | Pause / resume playback |
+| `[` | Seek backward 30 seconds |
+| `]` | Seek forward 30 seconds |
+| `s` | Cycle playback speed (0.5x / 1x / 2x / 4x) |
+| `Esc` | Stop replay, return to live |
+
+## Architecture
+
+```
+src/
+├── main.rs              # CLI, OBD2 poll loop, TUI event loop, key handling
+├── app.rs               # AppState, Message enum, update() (TEA pattern)
+├── debug_log.rs         # LogBuffer ring buffer, tracing Layer for in-app log viewer
+├── driving.rs           # DrivingBehavior — smoothness score, hard brake/jackrabbit detection
+├── obd2/
+│   ├── mod.rs           # Obd2Connection trait (async)
+│   ├── elm327.rs        # Real ELM327 serial driver (uses Transport trait)
+│   ├── mock.rs          # MockObd2 vehicle simulator
+│   ├── pid.rs           # Pid enum — codes, names, units, parsing
+│   ├── dtc.rs           # DTC decoding, descriptions, mock scenarios
+│   ├── types.rs         # PidReading, VehicleData, Obd2Error
+│   ├── transport.rs     # Transport trait — byte-level I/O abstraction
+│   ├── serial_transport.rs  # SerialTransport (tokio-serial)
+│   ├── ble_transport.rs     # BleTransport (btleplug GATT)
+│   ├── scanner.rs       # Device discovery — serial ports + BLE scan
+│   └── connection_prefs.rs  # Persisted last-used device preference
+├── tui/
+│   ├── mod.rs           # Terminal setup/teardown
+│   ├── event.rs         # Async key/tick/render event handler
+│   ├── ui.rs            # All rendering (compact, full, overlays, footer)
+│   └── panel.rs         # Panel grid, item models, popup builder
+├── widget/
+│   ├── mod.rs           # WidgetKind, WidgetCategory, WidgetMeta, registry
+│   ├── config.rs        # DashboardConfig — rows, slots, JSON load/save
+│   ├── renderers.rs     # render_widget() dispatcher + individual renderers
+│   └── edit_mode.rs     # Edit mode state machine (Browse/Category/Widget/Size)
+├── recording/
+│   ├── mod.rs           # RecordingState enum (Idle/Recording/Replaying)
+│   ├── format.rs        # Binary frame format — magic + header + 14-byte frames
+│   ├── writer.rs        # RecordingWriter — append-only binary file
+│   ├── reader.rs        # Frame reader (raw + gzip)
+│   ├── index.rs         # SessionIndex — JSON metadata for all sessions
+│   ├── storage.rs       # StorageManager — compress, trim, quota enforcement
+│   └── replay.rs        # ReplayController — speed, seek, pause
+├── diagnostics/
+│   ├── mod.rs           # Module exports
+│   ├── provider.rs      # DiagnosticProvider trait, LocalDiagnosticProvider
+│   └── correlation.rs   # DTC-to-PID mapping, guidance text, snapshot builder
+├── fuel_economy.rs      # Dual fuel economy: gold-standard + speed-density
+└── db/
+    ├── mod.rs           # SQLite database, schema, threshold resolution
+    ├── models.rs        # VehicleInfo, thresholds, alerts, mock profiles
+    └── seed.rs          # Reference data seeding (engine families, vehicles)
+```
+
+### Design patterns
+
+- **TEA (The Elm Architecture)**: Unidirectional data flow -- `AppState` is the single source of truth, `Message` enum carries all state transitions, `update()` is the pure reducer
+- **Async trait abstraction**: `Obd2Connection` trait allows swapping between `Elm327` (real, over serial or BLE) and `MockObd2` (demo) at startup
+- **Transport layer**: `Transport` trait abstracts byte-level I/O, with `SerialTransport` and `BleTransport` implementations behind a single `Elm327` driver
+- **Widget-config-driven rendering**: `DashboardConfig` (JSON) drives the full layout dynamically -- the rendering loop iterates config rows/slots rather than hardcoded panels
+- **Recording interception**: Data capture sits at the top of `update()`, passively recording every PID/Voltage/DTC message that flows through the app
+- **Replay injection**: Playback feeds frames back into the same `Message` pipeline via a `tokio::select!` arm, so replayed data follows the exact same code path as live data
+- **Layered threshold resolution**: Default thresholds -> engine family overrides -> VIN-specific overrides, resolved at startup from SQLite
+- **DiagnosticProvider trait**: Async trait for diagnostic analysis, with `LocalDiagnosticProvider` using static correlation tables. Designed for future AI provider integration without restructuring
+
+## Database
+
+The app creates a SQLite database (`obd2-dash.db` by default) on first run, seeded with:
+
+- 2 engine families (W11B16, LLY) with operating characteristics
+- 2 vehicle records with VIN, year/make/model, engine linkage
+- 25 default PID thresholds with warning/critical ranges
+- Engine-family-specific threshold overrides (RPM redline, coolant ranges)
+
+Threshold resolution follows a priority chain: VIN-specific > engine family > default.
+
+## Recording Format
+
+Recorded sessions use a compact binary format:
+
+- **Magic**: `OBD2REC\x01` (8 bytes)
+- **Header**: JSON `SessionHeader` (session ID, start time, VIN, vehicle name, poll interval)
+- **Frames**: 14 bytes each -- `u8 type | u32 offset_ms | u8 pid_code | f64 value`
+
+At 25 PIDs polled at 4 Hz, this produces approximately 5 MB/hour of raw data. Files larger than 50 MB are automatically gzip-compressed on session end.
+
+## Testing
+
+```bash
+cargo test
+```
+
+46 tests covering PID parsing, DTC decoding, database operations, threshold resolution, diagnostic correlation, ELM327 command parsing, and recording format roundtrips.
+
+## Dependencies
+
+| Crate | Purpose |
+|-------|---------|
+| `tokio` | Async runtime |
+| `ratatui` / `crossterm` | Terminal UI framework |
+| `tokio-serial` / `serialport` | Serial port communication |
+| `btleplug` | Bluetooth Low Energy communication |
+| `clap` | CLI argument parsing |
+| `rusqlite` | SQLite database (bundled) |
+| `serde` / `serde_json` | Serialization (config, recording headers, session index) |
+| `chrono` | Wall-clock timestamps for recording sessions |
+| `flate2` | Gzip compression for recorded data |
+| `uuid` | Session ID generation (v4) |
+| `async-trait` | Async trait support |
+| `tracing` | Structured logging |
+| `rand` | Mock data simulation |
+| `anyhow` / `thiserror` | Error handling |
