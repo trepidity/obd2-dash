@@ -204,9 +204,23 @@ impl Obd2Connection for Elm327 {
         tracing::debug!(target: "obd2::elm327", "Reading VIN (mode 09 PID 02)");
         let resp = self.send_command("0902").await?;
 
-        // Collect all data bytes from lines starting with "49 02"
+        // Collect all data bytes from the response.
+        // Two formats are possible:
+        //
+        // Legacy (non-CAN): each line starts with "49 02 NN"
+        //   49 02 01 13 31 47 31    (seq 01, byte count 0x13, then VIN data)
+        //   49 02 02 5A 44 35 ...   (seq 02, continuation data)
+        //   bytes[2]=sequence, bytes[3]=byte count (first seq only), data from [4..]
+        //
+        // CAN ISO-TP (STN/OBDLink): lines have "N:" sequence prefixes
+        //   014                      (byte count line — skip)
+        //   0: 49 02 01 31 47 31    (service=49, pid=02, msg_count=01, then VIN data)
+        //   1: 5A 44 35 53 54 32 4C (continuation — pure data)
+        //   2: 46 30 38 38 38 34 39 (continuation — pure data)
+        //   bytes[2]=msg count, data starts from [3..] (byte count is on separate line)
         let mut data_bytes: Vec<u8> = Vec::new();
-        let mut first_sequence = true;
+        let mut seen_header = false;
+        let mut is_can_format = false;
 
         for line in &resp {
             let upper = line.to_uppercase();
@@ -214,20 +228,45 @@ impl Obd2Connection for Elm327 {
                 tracing::debug!(target: "obd2::elm327", "VIN: NO DATA");
                 return Err(Obd2Error::NoData);
             }
-            if !upper.starts_with("49 02") {
-                continue;
-            }
-            let bytes = Self::parse_hex_response(&upper)?;
-            // bytes[0]=0x49, bytes[1]=0x02, bytes[2]=sequence number, rest=data
-            if bytes.len() <= 3 {
-                continue;
-            }
-            if first_sequence {
-                // First sequence's first data byte is the byte count (typically 0x13=19) — skip it
-                first_sequence = false;
-                data_bytes.extend_from_slice(&bytes[4..]);
+
+            // Strip CAN ISO-TP sequence prefix ("0: ", "1: ", etc.)
+            let had_prefix = upper.len() >= 2
+                && upper.as_bytes()[0].is_ascii_digit()
+                && upper.as_bytes()[1] == b':';
+            let stripped = if had_prefix {
+                upper[2..].trim()
             } else {
-                data_bytes.extend_from_slice(&bytes[3..]);
+                upper.trim()
+            };
+
+            if stripped.starts_with("49 02") {
+                let bytes = Self::parse_hex_response(stripped)?;
+                // bytes[0]=0x49, bytes[1]=0x02, bytes[2]=count/sequence
+                if bytes.len() > 3 {
+                    if !seen_header {
+                        seen_header = true;
+                        is_can_format = had_prefix;
+                        if is_can_format {
+                            // CAN: bytes[2] is message count (01), data from [3..]
+                            // (byte count was on separate "014" line)
+                            data_bytes.extend_from_slice(&bytes[3..]);
+                        } else {
+                            // Legacy: bytes[2] is sequence, bytes[3] is byte count — skip both
+                            data_bytes.extend_from_slice(&bytes[4..]);
+                        }
+                    } else {
+                        // Subsequent "49 02 NN" lines (legacy multi-line format)
+                        data_bytes.extend_from_slice(&bytes[3..]);
+                    }
+                }
+            } else if seen_header && is_can_format {
+                // CAN continuation frame: pure hex data bytes (no "49 02" prefix)
+                // Skip non-hex lines (like the byte count "014")
+                if let Ok(bytes) = Self::parse_hex_response(stripped) {
+                    if !bytes.is_empty() && bytes.iter().all(|&b| b >= 0x20 || b == 0x00) {
+                        data_bytes.extend_from_slice(&bytes);
+                    }
+                }
             }
         }
 
