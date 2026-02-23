@@ -49,6 +49,42 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         max_torque_nm: Some(890.0),
     })?;
 
+    // GM LFV — 1.5L Turbo I4 (Chevrolet Malibu)
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM".to_string(),
+        family_code: "LFV".to_string(),
+        displacement_l: 1.5,
+        cylinders: 4,
+        layout: "I4".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(10.0),
+        redline_rpm: Some(6500),
+        idle_rpm_cold: Some(1100),
+        idle_rpm_warm: Some(700),
+        max_power_kw: Some(119.0), // 160 hp
+        max_torque_nm: Some(250.0), // 184 lb-ft
+    })?;
+
+    // GM LSY — 2.0L Turbo I4 (Chevrolet Malibu Premier)
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM".to_string(),
+        family_code: "LSY".to_string(),
+        displacement_l: 2.0,
+        cylinders: 4,
+        layout: "I4".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(9.5),
+        redline_rpm: Some(6500),
+        idle_rpm_cold: Some(1100),
+        idle_rpm_warm: Some(700),
+        max_power_kw: Some(186.0), // 250 hp
+        max_torque_nm: Some(353.0), // 260 lb-ft
+    })?;
+
     Ok(())
 }
 
@@ -60,6 +96,12 @@ fn seed_vehicles(db: &Database) -> Result<()> {
     let lly_id = db
         .get_engine_family_code_id("LLY")?
         .expect("LLY should be seeded");
+    let lfv_id = db
+        .get_engine_family_code_id("LFV")?
+        .expect("LFV should be seeded");
+    let lsy_id = db
+        .get_engine_family_code_id("LSY")?
+        .expect("LSY should be seeded");
 
     // 2006 MINI Cooper S
     db.upsert_vehicle(&VehicleInfo {
@@ -91,6 +133,38 @@ fn seed_vehicles(db: &Database) -> Result<()> {
         fuel_type: Some("Diesel".to_string()),
         displacement_l: Some(6.6),
         cylinders: Some(8),
+    })?;
+
+    // 2020 Chevrolet Malibu LT (1.5L Turbo LFV, CVT)
+    db.upsert_vehicle(&VehicleInfo {
+        vin: "1G1ZD5ST0LF000001".to_string(),
+        year: Some(2020),
+        make: Some("Chevrolet".to_string()),
+        model: Some("Malibu".to_string()),
+        trim: Some("LT".to_string()),
+        engine_family_id: Some(lfv_id),
+        engine_family_code: Some("LFV".to_string()),
+        transmission_type: Some("CVT".to_string()),
+        drive_type: Some("FWD".to_string()),
+        fuel_type: Some("Gasoline".to_string()),
+        displacement_l: Some(1.5),
+        cylinders: Some(4),
+    })?;
+
+    // 2020 Chevrolet Malibu Premier (2.0L Turbo LSY, 9-speed auto)
+    db.upsert_vehicle(&VehicleInfo {
+        vin: "1G1ZH5ST0LF000002".to_string(),
+        year: Some(2020),
+        make: Some("Chevrolet".to_string()),
+        model: Some("Malibu".to_string()),
+        trim: Some("Premier".to_string()),
+        engine_family_id: Some(lsy_id),
+        engine_family_code: Some("LSY".to_string()),
+        transmission_type: Some("Automatic 9-speed".to_string()),
+        drive_type: Some("FWD".to_string()),
+        fuel_type: Some("Gasoline".to_string()),
+        displacement_l: Some(2.0),
+        cylinders: Some(4),
     })?;
 
     Ok(())
@@ -373,6 +447,105 @@ fn seed_default_thresholds(db: &Database) -> Result<()> {
             high_critical: Some(650.0),
             unit: "kPa".to_string(),
         },
+        // Timing Advance (0x0E) — -64 to 63.5°
+        DefaultThreshold {
+            pid_code: 0x0E,
+            min_value: -64.0,
+            max_value: 63.5,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "°".to_string(),
+        },
+        // Fuel Rail Gauge Pressure (0x23) — 0-655350 kPa
+        DefaultThreshold {
+            pid_code: 0x23,
+            min_value: 0.0,
+            max_value: 655350.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "kPa".to_string(),
+        },
+        // Fuel Rail Abs Pressure (0x59) — 0-655350 kPa
+        DefaultThreshold {
+            pid_code: 0x59,
+            min_value: 0.0,
+            max_value: 655350.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "kPa".to_string(),
+        },
+        // Commanded EGR (0x2C) — 0-100%
+        DefaultThreshold {
+            pid_code: 0x2C,
+            min_value: 0.0,
+            max_value: 100.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "%".to_string(),
+        },
+        // Absolute Load (0x43) — 0-25700%
+        DefaultThreshold {
+            pid_code: 0x43,
+            min_value: 0.0,
+            max_value: 25700.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "%".to_string(),
+        },
+        // Commanded Equiv Ratio (0x44) — 0-2 λ
+        DefaultThreshold {
+            pid_code: 0x44,
+            min_value: 0.0,
+            max_value: 2.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "λ".to_string(),
+        },
+        // Demanded Torque (0x61) — -125 to 130%
+        DefaultThreshold {
+            pid_code: 0x61,
+            min_value: -125.0,
+            max_value: 130.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "%".to_string(),
+        },
+        // Actual Torque (0x62) — -125 to 130%
+        DefaultThreshold {
+            pid_code: 0x62,
+            min_value: -125.0,
+            max_value: 130.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "%".to_string(),
+        },
+        // Reference Torque (0x63) — 0-65535 Nm
+        DefaultThreshold {
+            pid_code: 0x63,
+            min_value: 0.0,
+            max_value: 65535.0,
+            low_warning: None,
+            high_warning: None,
+            low_critical: None,
+            high_critical: None,
+            unit: "Nm".to_string(),
+        },
     ];
 
     for t in &thresholds {
@@ -438,7 +611,67 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
         },
     ];
 
-    for t in w11_overrides.iter().chain(lly_overrides.iter()) {
+    // LFV (Malibu 1.5L Turbo) — turbo engines run hotter
+    let lfv_overrides = vec![
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "LFV".to_string(),
+            pid_code: 0x0C, // RPM
+            min_value: None,
+            max_value: None,
+            low_warning: Some(500.0),
+            high_warning: Some(5800.0),
+            low_critical: Some(350.0),
+            high_critical: Some(6500.0),
+            notes: Some("LFV redline ~6500 RPM".to_string()),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "LFV".to_string(),
+            pid_code: 0x05, // Coolant temp
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(105.0),
+            low_critical: Some(-20.0),
+            high_critical: Some(115.0),
+            notes: Some("LFV turbo coolant range".to_string()),
+        },
+    ];
+
+    // LSY (Malibu 2.0L Turbo) — turbo engines run hotter
+    let lsy_overrides = vec![
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "LSY".to_string(),
+            pid_code: 0x0C, // RPM
+            min_value: None,
+            max_value: None,
+            low_warning: Some(500.0),
+            high_warning: Some(5800.0),
+            low_critical: Some(350.0),
+            high_critical: Some(6500.0),
+            notes: Some("LSY redline ~6500 RPM".to_string()),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "LSY".to_string(),
+            pid_code: 0x05, // Coolant temp
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(105.0),
+            low_critical: Some(-20.0),
+            high_critical: Some(115.0),
+            notes: Some("LSY turbo coolant range".to_string()),
+        },
+    ];
+
+    for t in w11_overrides.iter()
+        .chain(lly_overrides.iter())
+        .chain(lfv_overrides.iter())
+        .chain(lsy_overrides.iter())
+    {
         db.upsert_pid_threshold(t)?;
     }
     Ok(())

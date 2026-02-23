@@ -24,8 +24,26 @@ pub enum Pid {
     CatalystTempB2S2,     // 0x3F
     ControlModuleVoltage, // 0x42
     AmbientAirTemp,       // 0x46
+    TimingAdvance,        // 0x0E
+    RunTimeSinceStart,    // 0x1F
+    DistanceWithMil,      // 0x21
+    FuelRailGaugePressure, // 0x23
+    CommandedEgr,         // 0x2C
+    CommandedEvapPurge,   // 0x2E
+    DistanceSinceDtcClear, // 0x31
+    AbsoluteLoad,         // 0x43
+    CommandedEquivRatio,  // 0x44
+    RelativeThrottlePos,  // 0x45
+    AbsThrottlePosB,      // 0x47
+    AccelPedalPosD,       // 0x49
+    AccelPedalPosE,       // 0x4A
+    CommandedThrottleActuator, // 0x4C
+    FuelRailAbsPressure,  // 0x59
     EngineOilTemp,        // 0x5C
     EngineFuelRate,       // 0x5E
+    DemandedTorque,       // 0x61
+    ActualTorque,         // 0x62
+    ReferenceTorque,      // 0x63
     // Extended / manufacturer-specific (not standard Mode 01)
     TransmissionTemp,     // 0xFE (custom)
     OilPressure,          // 0xFD (custom)
@@ -45,19 +63,37 @@ impl Pid {
             Pid::IntakeMap => 0x0B,
             Pid::EngineRpm => 0x0C,
             Pid::VehicleSpeed => 0x0D,
+            Pid::TimingAdvance => 0x0E,
             Pid::IntakeAirTemp => 0x0F,
             Pid::Maf => 0x10,
             Pid::ThrottlePosition => 0x11,
+            Pid::RunTimeSinceStart => 0x1F,
+            Pid::DistanceWithMil => 0x21,
+            Pid::FuelRailGaugePressure => 0x23,
+            Pid::CommandedEgr => 0x2C,
+            Pid::CommandedEvapPurge => 0x2E,
             Pid::FuelTankLevel => 0x2F,
+            Pid::DistanceSinceDtcClear => 0x31,
             Pid::BarometricPressure => 0x33,
             Pid::CatalystTempB1S1 => 0x3C,
             Pid::CatalystTempB2S1 => 0x3D,
             Pid::CatalystTempB1S2 => 0x3E,
             Pid::CatalystTempB2S2 => 0x3F,
             Pid::ControlModuleVoltage => 0x42,
+            Pid::AbsoluteLoad => 0x43,
+            Pid::CommandedEquivRatio => 0x44,
+            Pid::RelativeThrottlePos => 0x45,
             Pid::AmbientAirTemp => 0x46,
+            Pid::AbsThrottlePosB => 0x47,
+            Pid::AccelPedalPosD => 0x49,
+            Pid::AccelPedalPosE => 0x4A,
+            Pid::CommandedThrottleActuator => 0x4C,
+            Pid::FuelRailAbsPressure => 0x59,
             Pid::EngineOilTemp => 0x5C,
             Pid::EngineFuelRate => 0x5E,
+            Pid::DemandedTorque => 0x61,
+            Pid::ActualTorque => 0x62,
+            Pid::ReferenceTorque => 0x63,
             Pid::TransmissionTemp => 0xFE,
             Pid::OilPressure => 0xFD,
         }
@@ -76,19 +112,37 @@ impl Pid {
             Pid::IntakeMap => "Intake MAP",
             Pid::EngineRpm => "Engine RPM",
             Pid::VehicleSpeed => "Vehicle Speed",
+            Pid::TimingAdvance => "Timing Advance",
             Pid::IntakeAirTemp => "Intake Air Temp",
             Pid::Maf => "MAF",
             Pid::ThrottlePosition => "Throttle Position",
+            Pid::RunTimeSinceStart => "Run Time",
+            Pid::DistanceWithMil => "Distance w/ MIL",
+            Pid::FuelRailGaugePressure => "Fuel Rail Gauge Pressure",
+            Pid::CommandedEgr => "Commanded EGR",
+            Pid::CommandedEvapPurge => "Commanded EVAP Purge",
             Pid::FuelTankLevel => "Fuel Tank Level",
+            Pid::DistanceSinceDtcClear => "Distance Since DTC Clear",
             Pid::BarometricPressure => "Barometric Pressure",
             Pid::CatalystTempB1S1 => "Catalyst Temp B1S1",
             Pid::CatalystTempB2S1 => "Catalyst Temp B2S1",
             Pid::CatalystTempB1S2 => "Catalyst Temp B1S2",
             Pid::CatalystTempB2S2 => "Catalyst Temp B2S2",
             Pid::ControlModuleVoltage => "Control Module Voltage",
+            Pid::AbsoluteLoad => "Absolute Load",
+            Pid::CommandedEquivRatio => "Commanded Equiv Ratio",
+            Pid::RelativeThrottlePos => "Relative Throttle Pos",
             Pid::AmbientAirTemp => "Ambient Air Temp",
+            Pid::AbsThrottlePosB => "Abs Throttle Pos B",
+            Pid::AccelPedalPosD => "Accel Pedal Pos D",
+            Pid::AccelPedalPosE => "Accel Pedal Pos E",
+            Pid::CommandedThrottleActuator => "Commanded Throttle",
+            Pid::FuelRailAbsPressure => "Fuel Rail Abs Pressure",
             Pid::EngineOilTemp => "Engine Oil Temp",
             Pid::EngineFuelRate => "Engine Fuel Rate",
+            Pid::DemandedTorque => "Demanded Torque",
+            Pid::ActualTorque => "Actual Torque",
+            Pid::ReferenceTorque => "Reference Torque",
             Pid::TransmissionTemp => "Transmission Temp",
             Pid::OilPressure => "Oil Pressure",
         }
@@ -107,19 +161,37 @@ impl Pid {
             0x0B => Some(Pid::IntakeMap),
             0x0C => Some(Pid::EngineRpm),
             0x0D => Some(Pid::VehicleSpeed),
+            0x0E => Some(Pid::TimingAdvance),
             0x0F => Some(Pid::IntakeAirTemp),
             0x10 => Some(Pid::Maf),
             0x11 => Some(Pid::ThrottlePosition),
+            0x1F => Some(Pid::RunTimeSinceStart),
+            0x21 => Some(Pid::DistanceWithMil),
+            0x23 => Some(Pid::FuelRailGaugePressure),
+            0x2C => Some(Pid::CommandedEgr),
+            0x2E => Some(Pid::CommandedEvapPurge),
             0x2F => Some(Pid::FuelTankLevel),
+            0x31 => Some(Pid::DistanceSinceDtcClear),
             0x33 => Some(Pid::BarometricPressure),
             0x3C => Some(Pid::CatalystTempB1S1),
             0x3D => Some(Pid::CatalystTempB2S1),
             0x3E => Some(Pid::CatalystTempB1S2),
             0x3F => Some(Pid::CatalystTempB2S2),
             0x42 => Some(Pid::ControlModuleVoltage),
+            0x43 => Some(Pid::AbsoluteLoad),
+            0x44 => Some(Pid::CommandedEquivRatio),
+            0x45 => Some(Pid::RelativeThrottlePos),
             0x46 => Some(Pid::AmbientAirTemp),
+            0x47 => Some(Pid::AbsThrottlePosB),
+            0x49 => Some(Pid::AccelPedalPosD),
+            0x4A => Some(Pid::AccelPedalPosE),
+            0x4C => Some(Pid::CommandedThrottleActuator),
+            0x59 => Some(Pid::FuelRailAbsPressure),
             0x5C => Some(Pid::EngineOilTemp),
             0x5E => Some(Pid::EngineFuelRate),
+            0x61 => Some(Pid::DemandedTorque),
+            0x62 => Some(Pid::ActualTorque),
+            0x63 => Some(Pid::ReferenceTorque),
             0xFD => Some(Pid::OilPressure),
             0xFE => Some(Pid::TransmissionTemp),
             _ => None,
@@ -147,21 +219,38 @@ impl Pid {
             | Pid::LongFuelTrimBank2 => "%",
             Pid::FuelPressure => "kPa",
             Pid::IntakeMap => "kPa",
+            Pid::TimingAdvance => "°",
             Pid::EngineRpm => "rpm",
             Pid::VehicleSpeed => "km/h",
             Pid::IntakeAirTemp => "°C",
             Pid::Maf => "g/s",
             Pid::ThrottlePosition => "%",
+            Pid::RunTimeSinceStart => "s",
+            Pid::DistanceWithMil => "km",
+            Pid::FuelRailGaugePressure => "kPa",
+            Pid::CommandedEgr
+            | Pid::CommandedEvapPurge => "%",
             Pid::FuelTankLevel => "%",
+            Pid::DistanceSinceDtcClear => "km",
             Pid::BarometricPressure => "kPa",
             Pid::CatalystTempB1S1
             | Pid::CatalystTempB2S1
             | Pid::CatalystTempB1S2
             | Pid::CatalystTempB2S2 => "°C",
             Pid::ControlModuleVoltage => "V",
+            Pid::AbsoluteLoad => "%",
+            Pid::CommandedEquivRatio => "λ",
+            Pid::RelativeThrottlePos
+            | Pid::AbsThrottlePosB
+            | Pid::AccelPedalPosD
+            | Pid::AccelPedalPosE
+            | Pid::CommandedThrottleActuator => "%",
             Pid::AmbientAirTemp => "°C",
+            Pid::FuelRailAbsPressure => "kPa",
             Pid::EngineOilTemp => "°C",
             Pid::EngineFuelRate => "L/h",
+            Pid::DemandedTorque | Pid::ActualTorque => "%",
+            Pid::ReferenceTorque => "Nm",
             Pid::TransmissionTemp => "°C",
             Pid::OilPressure => "kPa",
         }
@@ -171,7 +260,11 @@ impl Pid {
     /// `data` should contain only the data bytes (after service ID and PID byte).
     pub fn parse_value(&self, data: &[u8]) -> Result<PidReading, Obd2Error> {
         match self {
-            Pid::EngineLoad | Pid::ThrottlePosition | Pid::FuelTankLevel => {
+            Pid::EngineLoad | Pid::ThrottlePosition | Pid::FuelTankLevel
+            | Pid::CommandedEgr | Pid::CommandedEvapPurge
+            | Pid::RelativeThrottlePos | Pid::AbsThrottlePosB
+            | Pid::AccelPedalPosD | Pid::AccelPedalPosE
+            | Pid::CommandedThrottleActuator => {
                 // A * 100 / 255
                 if data.is_empty() {
                     return Err(Obd2Error::ParseError(format!(
@@ -292,6 +385,75 @@ impl Pid {
                 let value = (256.0 * data[0] as f64 + data[1] as f64) / 20.0;
                 Ok(PidReading::new(value, self.unit()))
             }
+            Pid::TimingAdvance => {
+                // A/2 - 64
+                if data.is_empty() {
+                    return Err(Obd2Error::ParseError("Timing Advance: need 1 byte".into()));
+                }
+                let value = data[0] as f64 / 2.0 - 64.0;
+                Ok(PidReading::new(value, self.unit()))
+            }
+            Pid::RunTimeSinceStart | Pid::DistanceWithMil | Pid::DistanceSinceDtcClear => {
+                // 256A + B
+                if data.len() < 2 {
+                    return Err(Obd2Error::ParseError(format!(
+                        "{}: need 2 bytes",
+                        self.name()
+                    )));
+                }
+                let value = 256.0 * data[0] as f64 + data[1] as f64;
+                Ok(PidReading::new(value, self.unit()))
+            }
+            Pid::FuelRailGaugePressure | Pid::FuelRailAbsPressure => {
+                // (256A + B) * 10
+                if data.len() < 2 {
+                    return Err(Obd2Error::ParseError(format!(
+                        "{}: need 2 bytes",
+                        self.name()
+                    )));
+                }
+                let value = (256.0 * data[0] as f64 + data[1] as f64) * 10.0;
+                Ok(PidReading::new(value, self.unit()))
+            }
+            Pid::AbsoluteLoad => {
+                // (256A + B) * 100 / 255
+                if data.len() < 2 {
+                    return Err(Obd2Error::ParseError("Absolute Load: need 2 bytes".into()));
+                }
+                let value = (256.0 * data[0] as f64 + data[1] as f64) * 100.0 / 255.0;
+                Ok(PidReading::new(value, self.unit()))
+            }
+            Pid::CommandedEquivRatio => {
+                // (256A + B) / 32768
+                if data.len() < 2 {
+                    return Err(Obd2Error::ParseError(
+                        "Commanded Equiv Ratio: need 2 bytes".into(),
+                    ));
+                }
+                let value = (256.0 * data[0] as f64 + data[1] as f64) / 32768.0;
+                Ok(PidReading::new(value, self.unit()))
+            }
+            Pid::DemandedTorque | Pid::ActualTorque => {
+                // A - 125
+                if data.is_empty() {
+                    return Err(Obd2Error::ParseError(format!(
+                        "{}: need 1 byte",
+                        self.name()
+                    )));
+                }
+                let value = data[0] as f64 - 125.0;
+                Ok(PidReading::new(value, self.unit()))
+            }
+            Pid::ReferenceTorque => {
+                // 256A + B
+                if data.len() < 2 {
+                    return Err(Obd2Error::ParseError(
+                        "Reference Torque: need 2 bytes".into(),
+                    ));
+                }
+                let value = 256.0 * data[0] as f64 + data[1] as f64;
+                Ok(PidReading::new(value, self.unit()))
+            }
             Pid::TransmissionTemp => {
                 // A - 40 (same formula as coolant/oil temp)
                 if data.is_empty() {
@@ -333,19 +495,37 @@ impl Pid {
             Pid::IntakeMap,
             Pid::EngineRpm,
             Pid::VehicleSpeed,
+            Pid::TimingAdvance,
             Pid::IntakeAirTemp,
             Pid::Maf,
             Pid::ThrottlePosition,
+            Pid::RunTimeSinceStart,
+            Pid::DistanceWithMil,
+            Pid::FuelRailGaugePressure,
+            Pid::CommandedEgr,
+            Pid::CommandedEvapPurge,
             Pid::FuelTankLevel,
+            Pid::DistanceSinceDtcClear,
             Pid::BarometricPressure,
             Pid::CatalystTempB1S1,
             Pid::CatalystTempB2S1,
             Pid::CatalystTempB1S2,
             Pid::CatalystTempB2S2,
             Pid::ControlModuleVoltage,
+            Pid::AbsoluteLoad,
+            Pid::CommandedEquivRatio,
+            Pid::RelativeThrottlePos,
             Pid::AmbientAirTemp,
+            Pid::AbsThrottlePosB,
+            Pid::AccelPedalPosD,
+            Pid::AccelPedalPosE,
+            Pid::CommandedThrottleActuator,
+            Pid::FuelRailAbsPressure,
             Pid::EngineOilTemp,
             Pid::EngineFuelRate,
+            Pid::DemandedTorque,
+            Pid::ActualTorque,
+            Pid::ReferenceTorque,
             Pid::TransmissionTemp,
             Pid::OilPressure,
         ]
@@ -498,8 +678,8 @@ mod tests {
     #[test]
     fn test_all_vs_all_known() {
         // all() now delegates to all_known()
-        assert_eq!(Pid::all().len(), 25);
-        assert_eq!(Pid::all_known().len(), 25);
+        assert_eq!(Pid::all().len(), 43);
+        assert_eq!(Pid::all_known().len(), 43);
         for pid in Pid::all() {
             assert!(Pid::all_known().contains(pid));
         }

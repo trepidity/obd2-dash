@@ -231,6 +231,215 @@ static DTC_CORRELATIONS: &[DtcCorrelation] = &[
             Pid::EngineRpm,
         ],
     },
+    // Turbo codes
+    DtcCorrelation {
+        pattern: "P0234",
+        pids: &[
+            Pid::IntakeMap,
+            Pid::BarometricPressure,
+            Pid::EngineLoad,
+            Pid::EngineRpm,
+            Pid::ThrottlePosition,
+            Pid::Maf,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0299",
+        pids: &[
+            Pid::IntakeMap,
+            Pid::BarometricPressure,
+            Pid::EngineLoad,
+            Pid::EngineRpm,
+            Pid::ThrottlePosition,
+            Pid::Maf,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P1101",
+        pids: &[
+            Pid::Maf,
+            Pid::IntakeMap,
+            Pid::ThrottlePosition,
+            Pid::EngineLoad,
+            Pid::CommandedEquivRatio,
+        ],
+    },
+    // VVT / camshaft timing
+    DtcCorrelation {
+        pattern: "P0010",
+        pids: &[
+            Pid::EngineRpm,
+            Pid::EngineOilTemp,
+            Pid::EngineLoad,
+            Pid::TimingAdvance,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0011",
+        pids: &[
+            Pid::EngineRpm,
+            Pid::EngineOilTemp,
+            Pid::EngineLoad,
+            Pid::TimingAdvance,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0014",
+        pids: &[
+            Pid::EngineRpm,
+            Pid::EngineOilTemp,
+            Pid::EngineLoad,
+            Pid::TimingAdvance,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0016",
+        pids: &[
+            Pid::EngineRpm,
+            Pid::EngineOilTemp,
+            Pid::EngineLoad,
+            Pid::TimingAdvance,
+        ],
+    },
+    // O2 heater circuits
+    DtcCorrelation {
+        pattern: "P0030",
+        pids: &[
+            Pid::ControlModuleVoltage,
+            Pid::CoolantTemp,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0036",
+        pids: &[
+            Pid::ControlModuleVoltage,
+            Pid::CoolantTemp,
+            Pid::EngineLoad,
+        ],
+    },
+    // O2 sensor voltage codes
+    DtcCorrelation {
+        pattern: "P0131",
+        pids: &[
+            Pid::ShortFuelTrimBank1,
+            Pid::LongFuelTrimBank1,
+            Pid::CommandedEquivRatio,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0132",
+        pids: &[
+            Pid::ShortFuelTrimBank1,
+            Pid::LongFuelTrimBank1,
+            Pid::CommandedEquivRatio,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0133",
+        pids: &[
+            Pid::ShortFuelTrimBank1,
+            Pid::LongFuelTrimBank1,
+            Pid::CommandedEquivRatio,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0134",
+        pids: &[
+            Pid::ShortFuelTrimBank1,
+            Pid::LongFuelTrimBank1,
+            Pid::CommandedEquivRatio,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0137",
+        pids: &[
+            Pid::ShortFuelTrimBank1,
+            Pid::LongFuelTrimBank1,
+            Pid::CommandedEquivRatio,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0138",
+        pids: &[
+            Pid::ShortFuelTrimBank1,
+            Pid::LongFuelTrimBank1,
+            Pid::CommandedEquivRatio,
+            Pid::EngineLoad,
+        ],
+    },
+    // Thermostat
+    DtcCorrelation {
+        pattern: "P0597",
+        pids: &[
+            Pid::CoolantTemp,
+            Pid::IntakeAirTemp,
+            Pid::ControlModuleVoltage,
+        ],
+    },
+    // Transmission extras
+    DtcCorrelation {
+        pattern: "P0711",
+        pids: &[
+            Pid::TransmissionTemp,
+            Pid::CoolantTemp,
+            Pid::VehicleSpeed,
+            Pid::EngineRpm,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0717",
+        pids: &[
+            Pid::VehicleSpeed,
+            Pid::TransmissionTemp,
+            Pid::EngineRpm,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0741",
+        pids: &[
+            Pid::TransmissionTemp,
+            Pid::VehicleSpeed,
+            Pid::EngineRpm,
+            Pid::EngineLoad,
+        ],
+    },
+    // Idle low
+    DtcCorrelation {
+        pattern: "P0506",
+        pids: &[
+            Pid::EngineRpm,
+            Pid::ThrottlePosition,
+            Pid::EngineLoad,
+            Pid::IntakeMap,
+            Pid::CoolantTemp,
+            Pid::CommandedThrottleActuator,
+        ],
+    },
+    // EVAP extras
+    DtcCorrelation {
+        pattern: "P0449",
+        pids: &[
+            Pid::CommandedEvapPurge,
+            Pid::FuelTankLevel,
+            Pid::BarometricPressure,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0496",
+        pids: &[
+            Pid::CommandedEvapPurge,
+            Pid::FuelTankLevel,
+            Pid::ShortFuelTrimBank1,
+            Pid::LongFuelTrimBank1,
+        ],
+    },
     // ─── Prefix matches (fallback groups) ────────────────────────────────
     // P01xx — Fuel/Air metering
     DtcCorrelation {
@@ -277,6 +486,17 @@ static DTC_CORRELATIONS: &[DtcCorrelation] = &[
             Pid::IntakeMap,
         ],
     },
+    // P02xx — Turbo / fuel system
+    DtcCorrelation {
+        pattern: "P02",
+        pids: &[
+            Pid::IntakeMap,
+            Pid::BarometricPressure,
+            Pid::Maf,
+            Pid::EngineLoad,
+            Pid::EngineRpm,
+        ],
+    },
     // P07xx — Transmission
     DtcCorrelation {
         pattern: "P07",
@@ -285,6 +505,28 @@ static DTC_CORRELATIONS: &[DtcCorrelation] = &[
             Pid::TransmissionTemp,
             Pid::EngineLoad,
             Pid::EngineRpm,
+        ],
+    },
+    // Bxxxx — Body
+    DtcCorrelation {
+        pattern: "B",
+        pids: &[
+            Pid::ControlModuleVoltage,
+        ],
+    },
+    // Cxxxx — Chassis
+    DtcCorrelation {
+        pattern: "C",
+        pids: &[
+            Pid::VehicleSpeed,
+            Pid::ControlModuleVoltage,
+        ],
+    },
+    // Uxxxx — Network
+    DtcCorrelation {
+        pattern: "U",
+        pids: &[
+            Pid::ControlModuleVoltage,
         ],
     },
 ];
@@ -345,6 +587,24 @@ fn pid_value(v: &VehicleData, pid: Pid) -> Option<f64> {
         Pid::EngineFuelRate => v.engine_fuel_rate.as_ref().map(|r| r.value),
         Pid::TransmissionTemp => v.transmission_temp.as_ref().map(|r| r.value),
         Pid::OilPressure => v.oil_pressure.as_ref().map(|r| r.value),
+        Pid::TimingAdvance => v.timing_advance.as_ref().map(|r| r.value),
+        Pid::RunTimeSinceStart => v.run_time.as_ref().map(|r| r.value),
+        Pid::DistanceWithMil => v.distance_with_mil.as_ref().map(|r| r.value),
+        Pid::FuelRailGaugePressure => v.fuel_rail_gauge_pressure.as_ref().map(|r| r.value),
+        Pid::CommandedEgr => v.commanded_egr.as_ref().map(|r| r.value),
+        Pid::CommandedEvapPurge => v.commanded_evap_purge.as_ref().map(|r| r.value),
+        Pid::DistanceSinceDtcClear => v.distance_since_dtc_clear.as_ref().map(|r| r.value),
+        Pid::AbsoluteLoad => v.absolute_load.as_ref().map(|r| r.value),
+        Pid::CommandedEquivRatio => v.commanded_equiv_ratio.as_ref().map(|r| r.value),
+        Pid::RelativeThrottlePos => v.relative_throttle_pos.as_ref().map(|r| r.value),
+        Pid::AbsThrottlePosB => v.abs_throttle_pos_b.as_ref().map(|r| r.value),
+        Pid::AccelPedalPosD => v.accel_pedal_pos_d.as_ref().map(|r| r.value),
+        Pid::AccelPedalPosE => v.accel_pedal_pos_e.as_ref().map(|r| r.value),
+        Pid::CommandedThrottleActuator => v.commanded_throttle_actuator.as_ref().map(|r| r.value),
+        Pid::FuelRailAbsPressure => v.fuel_rail_abs_pressure.as_ref().map(|r| r.value),
+        Pid::DemandedTorque => v.demanded_torque.as_ref().map(|r| r.value),
+        Pid::ActualTorque => v.actual_torque.as_ref().map(|r| r.value),
+        Pid::ReferenceTorque => v.reference_torque.as_ref().map(|r| r.value),
     }
 }
 
@@ -412,6 +672,24 @@ fn short_name(pid: Pid) -> &'static str {
         Pid::EngineFuelRate => "Fuel Rate",
         Pid::TransmissionTemp => "Trans Temp",
         Pid::OilPressure => "Oil P",
+        Pid::TimingAdvance => "Timing",
+        Pid::RunTimeSinceStart => "Run Time",
+        Pid::DistanceWithMil => "Dist MIL",
+        Pid::FuelRailGaugePressure => "Rail P",
+        Pid::CommandedEgr => "EGR",
+        Pid::CommandedEvapPurge => "EVAP Purge",
+        Pid::DistanceSinceDtcClear => "Dist CLR",
+        Pid::AbsoluteLoad => "Abs Load",
+        Pid::CommandedEquivRatio => "Equiv λ",
+        Pid::RelativeThrottlePos => "Rel Throt",
+        Pid::AbsThrottlePosB => "Throt B",
+        Pid::AccelPedalPosD => "Pedal D",
+        Pid::AccelPedalPosE => "Pedal E",
+        Pid::CommandedThrottleActuator => "Cmd Throt",
+        Pid::FuelRailAbsPressure => "Rail Abs P",
+        Pid::DemandedTorque => "Dem Torq",
+        Pid::ActualTorque => "Act Torq",
+        Pid::ReferenceTorque => "Ref Torq",
     }
 }
 
@@ -628,6 +906,85 @@ pub fn common_causes(code: &str) -> Option<&'static [&'static str]> {
             "Contaminated O2 sensor (coolant/oil)",
             "Faulty PCM O2 heater circuit",
         ]),
+        // Turbo codes
+        "P0234" => Some(&[
+            "Stuck wastegate actuator",
+            "Faulty boost pressure sensor",
+            "Boost solenoid stuck closed",
+            "Restricted exhaust causing backpressure",
+            "Faulty turbo control valve",
+        ]),
+        "P0299" => Some(&[
+            "Boost leak in charge piping or intercooler",
+            "Stuck-open wastegate",
+            "Worn turbocharger (shaft play)",
+            "Restricted air intake or clogged filter",
+            "Faulty boost pressure solenoid",
+        ]),
+        // GM intake airflow
+        "P1101" => Some(&[
+            "Vacuum leak in intake system",
+            "Dirty or faulty MAF sensor",
+            "Restricted air filter",
+            "PCV valve or hose leak",
+            "Throttle body carbon buildup",
+        ]),
+        // VVT / camshaft timing
+        "P0010" | "P0011" | "P0014" | "P0016" => Some(&[
+            "Low or dirty engine oil (VVT depends on oil pressure)",
+            "Faulty camshaft position actuator solenoid",
+            "Clogged oil passages to VVT actuator",
+            "Stretched or jumped timing chain",
+            "Faulty camshaft position sensor",
+        ]),
+        // Idle low
+        "P0506" => Some(&[
+            "Vacuum leak causing low idle",
+            "Dirty throttle body",
+            "Faulty idle air control valve",
+            "Carbon buildup in intake manifold",
+            "Faulty throttle position sensor",
+        ]),
+        // O2 heater circuits
+        "P0030" | "P0036" => Some(&[
+            "Blown O2 heater fuse",
+            "Faulty O2 sensor heater element",
+            "Damaged wiring to O2 sensor heater",
+            "Corroded O2 sensor connector",
+            "Faulty PCM heater driver circuit",
+        ]),
+        // O2 sensor voltage
+        "P0131" | "P0132" | "P0133" | "P0134"
+        | "P0137" | "P0138" => Some(&[
+            "Faulty O2 sensor",
+            "Exhaust leak near O2 sensor",
+            "Wiring damage or short in O2 circuit",
+            "Contaminated O2 sensor (oil/coolant leak)",
+            "Fuel system imbalance (rich or lean)",
+        ]),
+        // Thermostat
+        "P0597" | "P0598" | "P0599" => Some(&[
+            "Faulty electronically controlled thermostat",
+            "Damaged wiring to thermostat heater",
+            "Corroded thermostat connector",
+            "Faulty PCM thermostat driver circuit",
+            "Low coolant level affecting thermostat",
+        ]),
+        // Transmission extras
+        "P0711" => Some(&[
+            "Faulty transmission fluid temperature sensor",
+            "Damaged wiring to trans temp sensor",
+            "Corroded sensor connector",
+            "Low or contaminated transmission fluid",
+            "Internal transmission damage",
+        ]),
+        "P0741" => Some(&[
+            "Faulty torque converter clutch solenoid",
+            "Low or contaminated transmission fluid",
+            "Worn torque converter clutch",
+            "Damaged wiring to TCC solenoid",
+            "Internal transmission valve body issue",
+        ]),
         _ => None,
     }
 }
@@ -756,6 +1113,84 @@ pub fn suggested_actions(code: &str) -> Option<&'static [&'static str]> {
             "Monitor O2 sensor switching rate (live data)",
             "Replace O2 sensor if lazy or non-responsive",
         ]),
+        // Turbo codes
+        "P0234" => Some(&[
+            "Check wastegate actuator movement",
+            "Inspect boost pressure sensor reading",
+            "Test boost control solenoid",
+            "Check for restricted exhaust (catalytic converter)",
+            "Verify turbo control valve operation",
+        ]),
+        "P0299" => Some(&[
+            "Pressure-test charge piping and intercooler",
+            "Inspect wastegate for sticking or leaks",
+            "Check turbocharger shaft play (radial/axial)",
+            "Inspect air filter for restriction",
+            "Test boost pressure solenoid operation",
+        ]),
+        "P1101" => Some(&[
+            "Check for vacuum leaks (smoke test)",
+            "Clean or replace MAF sensor",
+            "Inspect air filter for restriction",
+            "Check PCV valve and hoses",
+            "Clean throttle body",
+        ]),
+        // VVT / camshaft timing
+        "P0010" | "P0011" | "P0014" | "P0016" => Some(&[
+            "Check engine oil level and condition",
+            "Test camshaft position actuator solenoid",
+            "Inspect timing chain for stretch (compare cam/crank signals)",
+            "Check oil passages for blockage",
+            "Inspect camshaft position sensor wiring",
+        ]),
+        // Idle low
+        "P0506" => Some(&[
+            "Check for vacuum leaks (smoke test)",
+            "Clean throttle body and idle passages",
+            "Test idle air control valve",
+            "Check for intake manifold leaks",
+            "Reset idle learn procedure after repairs",
+        ]),
+        // O2 heater
+        "P0030" | "P0036" => Some(&[
+            "Check O2 heater fuse",
+            "Measure O2 heater resistance (should be 2-30 ohms)",
+            "Inspect O2 sensor connector for corrosion",
+            "Check wiring from PCM to O2 heater",
+            "Replace O2 sensor if heater is open/short",
+        ]),
+        // O2 sensor voltage
+        "P0131" | "P0132" | "P0133" | "P0134"
+        | "P0137" | "P0138" => Some(&[
+            "Inspect O2 sensor wiring for damage",
+            "Check for exhaust leaks near sensor",
+            "Monitor O2 sensor voltage (live data)",
+            "Check fuel trim values for imbalance",
+            "Replace O2 sensor if signal is stuck or lazy",
+        ]),
+        // Thermostat
+        "P0597" | "P0598" | "P0599" => Some(&[
+            "Test thermostat heater circuit resistance",
+            "Inspect wiring to thermostat for damage",
+            "Check connector for corrosion",
+            "Verify coolant level is adequate",
+            "Replace electronically controlled thermostat",
+        ]),
+        // Transmission extras
+        "P0711" => Some(&[
+            "Check transmission fluid level and condition",
+            "Test trans temp sensor resistance vs. temperature",
+            "Inspect sensor wiring and connector",
+            "Compare trans temp to coolant temp (cold start)",
+            "Replace sensor if out of specification",
+        ]),
+        "P0741" => Some(&[
+            "Check transmission fluid level and condition",
+            "Test TCC solenoid resistance",
+            "Inspect TCC solenoid wiring",
+            "Check for transmission valve body issues",
+            "Monitor slip speed during TCC engagement",
+        ]),
         _ => None,
     }
 }
@@ -782,8 +1217,15 @@ mod tests {
 
     #[test]
     fn test_unknown_code() {
-        let pids = get_correlated_pids("B9999");
+        let pids = get_correlated_pids("X9999");
         assert!(pids.is_empty());
+    }
+
+    #[test]
+    fn test_body_prefix_fallback() {
+        let pids = get_correlated_pids("B9999");
+        assert!(!pids.is_empty());
+        assert!(pids.contains(&Pid::ControlModuleVoltage));
     }
 
     #[test]
