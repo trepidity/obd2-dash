@@ -30,6 +30,9 @@ pub trait Obd2Connection: Send {
     /// Read stored Diagnostic Trouble Codes (Mode 03).
     async fn read_dtcs(&mut self) -> Result<Vec<Dtc>, Obd2Error>;
 
+    /// Read the Vehicle Identification Number (Mode 09 PID 02).
+    async fn read_vin(&mut self) -> Result<String, Obd2Error>;
+
     /// Return adapter chipset and capability info, if detected during init.
     fn adapter_info(&self) -> Option<&AdapterInfo>;
 }

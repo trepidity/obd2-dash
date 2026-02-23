@@ -200,6 +200,61 @@ impl Obd2Connection for Elm327 {
         self.adapter_info.as_ref()
     }
 
+    async fn read_vin(&mut self) -> Result<String, Obd2Error> {
+        tracing::debug!(target: "obd2::elm327", "Reading VIN (mode 09 PID 02)");
+        let resp = self.send_command("0902").await?;
+
+        // Collect all data bytes from lines starting with "49 02"
+        let mut data_bytes: Vec<u8> = Vec::new();
+        let mut first_sequence = true;
+
+        for line in &resp {
+            let upper = line.to_uppercase();
+            if upper.contains("NO DATA") || upper.contains("ERROR") {
+                tracing::debug!(target: "obd2::elm327", "VIN: NO DATA");
+                return Err(Obd2Error::NoData);
+            }
+            if !upper.starts_with("49 02") {
+                continue;
+            }
+            let bytes = Self::parse_hex_response(&upper)?;
+            // bytes[0]=0x49, bytes[1]=0x02, bytes[2]=sequence number, rest=data
+            if bytes.len() <= 3 {
+                continue;
+            }
+            if first_sequence {
+                // First sequence's first data byte is the byte count (typically 0x13=19) — skip it
+                first_sequence = false;
+                data_bytes.extend_from_slice(&bytes[4..]);
+            } else {
+                data_bytes.extend_from_slice(&bytes[3..]);
+            }
+        }
+
+        if data_bytes.is_empty() {
+            return Err(Obd2Error::ParseError("no VIN data in response".into()));
+        }
+
+        // Convert to ASCII, taking up to 17 characters
+        let vin: String = data_bytes
+            .iter()
+            .take(17)
+            .filter(|&&b| b >= 0x20 && b <= 0x7E)
+            .map(|&b| b as char)
+            .collect();
+
+        if vin.len() != 17 {
+            return Err(Obd2Error::ParseError(format!(
+                "VIN length {} (expected 17): {:?}",
+                vin.len(),
+                vin
+            )));
+        }
+
+        tracing::info!(target: "obd2::elm327", "VIN: {}", vin);
+        Ok(vin)
+    }
+
     async fn read_dtcs(&mut self) -> Result<Vec<Dtc>, Obd2Error> {
         tracing::debug!(target: "obd2::elm327", "Reading DTCs (mode 03)");
         let resp = self.send_command("03").await?;
