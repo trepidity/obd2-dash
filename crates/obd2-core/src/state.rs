@@ -1,38 +1,22 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::Instant;
 
-use crate::db::models::{Alert, AlertLevel, ResolvedThreshold, VehicleInfo};
+use obd2_db::models::{Alert, AlertLevel, ResolvedThreshold, VehicleInfo};
 use crate::driving::DrivingBehavior;
 use crate::fuel_economy::{FuelEconomyState, SensorSnapshot};
 use crate::obd2::{AdapterInfo, Dtc, Pid, PidReading, VehicleData};
-use crate::obd2::scanner::{DeviceKind, DiscoveredDevice};
 use crate::recording::RecordingState;
 use crate::recording::storage::StorageManager;
-use crate::widget::config::DashboardConfig;
-use crate::widget::edit_mode::EditModeState;
 
-/// Messages flowing into the app state (TEA / Elm-style).
+/// Domain-only events (no scanner/UI messages).
 #[derive(Debug)]
-pub enum Message {
+pub enum DomainMessage {
     PidUpdate(Pid, PidReading),
     VoltageUpdate(f64),
     DtcUpdate(Vec<Dtc>),
     ConnectionStatus(ConnectionState),
     AdapterDetected(AdapterInfo),
-    DeviceFound(DiscoveredDevice),
-    ScanComplete,
-    StartConnect(DeviceKind),
     Error(String),
-    Tick,
-    Quit,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScanMode {
-    Idle,
-    Scanning,
-    Picking,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,106 +39,50 @@ pub enum SpeedUnit {
     Mph,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DashboardLayout {
-    Compact,
-    Full,
-}
-
-#[derive(Debug, Clone)]
-pub struct PopupState {
-    pub title: String,
-    pub body: Vec<String>,
-}
-
-pub struct AppState {
+/// All vehicle/analysis/recording state — the domain layer.
+pub struct DomainState {
     pub vehicle: VehicleData,
     pub connection: ConnectionState,
     pub adapter_info: Option<AdapterInfo>,
     pub last_error: Option<String>,
-    pub running: bool,
-    pub paused: bool,
     pub poll_interval_ms: u64,
     pub temp_unit: TemperatureUnit,
     pub speed_unit: SpeedUnit,
     pub vehicle_info: Option<VehicleInfo>,
-    pub layout: DashboardLayout,
     pub active_alerts: Vec<Alert>,
     pub thresholds_cache: HashMap<u8, ResolvedThreshold>,
     pub stored_dtcs: Vec<Dtc>,
-    pub focused_panel: Option<usize>,
-    pub panel_selections: HashMap<usize, usize>,
-    pub popup: Option<PopupState>,
     pub fuel_economy: FuelEconomyState,
-    last_pid_update: Instant,
-    // Widget-based dashboard
-    pub dashboard_config: DashboardConfig,
-    pub config_path: Option<PathBuf>,
-    pub focused_widget: Option<usize>,
-    pub widget_selections: HashMap<usize, usize>,
-    pub edit_mode: Option<EditModeState>,
-    // Driving behavior analysis
     pub driving: DrivingBehavior,
-    // Recording & replay
     pub recording: RecordingState,
     pub storage_manager: Option<StorageManager>,
-    pub show_session_picker: bool,
-    pub session_picker_selected: usize,
-    // Device scanning
-    pub scan_mode: ScanMode,
-    pub scan_devices: Vec<DiscoveredDevice>,
-    pub scan_selected: usize,
-    pub pending_connect: Option<DeviceKind>,
-    pub scan_requested: bool,
-    // Debug log viewer
-    pub show_debug_log: bool,
-    pub debug_log_scroll: usize,
+    last_pid_update: Instant,
 }
 
-impl AppState {
+impl DomainState {
     pub fn new(poll_interval_ms: u64) -> Self {
         Self {
             vehicle: VehicleData::default(),
             connection: ConnectionState::Disconnected,
             adapter_info: None,
             last_error: None,
-            running: true,
-            paused: false,
             poll_interval_ms,
             temp_unit: TemperatureUnit::Celsius,
             speed_unit: SpeedUnit::Kmh,
-            layout: DashboardLayout::Compact,
             vehicle_info: None,
             active_alerts: Vec::new(),
             thresholds_cache: HashMap::new(),
             stored_dtcs: Vec::new(),
-            focused_panel: None,
-            panel_selections: HashMap::new(),
-            popup: None,
             fuel_economy: FuelEconomyState::new(),
-            last_pid_update: Instant::now(),
-            dashboard_config: DashboardConfig::default_layout(),
-            config_path: None,
-            focused_widget: None,
-            widget_selections: HashMap::new(),
-            edit_mode: None,
             driving: DrivingBehavior::new(),
             recording: RecordingState::Idle,
             storage_manager: None,
-            show_session_picker: false,
-            session_picker_selected: 0,
-            scan_mode: ScanMode::Idle,
-            scan_devices: Vec::new(),
-            scan_selected: 0,
-            pending_connect: None,
-            scan_requested: false,
-            show_debug_log: false,
-            debug_log_scroll: 0,
+            last_pid_update: Instant::now(),
         }
     }
 
-    /// Process a message and update state.
-    pub fn update(&mut self, msg: Message) {
+    /// Process a domain message and update state.
+    pub fn update(&mut self, msg: DomainMessage) {
         // Recording interception: capture data before processing
         if let RecordingState::Recording {
             ref mut writer,
@@ -164,13 +92,13 @@ impl AppState {
         {
             let offset_ms = start_instant.elapsed().as_millis() as u32;
             match &msg {
-                Message::PidUpdate(pid, reading) => {
+                DomainMessage::PidUpdate(pid, reading) => {
                     let _ = writer.write_pid(offset_ms, pid.code(), reading.value);
                 }
-                Message::VoltageUpdate(v) => {
+                DomainMessage::VoltageUpdate(v) => {
                     let _ = writer.write_voltage(offset_ms, *v);
                 }
-                Message::DtcUpdate(dtcs) => {
+                DomainMessage::DtcUpdate(dtcs) => {
                     for dtc in dtcs {
                         let _ = writer.write_dtc(offset_ms, &dtc.code);
                     }
@@ -180,7 +108,7 @@ impl AppState {
         }
 
         match msg {
-            Message::PidUpdate(pid, reading) => {
+            DomainMessage::PidUpdate(pid, reading) => {
                 let value = reading.value;
                 match pid {
                     Pid::EngineRpm => {
@@ -284,48 +212,21 @@ impl AppState {
 
                 self.last_error = None;
             }
-            Message::VoltageUpdate(v) => {
+            DomainMessage::VoltageUpdate(v) => {
                 self.vehicle.battery_voltage = Some(v);
             }
-            Message::DtcUpdate(dtcs) => {
+            DomainMessage::DtcUpdate(dtcs) => {
                 self.stored_dtcs = dtcs;
             }
-            Message::ConnectionStatus(state) => {
+            DomainMessage::ConnectionStatus(state) => {
                 self.connection = state;
             }
-            Message::AdapterDetected(info) => {
+            DomainMessage::AdapterDetected(info) => {
                 tracing::info!("Adapter detected: {} ({})", info.chipset, info.firmware_version);
                 self.adapter_info = Some(info);
             }
-            Message::DeviceFound(dev) => {
-                // Deduplicate by kind
-                if !self.scan_devices.iter().any(|d| d.kind == dev.kind) {
-                    self.scan_devices.push(dev);
-                }
-            }
-            Message::ScanComplete => {
-                if self.scan_mode == ScanMode::Scanning {
-                    if self.scan_devices.is_empty() {
-                        self.scan_mode = ScanMode::Idle;
-                        self.last_error = Some("No devices found".into());
-                    } else {
-                        self.scan_mode = ScanMode::Picking;
-                    }
-                }
-            }
-            Message::StartConnect(kind) => {
-                self.pending_connect = Some(kind);
-                self.connection = ConnectionState::Connecting;
-                self.scan_mode = ScanMode::Idle;
-            }
-            Message::Error(e) => {
+            DomainMessage::Error(e) => {
                 self.last_error = Some(e);
-            }
-            Message::Tick => {
-                // Tick is used to trigger redraws — no state change needed
-            }
-            Message::Quit => {
-                self.running = false;
             }
         }
     }

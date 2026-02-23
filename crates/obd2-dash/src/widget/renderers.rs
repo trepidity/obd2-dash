@@ -47,20 +47,20 @@ pub fn render_widget(
         WidgetKind::VehicleSpeedGauge => render_single_speed(frame, area, state, block),
         WidgetKind::EngineLoadGauge => render_single_load(frame, area, state, block),
         WidgetKind::ThrottleGauge => render_single_throttle(frame, area, state, block),
-        WidgetKind::IntakeMapDisplay => render_single_value(frame, area, state, block, "MAP", state.vehicle.intake_map.as_ref().map(|r| r.value), "kPa", 0x0B),
-        WidgetKind::MafDisplay => render_single_value(frame, area, state, block, "MAF", state.vehicle.maf.as_ref().map(|r| r.value), "g/s", 0x10),
-        WidgetKind::FuelPressureDisplay => render_single_value(frame, area, state, block, "Fuel P", state.vehicle.fuel_pressure.as_ref().map(|r| r.value), "kPa", 0x0A),
+        WidgetKind::IntakeMapDisplay => render_single_value(frame, area, state, block, "MAP", state.domain.vehicle.intake_map.as_ref().map(|r| r.value), "kPa", 0x0B),
+        WidgetKind::MafDisplay => render_single_value(frame, area, state, block, "MAF", state.domain.vehicle.maf.as_ref().map(|r| r.value), "g/s", 0x10),
+        WidgetKind::FuelPressureDisplay => render_single_value(frame, area, state, block, "Fuel P", state.domain.vehicle.fuel_pressure.as_ref().map(|r| r.value), "kPa", 0x0A),
         WidgetKind::BoostPressureDisplay => render_single_boost(frame, area, state, block),
         WidgetKind::OilPressureDisplay => render_single_oil_pressure(frame, area, state, block),
         WidgetKind::FuelTankLevel => render_single_fuel_tank(frame, area, state, block),
-        WidgetKind::EngineFuelRate => render_single_value(frame, area, state, block, "Fuel Rate", state.vehicle.engine_fuel_rate.as_ref().map(|r| r.value), "L/h", 0x5E),
+        WidgetKind::EngineFuelRate => render_single_value(frame, area, state, block, "Fuel Rate", state.domain.vehicle.engine_fuel_rate.as_ref().map(|r| r.value), "L/h", 0x5E),
         WidgetKind::FuelTrimBank1 => render_single_fuel_trims(frame, area, state, block, 1),
         WidgetKind::FuelTrimBank2 => render_single_fuel_trims(frame, area, state, block, 2),
-        WidgetKind::CoolantTemp => render_single_temp(frame, area, state, block, "Coolant", &state.vehicle.coolant_temp, 0x05),
-        WidgetKind::OilTemp => render_single_temp(frame, area, state, block, "Oil", &state.vehicle.engine_oil_temp, 0x5C),
-        WidgetKind::TransmissionTemp => render_single_temp(frame, area, state, block, "Trans", &state.vehicle.transmission_temp, 0xFE),
-        WidgetKind::IntakeAirTemp => render_single_temp(frame, area, state, block, "Intake Air", &state.vehicle.intake_air_temp, 0x0F),
-        WidgetKind::AmbientAirTemp => render_single_temp(frame, area, state, block, "Ambient", &state.vehicle.ambient_air_temp, 0x46),
+        WidgetKind::CoolantTemp => render_single_temp(frame, area, state, block, "Coolant", &state.domain.vehicle.coolant_temp, 0x05),
+        WidgetKind::OilTemp => render_single_temp(frame, area, state, block, "Oil", &state.domain.vehicle.engine_oil_temp, 0x5C),
+        WidgetKind::TransmissionTemp => render_single_temp(frame, area, state, block, "Trans", &state.domain.vehicle.transmission_temp, 0xFE),
+        WidgetKind::IntakeAirTemp => render_single_temp(frame, area, state, block, "Intake Air", &state.domain.vehicle.intake_air_temp, 0x0F),
+        WidgetKind::AmbientAirTemp => render_single_temp(frame, area, state, block, "Ambient", &state.domain.vehicle.ambient_air_temp, 0x46),
         WidgetKind::CatalystTemps => render_single_catalyst_temps(frame, area, state, block),
         WidgetKind::RecordingStatus => render_recording_status(frame, area, state, block),
         WidgetKind::DrivingBehavior => render_driving_behavior(frame, area, state, block),
@@ -74,8 +74,8 @@ fn make_widget_block(kind: WidgetKind, focused: bool, state: &AppState) -> Block
         (BorderType::Double, Color::Cyan)
     } else {
         let color = match kind {
-            WidgetKind::DtcPanel if !state.stored_dtcs.is_empty() => {
-                if state.stored_dtcs.len() >= 3 {
+            WidgetKind::DtcPanel if !state.domain.stored_dtcs.is_empty() => {
+                if state.domain.stored_dtcs.len() >= 3 {
                     Color::Red
                 } else {
                     Color::Yellow
@@ -100,10 +100,10 @@ fn widget_title(kind: WidgetKind, state: &AppState) -> String {
         WidgetKind::FuelSystemPanel => " FUEL SYSTEM ".to_string(),
         WidgetKind::SystemInfoPanel => " SYSTEM / VEHICLE ".to_string(),
         WidgetKind::DtcPanel => {
-            if state.stored_dtcs.is_empty() {
+            if state.domain.stored_dtcs.is_empty() {
                 " DTCs ".to_string()
             } else {
-                format!(" DTCs ({}) ", state.stored_dtcs.len())
+                format!(" DTCs ({}) ", state.domain.stored_dtcs.len())
             }
         }
         WidgetKind::FuelEconomyPanel => " FUEL ECONOMY ".to_string(),
@@ -137,9 +137,9 @@ fn render_single_rpm(frame: &mut Frame, area: Rect, state: &AppState, block: Blo
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rpm_val = state.vehicle.rpm.as_ref().map(|r| r.value).unwrap_or(0.0);
+    let rpm_val = state.domain.vehicle.rpm.as_ref().map(|r| r.value).unwrap_or(0.0);
     let color = ui::threshold_color_for_pid(state, 0x0C, rpm_val, || ui::rpm_color_default(rpm_val));
-    let max_rpm = state
+    let max_rpm = state.domain
         .thresholds_cache
         .get(&0x0C)
         .and_then(|t| t.high_critical)
@@ -162,7 +162,7 @@ fn render_single_rpm(frame: &mut Frame, area: Rect, state: &AppState, block: Blo
         .ratio((rpm_val / max_rpm).clamp(0.0, 1.0));
     frame.render_widget(gauge, chunks[0]);
 
-    let hist: Vec<u64> = state.vehicle.rpm_history.readings.iter().copied().collect();
+    let hist: Vec<u64> = state.domain.vehicle.rpm_history.readings.iter().copied().collect();
     let sparkline = Sparkline::default()
         .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
         .data(&hist)
@@ -175,7 +175,7 @@ fn render_single_speed(frame: &mut Frame, area: Rect, state: &AppState, block: B
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let (speed_val, speed_unit) = state.display_speed().unwrap_or((0.0, "km/h"));
+    let (speed_val, speed_unit) = state.domain.display_speed().unwrap_or((0.0, "km/h"));
     let color = ui::threshold_color_for_pid(state, 0x0D, speed_val, || Color::Blue);
 
     let chunks = Layout::default()
@@ -194,7 +194,7 @@ fn render_single_speed(frame: &mut Frame, area: Rect, state: &AppState, block: B
         .ratio((speed_val / 260.0).clamp(0.0, 1.0));
     frame.render_widget(gauge, chunks[0]);
 
-    let hist: Vec<u64> = state.vehicle.speed_history.readings.iter().copied().collect();
+    let hist: Vec<u64> = state.domain.vehicle.speed_history.readings.iter().copied().collect();
     let sparkline = Sparkline::default()
         .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
         .data(&hist)
@@ -204,7 +204,7 @@ fn render_single_speed(frame: &mut Frame, area: Rect, state: &AppState, block: B
 }
 
 fn render_single_load(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
-    let load_val = state
+    let load_val = state.domain
         .vehicle
         .engine_load
         .as_ref()
@@ -224,7 +224,7 @@ fn render_single_throttle(frame: &mut Frame, area: Rect, state: &AppState, block
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let val = state
+    let val = state.domain
         .vehicle
         .throttle_position
         .as_ref()
@@ -248,7 +248,7 @@ fn render_single_throttle(frame: &mut Frame, area: Rect, state: &AppState, block
         .ratio((val / 100.0).clamp(0.0, 1.0));
     frame.render_widget(gauge, chunks[0]);
 
-    let hist: Vec<u64> = state.vehicle.throttle_history.readings.iter().copied().collect();
+    let hist: Vec<u64> = state.domain.vehicle.throttle_history.readings.iter().copied().collect();
     let sparkline = Sparkline::default()
         .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
         .data(&hist)
@@ -287,7 +287,7 @@ fn render_single_value(
 }
 
 fn render_single_boost(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
-    let val = state.vehicle.boost_pressure.unwrap_or(0.0);
+    let val = state.domain.vehicle.boost_pressure.unwrap_or(0.0);
     let color = if val > 0.5 {
         Color::Green
     } else {
@@ -306,7 +306,7 @@ fn render_single_boost(frame: &mut Frame, area: Rect, state: &AppState, block: B
 }
 
 fn render_single_oil_pressure(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
-    let val = state.vehicle.oil_pressure.as_ref().map(|r| r.value);
+    let val = state.domain.vehicle.oil_pressure.as_ref().map(|r| r.value);
     let color = match val {
         Some(v) => ui::threshold_color_for_pid(state, 0xFD, v, || {
             if v < 100.0 {
@@ -335,7 +335,7 @@ fn render_single_oil_pressure(frame: &mut Frame, area: Rect, state: &AppState, b
 }
 
 fn render_single_fuel_tank(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
-    let val = state
+    let val = state.domain
         .vehicle
         .fuel_tank_level
         .as_ref()
@@ -371,15 +371,15 @@ fn render_single_fuel_trims(
 
     let (short, long, short_code, long_code) = if bank == 1 {
         (
-            &state.vehicle.short_fuel_trim_b1,
-            &state.vehicle.long_fuel_trim_b1,
+            &state.domain.vehicle.short_fuel_trim_b1,
+            &state.domain.vehicle.long_fuel_trim_b1,
             0x06u8,
             0x07u8,
         )
     } else {
         (
-            &state.vehicle.short_fuel_trim_b2,
-            &state.vehicle.long_fuel_trim_b2,
+            &state.domain.vehicle.short_fuel_trim_b2,
+            &state.domain.vehicle.long_fuel_trim_b2,
             0x08u8,
             0x09u8,
         )
@@ -399,7 +399,7 @@ fn render_single_fuel_trims(
 
 fn make_trim_display<'a>(
     label: &str,
-    reading: &Option<crate::obd2::PidReading>,
+    reading: &Option<obd2_core::PidReading>,
     pid_code: u8,
     state: &AppState,
 ) -> Line<'a> {
@@ -439,11 +439,11 @@ fn render_single_temp(
     state: &AppState,
     block: Block,
     _label: &str,
-    reading: &Option<crate::obd2::PidReading>,
+    reading: &Option<obd2_core::PidReading>,
     pid_code: u8,
 ) {
     let (text, color) = if let Some(r) = reading {
-        let (val, unit) = state.display_temp_value(r);
+        let (val, unit) = state.domain.display_temp_value(r);
         let c = ui::threshold_color_for_pid(state, pid_code, r.value, || ui::temp_color_default(r.value));
         (format!("{:.1}{}", val, unit), c)
     } else {
@@ -465,17 +465,17 @@ fn render_single_catalyst_temps(frame: &mut Frame, area: Rect, state: &AppState,
     frame.render_widget(block, area);
 
     let sensors = [
-        ("B1S1", &state.vehicle.catalyst_temp_b1s1, 0x3Cu8),
-        ("B2S1", &state.vehicle.catalyst_temp_b2s1, 0x3D),
-        ("B1S2", &state.vehicle.catalyst_temp_b1s2, 0x3E),
-        ("B2S2", &state.vehicle.catalyst_temp_b2s2, 0x3F),
+        ("B1S1", &state.domain.vehicle.catalyst_temp_b1s1, 0x3Cu8),
+        ("B2S1", &state.domain.vehicle.catalyst_temp_b2s1, 0x3D),
+        ("B1S2", &state.domain.vehicle.catalyst_temp_b1s2, 0x3E),
+        ("B2S2", &state.domain.vehicle.catalyst_temp_b2s2, 0x3F),
     ];
 
     let lines: Vec<Line> = sensors
         .iter()
         .map(|(label, reading, pid_code)| {
             if let Some(r) = reading {
-                let (val, unit) = state.display_temp_value(r);
+                let (val, unit) = state.domain.display_temp_value(r);
                 let color = ui::threshold_color_for_pid(state, *pid_code, r.value, || {
                     ui::temp_color_default(r.value)
                 });
@@ -509,7 +509,7 @@ fn render_driving_behavior(frame: &mut Frame, area: Rect, state: &AppState, bloc
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let driving = &state.driving;
+    let driving = &state.domain.driving;
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -593,8 +593,8 @@ fn render_recording_status(frame: &mut Frame, area: Rect, state: &AppState, bloc
 
     let mut lines = Vec::new();
 
-    match &state.recording {
-        crate::recording::RecordingState::Idle => {
+    match &state.domain.recording {
+        obd2_core::RecordingState::Idle => {
             lines.push(Line::from(Span::styled(
                 " Idle",
                 Style::default().fg(Color::DarkGray),
@@ -604,7 +604,7 @@ fn render_recording_status(frame: &mut Frame, area: Rect, state: &AppState, bloc
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        crate::recording::RecordingState::Recording {
+        obd2_core::RecordingState::Recording {
             start_instant, ..
         } => {
             let elapsed = start_instant.elapsed();
@@ -623,7 +623,7 @@ fn render_recording_status(frame: &mut Frame, area: Rect, state: &AppState, bloc
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        crate::recording::RecordingState::Replaying(controller) => {
+        obd2_core::RecordingState::Replaying(controller) => {
             let speed_label = controller.speed_label();
             lines.push(Line::from(vec![
                 Span::styled(

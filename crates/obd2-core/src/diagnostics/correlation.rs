@@ -1,4 +1,8 @@
-use crate::app::AppState;
+use std::collections::HashMap;
+
+use obd2_db::models::{ResolvedThreshold, VehicleInfo};
+use crate::obd2::dtc::Dtc;
+use crate::obd2::types::VehicleData;
 use crate::obd2::Pid;
 
 use super::provider::{DiagnosticContext, SensorSnapshot, SensorStatus, VehicleInfoSummary};
@@ -275,8 +279,7 @@ fn get_correlated_pids(dtc_code: &str) -> &'static [Pid] {
 // ─── Sensor value extraction ─────────────────────────────────────────────────
 
 /// Get the current value for a PID from VehicleData.
-fn pid_value(state: &AppState, pid: Pid) -> Option<f64> {
-    let v = &state.vehicle;
+fn pid_value(v: &VehicleData, pid: Pid) -> Option<f64> {
     match pid {
         Pid::EngineLoad => v.engine_load.as_ref().map(|r| r.value),
         Pid::CoolantTemp => v.coolant_temp.as_ref().map(|r| r.value),
@@ -307,13 +310,13 @@ fn pid_value(state: &AppState, pid: Pid) -> Option<f64> {
 }
 
 /// Determine sensor status from threshold checks.
-fn sensor_status(state: &AppState, pid: Pid, value: Option<f64>) -> SensorStatus {
+fn sensor_status(thresholds: &HashMap<u8, ResolvedThreshold>, pid: Pid, value: Option<f64>) -> SensorStatus {
     let value = match value {
         Some(v) => v,
         None => return SensorStatus::NoData,
     };
 
-    if let Some(threshold) = state.thresholds_cache.get(&pid.code()) {
+    if let Some(threshold) = thresholds.get(&pid.code()) {
         // Critical checks
         if let Some(hc) = threshold.high_critical {
             if value > hc {
@@ -376,11 +379,11 @@ fn short_name(pid: Pid) -> &'static str {
 // ─── Public builders ─────────────────────────────────────────────────────────
 
 /// Build sensor snapshots for the given PIDs from current state.
-fn build_sensor_snapshots(state: &AppState, pids: &[Pid]) -> Vec<SensorSnapshot> {
+fn build_sensor_snapshots(vehicle: &VehicleData, thresholds: &HashMap<u8, ResolvedThreshold>, pids: &[Pid]) -> Vec<SensorSnapshot> {
     pids.iter()
         .map(|&pid| {
-            let value = pid_value(state, pid);
-            let status = sensor_status(state, pid, value);
+            let value = pid_value(vehicle, pid);
+            let status = sensor_status(thresholds, pid, value);
             SensorSnapshot {
                 pid_code: pid.code(),
                 name: short_name(pid),
@@ -394,22 +397,24 @@ fn build_sensor_snapshots(state: &AppState, pids: &[Pid]) -> Vec<SensorSnapshot>
 
 /// Assemble the full DiagnosticContext for a DTC popup.
 pub fn build_diagnostic_context(
-    state: &AppState,
+    vehicle: &VehicleData,
+    thresholds: &HashMap<u8, ResolvedThreshold>,
+    stored_dtcs: &[Dtc],
+    vehicle_info: Option<&VehicleInfo>,
     code: &str,
     description: &str,
     category: &str,
 ) -> DiagnosticContext {
     let correlated_pids = get_correlated_pids(code);
-    let related_sensors = build_sensor_snapshots(state, correlated_pids);
+    let related_sensors = build_sensor_snapshots(vehicle, thresholds, correlated_pids);
 
-    let other_dtcs: Vec<(String, String)> = state
-        .stored_dtcs
+    let other_dtcs: Vec<(String, String)> = stored_dtcs
         .iter()
         .filter(|dtc| dtc.code != code)
         .map(|dtc| (dtc.code.clone(), dtc.description.to_string()))
         .collect();
 
-    let vehicle_info = state.vehicle_info.as_ref().map(VehicleInfoSummary::from);
+    let vehicle_info = vehicle_info.map(VehicleInfoSummary::from);
 
     DiagnosticContext {
         dtc_code: code.to_string(),

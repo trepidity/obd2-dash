@@ -1,0 +1,24 @@
+[package]
+name = "obd2-dash"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+obd2-db = { path = "../obd2-db" }
+obd2-core = { path = "../obd2-core" }
+tokio = { workspace = true }
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+futures = "0.3"
+clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
+tokio-serial = "5.4"
+serialport = "4.7"

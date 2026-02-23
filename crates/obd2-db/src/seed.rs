@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use super::models::{DefaultThreshold, EngineFamily, PidThreshold, VehicleInfo};
-use super::Database;
+use crate::models::{DefaultThreshold, EngineFamily, PidThreshold, VehicleInfo};
+use crate::Database;
 
 /// Seed all reference data into the database.
 pub fn seed_all(db: &Database) -> Result<()> {

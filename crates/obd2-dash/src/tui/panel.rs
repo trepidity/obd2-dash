@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use crate::app::{AppState, PopupState};
-use crate::obd2::Pid;
+use obd2_core::Pid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelKind {
@@ -120,31 +120,31 @@ pub enum PanelItemDetail {
 
 fn pid_item(state: &AppState, pid: Pid) -> PanelItem {
     let reading_val = match pid {
-        Pid::EngineRpm => state.vehicle.rpm.as_ref().map(|r| r.value),
-        Pid::VehicleSpeed => state.vehicle.speed.as_ref().map(|r| r.value),
-        Pid::EngineLoad => state.vehicle.engine_load.as_ref().map(|r| r.value),
-        Pid::ThrottlePosition => state.vehicle.throttle_position.as_ref().map(|r| r.value),
-        Pid::IntakeMap => state.vehicle.intake_map.as_ref().map(|r| r.value),
-        Pid::Maf => state.vehicle.maf.as_ref().map(|r| r.value),
-        Pid::FuelPressure => state.vehicle.fuel_pressure.as_ref().map(|r| r.value),
-        Pid::OilPressure => state.vehicle.oil_pressure.as_ref().map(|r| r.value),
-        Pid::CoolantTemp => state.vehicle.coolant_temp.as_ref().map(|r| r.value),
-        Pid::EngineOilTemp => state.vehicle.engine_oil_temp.as_ref().map(|r| r.value),
-        Pid::TransmissionTemp => state.vehicle.transmission_temp.as_ref().map(|r| r.value),
-        Pid::IntakeAirTemp => state.vehicle.intake_air_temp.as_ref().map(|r| r.value),
-        Pid::AmbientAirTemp => state.vehicle.ambient_air_temp.as_ref().map(|r| r.value),
-        Pid::CatalystTempB1S1 => state.vehicle.catalyst_temp_b1s1.as_ref().map(|r| r.value),
-        Pid::CatalystTempB2S1 => state.vehicle.catalyst_temp_b2s1.as_ref().map(|r| r.value),
-        Pid::CatalystTempB1S2 => state.vehicle.catalyst_temp_b1s2.as_ref().map(|r| r.value),
-        Pid::CatalystTempB2S2 => state.vehicle.catalyst_temp_b2s2.as_ref().map(|r| r.value),
-        Pid::FuelTankLevel => state.vehicle.fuel_tank_level.as_ref().map(|r| r.value),
-        Pid::EngineFuelRate => state.vehicle.engine_fuel_rate.as_ref().map(|r| r.value),
-        Pid::ShortFuelTrimBank1 => state.vehicle.short_fuel_trim_b1.as_ref().map(|r| r.value),
-        Pid::LongFuelTrimBank1 => state.vehicle.long_fuel_trim_b1.as_ref().map(|r| r.value),
-        Pid::ShortFuelTrimBank2 => state.vehicle.short_fuel_trim_b2.as_ref().map(|r| r.value),
-        Pid::LongFuelTrimBank2 => state.vehicle.long_fuel_trim_b2.as_ref().map(|r| r.value),
-        Pid::BarometricPressure => state.vehicle.barometric_pressure.as_ref().map(|r| r.value),
-        Pid::ControlModuleVoltage => state.vehicle.control_module_voltage.as_ref().map(|r| r.value),
+        Pid::EngineRpm => state.domain.vehicle.rpm.as_ref().map(|r| r.value),
+        Pid::VehicleSpeed => state.domain.vehicle.speed.as_ref().map(|r| r.value),
+        Pid::EngineLoad => state.domain.vehicle.engine_load.as_ref().map(|r| r.value),
+        Pid::ThrottlePosition => state.domain.vehicle.throttle_position.as_ref().map(|r| r.value),
+        Pid::IntakeMap => state.domain.vehicle.intake_map.as_ref().map(|r| r.value),
+        Pid::Maf => state.domain.vehicle.maf.as_ref().map(|r| r.value),
+        Pid::FuelPressure => state.domain.vehicle.fuel_pressure.as_ref().map(|r| r.value),
+        Pid::OilPressure => state.domain.vehicle.oil_pressure.as_ref().map(|r| r.value),
+        Pid::CoolantTemp => state.domain.vehicle.coolant_temp.as_ref().map(|r| r.value),
+        Pid::EngineOilTemp => state.domain.vehicle.engine_oil_temp.as_ref().map(|r| r.value),
+        Pid::TransmissionTemp => state.domain.vehicle.transmission_temp.as_ref().map(|r| r.value),
+        Pid::IntakeAirTemp => state.domain.vehicle.intake_air_temp.as_ref().map(|r| r.value),
+        Pid::AmbientAirTemp => state.domain.vehicle.ambient_air_temp.as_ref().map(|r| r.value),
+        Pid::CatalystTempB1S1 => state.domain.vehicle.catalyst_temp_b1s1.as_ref().map(|r| r.value),
+        Pid::CatalystTempB2S1 => state.domain.vehicle.catalyst_temp_b2s1.as_ref().map(|r| r.value),
+        Pid::CatalystTempB1S2 => state.domain.vehicle.catalyst_temp_b1s2.as_ref().map(|r| r.value),
+        Pid::CatalystTempB2S2 => state.domain.vehicle.catalyst_temp_b2s2.as_ref().map(|r| r.value),
+        Pid::FuelTankLevel => state.domain.vehicle.fuel_tank_level.as_ref().map(|r| r.value),
+        Pid::EngineFuelRate => state.domain.vehicle.engine_fuel_rate.as_ref().map(|r| r.value),
+        Pid::ShortFuelTrimBank1 => state.domain.vehicle.short_fuel_trim_b1.as_ref().map(|r| r.value),
+        Pid::LongFuelTrimBank1 => state.domain.vehicle.long_fuel_trim_b1.as_ref().map(|r| r.value),
+        Pid::ShortFuelTrimBank2 => state.domain.vehicle.short_fuel_trim_b2.as_ref().map(|r| r.value),
+        Pid::LongFuelTrimBank2 => state.domain.vehicle.long_fuel_trim_b2.as_ref().map(|r| r.value),
+        Pid::BarometricPressure => state.domain.vehicle.barometric_pressure.as_ref().map(|r| r.value),
+        Pid::ControlModuleVoltage => state.domain.vehicle.control_module_voltage.as_ref().map(|r| r.value),
     };
 
     PanelItem {
@@ -167,27 +167,27 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                 pid_item(state, Pid::EngineLoad),
                 pid_item(state, Pid::ThrottlePosition),
             ];
-            if state.vehicle.intake_map.is_some() {
+            if state.domain.vehicle.intake_map.is_some() {
                 items.push(pid_item(state, Pid::IntakeMap));
             }
-            if state.vehicle.maf.is_some() {
+            if state.domain.vehicle.maf.is_some() {
                 items.push(pid_item(state, Pid::Maf));
             }
-            if state.vehicle.fuel_pressure.is_some() {
+            if state.domain.vehicle.fuel_pressure.is_some() {
                 items.push(pid_item(state, Pid::FuelPressure));
             }
-            if state.vehicle.boost_pressure.is_some() {
+            if state.domain.vehicle.boost_pressure.is_some() {
                 items.push(PanelItem {
                     label: "Boost".to_string(),
                     detail: PanelItemDetail::DerivedValue {
                         label: "Boost Pressure",
-                        value: state.vehicle.boost_pressure,
+                        value: state.domain.vehicle.boost_pressure,
                         unit: "kPa",
                         description: "Derived: MAP - Barometric Pressure",
                     },
                 });
             }
-            if state.vehicle.oil_pressure.is_some() {
+            if state.domain.vehicle.oil_pressure.is_some() {
                 items.push(pid_item(state, Pid::OilPressure));
             }
             items
@@ -209,7 +209,7 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             let mut items = vec![
                 pid_item(state, Pid::FuelTankLevel),
             ];
-            if state.vehicle.engine_fuel_rate.is_some() {
+            if state.domain.vehicle.engine_fuel_rate.is_some() {
                 items.push(pid_item(state, Pid::EngineFuelRate));
             }
             items.push(pid_item(state, Pid::ShortFuelTrimBank1));
@@ -220,24 +220,24 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
         }
         PanelKind::SystemVehicle => {
             let mut items = Vec::new();
-            if state.vehicle.battery_voltage.is_some() {
+            if state.domain.vehicle.battery_voltage.is_some() {
                 items.push(PanelItem {
                     label: "Batt Voltage".to_string(),
                     detail: PanelItemDetail::VehicleField {
                         field_name: "Battery Voltage",
-                        value: state.vehicle.battery_voltage
+                        value: state.domain.vehicle.battery_voltage
                             .map(|v| format!("{:.1}V", v))
                             .unwrap_or_default(),
                     },
                 });
             }
-            if state.vehicle.control_module_voltage.is_some() {
+            if state.domain.vehicle.control_module_voltage.is_some() {
                 items.push(pid_item(state, Pid::ControlModuleVoltage));
             }
-            if state.vehicle.barometric_pressure.is_some() {
+            if state.domain.vehicle.barometric_pressure.is_some() {
                 items.push(pid_item(state, Pid::BarometricPressure));
             }
-            if let Some(info) = &state.vehicle_info {
+            if let Some(info) = &state.domain.vehicle_info {
                 items.push(PanelItem {
                     label: "VIN".to_string(),
                     detail: PanelItemDetail::VehicleField {
@@ -289,7 +289,7 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             items
         }
         PanelKind::Dtcs => {
-            state.stored_dtcs.iter().map(|dtc| {
+            state.domain.stored_dtcs.iter().map(|dtc| {
                 let cat = format!("{:?}", dtc.category);
                 PanelItem {
                     label: dtc.code.clone(),
@@ -302,7 +302,7 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             }).collect()
         }
         PanelKind::FuelEconomy => {
-            let fe = &state.fuel_economy;
+            let fe = &state.domain.fuel_economy;
             let mut items = Vec::new();
 
             // Gold standard items (4)
@@ -431,7 +431,7 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
                 String::new(),
             ];
 
-            if let Some(threshold) = state.thresholds_cache.get(pid_code) {
+            if let Some(threshold) = state.domain.thresholds_cache.get(pid_code) {
                 lines.push("Thresholds:".to_string());
                 if let Some(lc) = threshold.low_critical {
                     lines.push(format!("  Low Critical:  {:.1} {}", lc, threshold.unit));
@@ -471,10 +471,11 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
             ];
 
             // Build diagnostic context and run local analysis
-            let context = crate::diagnostics::correlation::build_diagnostic_context(
-                state, code, description, category,
+            let context = obd2_core::diagnostics::correlation::build_diagnostic_context(
+                &state.domain.vehicle, &state.domain.thresholds_cache, &state.domain.stored_dtcs,
+                state.domain.vehicle_info.as_ref(), code, description, category,
             );
-            let provider = crate::diagnostics::provider::LocalDiagnosticProvider;
+            let provider = obd2_core::diagnostics::provider::LocalDiagnosticProvider;
             if let Some(result) = provider.diagnose_sync(&context) {
                 lines.extend(result.to_popup_lines());
             }
@@ -506,8 +507,8 @@ pub fn panel_block(panel: &PanelDef, focused: bool, state: &AppState) -> Block<'
         (BorderType::Plain, color)
     };
 
-    let title = if panel.kind == PanelKind::Dtcs && !state.stored_dtcs.is_empty() {
-        format!(" {} ({}) ", panel.title, state.stored_dtcs.len())
+    let title = if panel.kind == PanelKind::Dtcs && !state.domain.stored_dtcs.is_empty() {
+        format!(" {} ({}) ", panel.title, state.domain.stored_dtcs.len())
     } else {
         format!(" {} ", panel.title)
     };
@@ -520,9 +521,9 @@ pub fn panel_block(panel: &PanelDef, focused: bool, state: &AppState) -> Block<'
 }
 
 fn dtc_border_color(state: &AppState) -> Color {
-    if state.stored_dtcs.is_empty() {
+    if state.domain.stored_dtcs.is_empty() {
         Color::DarkGray
-    } else if state.stored_dtcs.len() >= 3 {
+    } else if state.domain.stored_dtcs.len() >= 3 {
         Color::Red
     } else {
         Color::Yellow

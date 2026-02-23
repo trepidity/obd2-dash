@@ -9,7 +9,7 @@ use super::dtc::{self, Dtc};
 use super::pid::Pid;
 use super::types::{AdapterCaps, AdapterInfo, Chipset, Obd2Error, PidReading};
 use super::Obd2Connection;
-use crate::db::models::MockVehicleProfile;
+use crate::mock_profile::MockVehicleProfile;
 
 /// Mock OBD2 connection that generates realistic-looking data for testing and demo.
 pub struct MockObd2 {
