@@ -145,6 +145,7 @@ fn render_compact(frame: &mut Frame, state: &AppState) {
             Constraint::Length(3),
             Constraint::Min(8),
             Constraint::Length(footer_height),
+            Constraint::Length(1), // bottom margin
         ])
         .split(area);
 
@@ -239,6 +240,7 @@ fn render_full(frame: &mut Frame, state: &AppState) {
         }
     }
     constraints.push(Constraint::Length(footer_height)); // Footer
+    constraints.push(Constraint::Length(1)); // bottom margin
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -284,7 +286,9 @@ fn render_full(frame: &mut Frame, state: &AppState) {
         }
     }
 
-    render_footer(frame, *chunks.last().unwrap(), state);
+    // Footer is second-to-last chunk (last is the bottom margin)
+    let footer_idx = chunks.len() - 2;
+    render_footer(frame, chunks[footer_idx], state);
 }
 
 fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -1665,18 +1669,10 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         )
     };
 
-    let mut status_spans = vec![
-        Span::styled(" Status: ", Style::default().fg(Color::DarkGray)),
+    // Build left side: help text + DTC count
+    let mut left_spans = vec![
         Span::styled(
-            error_text,
-            if state.domain.last_error.is_some() {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::Green)
-            },
-        ),
-        Span::styled(
-            format!(" | {}", help_text),
+            format!(" {}", help_text),
             Style::default().fg(Color::DarkGray),
         ),
     ];
@@ -1687,11 +1683,35 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         } else {
             Color::Yellow
         };
-        status_spans.push(Span::styled(
+        left_spans.push(Span::styled(
             format!(" | DTCs: {}", state.domain.stored_dtcs.len()),
             Style::default().fg(dtc_color).add_modifier(Modifier::BOLD),
         ));
     }
+
+    // Build right side: Status indicator
+    let status_label = "Status: ";
+    let right_spans = vec![
+        Span::styled(status_label, Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{} ", error_text),
+            if state.domain.last_error.is_some() {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::Green)
+            },
+        ),
+    ];
+
+    // Calculate padding to right-align status
+    let inner_width = area.width.saturating_sub(2) as usize; // subtract border chars
+    let left_len: usize = left_spans.iter().map(|s| s.content.len()).sum();
+    let right_len: usize = right_spans.iter().map(|s| s.content.len()).sum();
+    let pad = inner_width.saturating_sub(left_len + right_len);
+
+    let mut status_spans = left_spans;
+    status_spans.push(Span::raw(" ".repeat(pad)));
+    status_spans.extend(right_spans);
 
     lines.push(Line::from(status_spans));
 
