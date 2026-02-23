@@ -6,6 +6,8 @@
 /logs/
 /recordings/
 *.db
+*.db-shm
+*.db-wal
 
 # Device-specific config
 connection.json
