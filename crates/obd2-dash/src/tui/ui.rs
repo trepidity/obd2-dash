@@ -1238,7 +1238,7 @@ fn render_session_picker(frame: &mut Frame, state: &AppState) {
                     .vehicle_name
                     .as_deref()
                     .unwrap_or("Unknown");
-                let time_str = session.start_time.format("%Y-%m-%d %H:%M:%S").to_string();
+                let time_str = session.start_time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string();
                 let dur = session.duration_display();
                 lines.push(Line::from(Span::styled(
                     format!("{}{:<24}{:<20}{}", marker, time_str, vehicle, dur),
