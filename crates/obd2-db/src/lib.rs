@@ -422,7 +422,6 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::seed;
 
     #[test]
     fn test_open_in_memory() {

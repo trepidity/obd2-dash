@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use serde::Serialize;
 
-use crate::db::models::VehicleInfo;
+use obd2_db::models::VehicleInfo;
 
 /// Sensor health status relative to thresholds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

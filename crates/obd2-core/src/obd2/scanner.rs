@@ -4,8 +4,6 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::app::Message;
-
 /// Known name prefixes for OBD2 BLE adapters (mirrors ble_transport.rs).
 const ADAPTER_NAME_PATTERNS: &[&str] = &["OBDLink", "OBD", "ELM327", "STN", "OBDII", "Vgate"];
 
@@ -22,11 +20,18 @@ pub struct DiscoveredDevice {
     pub detail: Option<String>,
 }
 
+/// Events emitted by the scanner (decoupled from app::Message).
+#[derive(Debug)]
+pub enum ScanEvent {
+    DeviceFound(DiscoveredDevice),
+    ScanComplete,
+}
+
 /// Spawn a background scan that discovers serial ports and BLE adapters,
-/// sending each as `Message::DeviceFound`. Sends `Message::ScanComplete`
+/// sending each as `ScanEvent::DeviceFound`. Sends `ScanEvent::ScanComplete`
 /// when both sources finish. Abort the returned handle to cancel.
 pub fn spawn_scan(
-    tx: mpsc::UnboundedSender<Message>,
+    tx: mpsc::UnboundedSender<ScanEvent>,
     default_baud: u32,
     ble_timeout: Duration,
 ) -> JoinHandle<()> {
@@ -56,7 +61,7 @@ pub fn spawn_scan(
                     display_name,
                     detail,
                 };
-                if tx.send(Message::DeviceFound(dev)).is_err() {
+                if tx.send(ScanEvent::DeviceFound(dev)).is_err() {
                     return;
                 }
             }
@@ -67,12 +72,12 @@ pub fn spawn_scan(
             tracing::debug!("BLE scan ended: {}", e);
         }
 
-        let _ = tx.send(Message::ScanComplete);
+        let _ = tx.send(ScanEvent::ScanComplete);
     })
 }
 
 async fn scan_ble(
-    tx: &mpsc::UnboundedSender<Message>,
+    tx: &mpsc::UnboundedSender<ScanEvent>,
     scan_timeout: Duration,
 ) -> anyhow::Result<()> {
     use btleplug::api::{Central, CentralEvent, Manager as _, Peripheral as _, ScanFilter};
@@ -101,7 +106,7 @@ async fn scan_ble(
                                     display_name: name,
                                     detail: Some("BLE".into()),
                                 };
-                                if tx.send(Message::DeviceFound(dev)).is_err() {
+                                if tx.send(ScanEvent::DeviceFound(dev)).is_err() {
                                     return;
                                 }
                             }

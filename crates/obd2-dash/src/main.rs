@@ -1,11 +1,5 @@
 mod app;
-mod db;
 mod debug_log;
-mod diagnostics;
-mod driving;
-mod fuel_economy;
-mod obd2;
-mod recording;
 mod tui;
 mod widget;
 
@@ -21,14 +15,13 @@ use tokio::sync::mpsc;
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use app::{AppState, ConnectionState, DashboardLayout, Message, ScanMode, SpeedUnit, TemperatureUnit};
-use db::models::MockVehicleProfile;
-use obd2::connection_prefs::ConnectionPrefs;
-use obd2::dtc::DTC_SCENARIO_COUNT;
-use obd2::scanner::DeviceKind;
-use obd2::{mock::MockObd2, Obd2Connection, Pid};
-use recording::RecordingState;
-use recording::storage::{StorageConfig, StorageManager};
+use app::{AppState, DashboardLayout, Message, ScanMode};
+use obd2_core::{
+    ConnectionPrefs, ConnectionState, DeviceKind, MockObd2,
+    MockVehicleProfile, Obd2Connection, Pid, PidReading, RecordingState,
+    ScanEvent, SpeedUnit, StorageConfig, StorageManager, TemperatureUnit,
+    DTC_SCENARIO_COUNT,
+};
 use widget::config::DashboardConfig;
 use widget::edit_mode::{EditModeState, EditPhase};
 use tui::{
@@ -111,8 +104,8 @@ async fn main() -> Result<()> {
 
     // Initialize database
     let db_path = PathBuf::from(&cli.db_path);
-    let database = db::Database::open(&db_path)?;
-    db::seed::seed_all(&database)?;
+    let database = obd2_db::Database::open(&db_path)?;
+    obd2_db::seed::seed_all(&database)?;
     tracing::info!("Database initialized at {}", db_path.display());
 
     // Resolve mock vehicle profile
@@ -257,8 +250,8 @@ async fn run_tui(
     obd_rx: &mut mpsc::UnboundedReceiver<Message>,
     mut obd_handle: Option<tokio::task::JoinHandle<()>>,
     obd_tx: mpsc::UnboundedSender<Message>,
-    vehicle_info: Option<db::models::VehicleInfo>,
-    thresholds: std::collections::HashMap<u8, db::models::ResolvedThreshold>,
+    vehicle_info: Option<obd2_db::models::VehicleInfo>,
+    thresholds: std::collections::HashMap<u8, obd2_db::models::ResolvedThreshold>,
     dtc_scenario: Arc<AtomicU8>,
     dashboard_config: DashboardConfig,
     config_path: PathBuf,
@@ -273,19 +266,19 @@ async fn run_tui(
 
     let mut event_handler = EventHandler::new(poll_ms, 50);
     let mut state = AppState::new(poll_ms);
-    state.vehicle_info = vehicle_info;
-    state.thresholds_cache = thresholds;
-    state.fuel_economy.configure(
-        state.vehicle_info.as_ref().and_then(|v| v.displacement_l),
-        state.vehicle_info.as_ref().and_then(|v| v.fuel_type.as_deref()),
+    state.domain.vehicle_info = vehicle_info;
+    state.domain.thresholds_cache = thresholds;
+    state.domain.fuel_economy.configure(
+        state.domain.vehicle_info.as_ref().and_then(|v| v.displacement_l),
+        state.domain.vehicle_info.as_ref().and_then(|v| v.fuel_type.as_deref()),
     );
     state.dashboard_config = dashboard_config;
     state.config_path = Some(config_path);
-    state.storage_manager = Some(storage_manager);
+    state.domain.storage_manager = Some(storage_manager);
 
     // If we have an obd_handle, we're connecting/connected; otherwise disconnected
     if obd_handle.is_some() {
-        state.connection = ConnectionState::Connecting;
+        state.domain.connection = ConnectionState::Connecting;
     }
 
     let mut scan_handle: Option<tokio::task::JoinHandle<()>> = None;
@@ -313,15 +306,15 @@ async fn run_tui(
                     None => break,
                 }
             }
-            msg = obd_rx.recv(), if !state.recording.is_replaying() => {
+            msg = obd_rx.recv(), if !state.domain.recording.is_replaying() => {
                 match msg {
                     Some(m) => state.update(m),
                     None => break,
                 }
             }
-            _ = replay_interval.tick(), if state.recording.is_replaying() => {
+            _ = replay_interval.tick(), if state.domain.recording.is_replaying() => {
                 // Collect replay frames first, then process them to avoid borrow conflict
-                let (frames, finished) = if let RecordingState::Replaying(ref mut controller) = state.recording {
+                let (frames, finished) = if let RecordingState::Replaying(ref mut controller) = state.domain.recording {
                     let frames = controller.next_frames();
                     let finished = controller.is_finished();
                     (frames, finished)
@@ -331,18 +324,18 @@ async fn run_tui(
 
                 // Now process the collected frames
                 for frame in frames {
-                    if recording::replay::ReplayController::is_pid_frame(&frame) {
+                    if obd2_core::recording::replay::ReplayController::is_pid_frame(&frame) {
                         if let Some(pid) = Pid::from_code(frame.pid_code) {
-                            let reading = obd2::PidReading::new(frame.value, pid.unit());
+                            let reading = PidReading::new(frame.value, pid.unit());
                             state.update(Message::PidUpdate(pid, reading));
                         }
-                    } else if recording::replay::ReplayController::is_voltage_frame(&frame) {
+                    } else if obd2_core::recording::replay::ReplayController::is_voltage_frame(&frame) {
                         state.update(Message::VoltageUpdate(frame.value));
                     }
                 }
 
                 if finished {
-                    state.recording = RecordingState::Idle;
+                    state.domain.recording = RecordingState::Idle;
                 }
             }
         }
@@ -353,8 +346,18 @@ async fn run_tui(
             if let Some(h) = scan_handle.take() {
                 h.abort();
             }
-            scan_handle = Some(obd2::scanner::spawn_scan(
-                obd_tx.clone(),
+            let (scan_tx, mut scan_rx) = mpsc::unbounded_channel::<ScanEvent>();
+            let bridge_tx = obd_tx.clone();
+            tokio::spawn(async move {
+                while let Some(event) = scan_rx.recv().await {
+                    let msg = Message::from_scan_event(event);
+                    if bridge_tx.send(msg).is_err() {
+                        break;
+                    }
+                }
+            });
+            scan_handle = Some(obd2_core::obd2::scanner::spawn_scan(
+                scan_tx,
                 default_baud,
                 Duration::from_secs(ble_scan_secs),
             ));
@@ -401,16 +404,17 @@ async fn run_headless(
     poll_ms: u64,
     obd_rx: &mut mpsc::UnboundedReceiver<Message>,
     obd_handle: tokio::task::JoinHandle<()>,
-    vehicle_info: Option<db::models::VehicleInfo>,
-    thresholds: std::collections::HashMap<u8, db::models::ResolvedThreshold>,
+    vehicle_info: Option<obd2_db::models::VehicleInfo>,
+    thresholds: std::collections::HashMap<u8, obd2_db::models::ResolvedThreshold>,
 ) -> Result<()> {
     let mut state = AppState::new(poll_ms);
-    state.vehicle_info = vehicle_info;
-    state.thresholds_cache = thresholds;
+    state.domain.vehicle_info = vehicle_info;
+    state.domain.thresholds_cache = thresholds;
     let mut print_interval = tokio::time::interval(Duration::from_millis(500));
     let mut cycles = 0u64;
 
     let vehicle_name = state
+        .domain
         .vehicle_info
         .as_ref()
         .map(|v| v.display_name())
@@ -429,16 +433,16 @@ async fn run_headless(
             }
             _ = print_interval.tick() => {
                 cycles += 1;
-                let rpm = state.vehicle.rpm.as_ref().map(|r| r.value);
-                let speed = state.vehicle.speed.as_ref().map(|r| r.value);
-                let temp = state.vehicle.coolant_temp.as_ref().map(|r| r.value);
-                let load = state.vehicle.engine_load.as_ref().map(|r| r.value);
-                let volts = state.vehicle.battery_voltage;
+                let rpm = state.domain.vehicle.rpm.as_ref().map(|r| r.value);
+                let speed = state.domain.vehicle.speed.as_ref().map(|r| r.value);
+                let temp = state.domain.vehicle.coolant_temp.as_ref().map(|r| r.value);
+                let load = state.domain.vehicle.engine_load.as_ref().map(|r| r.value);
+                let volts = state.domain.vehicle.battery_voltage;
 
-                let alert_str = if state.active_alerts.is_empty() {
+                let alert_str = if state.domain.active_alerts.is_empty() {
                     String::new()
                 } else {
-                    format!("  ALERTS: {}", state.active_alerts.iter()
+                    format!("  ALERTS: {}", state.domain.active_alerts.iter()
                         .map(|a| a.to_string())
                         .collect::<Vec<_>>()
                         .join(", "))
@@ -452,7 +456,7 @@ async fn run_headless(
                     temp.unwrap_or(0.0),
                     load.unwrap_or(0.0),
                     volts.unwrap_or(0.0),
-                    match &state.connection {
+                    match &state.domain.connection {
                         ConnectionState::Connected => "connected",
                         ConnectionState::Connecting => "connecting",
                         ConnectionState::Disconnected => "disconnected",
@@ -496,30 +500,30 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
     }
 
     // ─── Replay mode keys ────────────────────────────────────────────────
-    if state.recording.is_replaying() {
+    if state.domain.recording.is_replaying() {
         match key.code {
             KeyCode::Char(' ') => {
-                if let RecordingState::Replaying(ref mut c) = state.recording {
+                if let RecordingState::Replaying(ref mut c) = state.domain.recording {
                     c.toggle_pause();
                 }
             }
             KeyCode::Char('[') => {
-                if let RecordingState::Replaying(ref mut c) = state.recording {
+                if let RecordingState::Replaying(ref mut c) = state.domain.recording {
                     c.seek_backward(30_000);
                 }
             }
             KeyCode::Char(']') => {
-                if let RecordingState::Replaying(ref mut c) = state.recording {
+                if let RecordingState::Replaying(ref mut c) = state.domain.recording {
                     c.seek_forward(30_000);
                 }
             }
             KeyCode::Char('s') => {
-                if let RecordingState::Replaying(ref mut c) = state.recording {
+                if let RecordingState::Replaying(ref mut c) = state.domain.recording {
                     c.cycle_speed();
                 }
             }
             KeyCode::Esc => {
-                state.recording = RecordingState::Idle;
+                state.domain.recording = RecordingState::Idle;
             }
             KeyCode::Char('q') => {
                 state.update(Message::Quit);
@@ -545,23 +549,23 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
             state.paused = !state.paused;
         }
         KeyCode::Char('u') => {
-            state.temp_unit = match state.temp_unit {
+            state.domain.temp_unit = match state.domain.temp_unit {
                 TemperatureUnit::Celsius => TemperatureUnit::Fahrenheit,
                 TemperatureUnit::Fahrenheit => TemperatureUnit::Celsius,
             };
-            state.speed_unit = match state.speed_unit {
+            state.domain.speed_unit = match state.domain.speed_unit {
                 SpeedUnit::Kmh => SpeedUnit::Mph,
                 SpeedUnit::Mph => SpeedUnit::Kmh,
             };
         }
         KeyCode::Char('+') | KeyCode::Char('=') => {
-            if state.poll_interval_ms > 50 {
-                state.poll_interval_ms -= 50;
+            if state.domain.poll_interval_ms > 50 {
+                state.domain.poll_interval_ms -= 50;
             }
         }
         KeyCode::Char('-') => {
-            if state.poll_interval_ms < 2000 {
-                state.poll_interval_ms += 50;
+            if state.domain.poll_interval_ms < 2000 {
+                state.domain.poll_interval_ms += 50;
             }
         }
         KeyCode::Char('f') => {
@@ -582,13 +586,13 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
         }
         KeyCode::Char('r') => {
             // Toggle recording
-            if !state.recording.is_replaying() {
+            if !state.domain.recording.is_replaying() {
                 handle_toggle_recording(state);
             }
         }
         KeyCode::Char('R') => {
             // Open session picker for replay
-            if state.recording.is_idle() {
+            if state.domain.recording.is_idle() {
                 state.show_session_picker = true;
                 state.session_picker_selected = 0;
             }
@@ -597,7 +601,7 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
             state.show_debug_log = true;
             state.debug_log_scroll = 0;
         }
-        KeyCode::Char('s') | KeyCode::Char('S') if !state.recording.is_replaying() && state.edit_mode.is_none() => {
+        KeyCode::Char('s') | KeyCode::Char('S') if !state.domain.recording.is_replaying() && state.edit_mode.is_none() => {
             // Start device scan
             state.scan_mode = ScanMode::Scanning;
             state.scan_devices.clear();
@@ -764,6 +768,7 @@ fn handle_session_picker_key(state: &mut AppState, key: crossterm::event::KeyEve
     use crossterm::event::KeyCode;
 
     let session_count = state
+        .domain
         .storage_manager
         .as_ref()
         .map(|s| s.index.sessions.len())
@@ -782,14 +787,14 @@ fn handle_session_picker_key(state: &mut AppState, key: crossterm::event::KeyEve
         }
         KeyCode::Enter => {
             // Start replay of selected session
-            if let Some(ref storage) = state.storage_manager {
+            if let Some(ref storage) = state.domain.storage_manager {
                 let sessions = storage.index.sessions_sorted();
                 if let Some(session) = sessions.get(state.session_picker_selected) {
-                    match recording::reader::read_recording(&session.file_path) {
+                    match obd2_core::recording::reader::read_recording(&session.file_path) {
                         Ok((_header, frames)) => {
                             let controller =
-                                recording::replay::ReplayController::new((*session).clone(), frames);
-                            state.recording = RecordingState::Replaying(controller);
+                                obd2_core::recording::replay::ReplayController::new((*session).clone(), frames);
+                            state.domain.recording = RecordingState::Replaying(controller);
                             tracing::info!(
                                 "Starting replay of session {}",
                                 session.session_id
@@ -797,7 +802,7 @@ fn handle_session_picker_key(state: &mut AppState, key: crossterm::event::KeyEve
                         }
                         Err(e) => {
                             tracing::warn!("Failed to read recording: {}", e);
-                            state.last_error =
+                            state.domain.last_error =
                                 Some(format!("Failed to load recording: {}", e));
                         }
                     }
@@ -807,7 +812,7 @@ fn handle_session_picker_key(state: &mut AppState, key: crossterm::event::KeyEve
         }
         KeyCode::Char('d') => {
             // Delete selected session
-            if let Some(ref mut storage) = state.storage_manager {
+            if let Some(ref mut storage) = state.domain.storage_manager {
                 let sessions = storage.index.sessions_sorted();
                 if let Some(session) = sessions.get(state.session_picker_selected) {
                     let sid = session.session_id.clone();
@@ -895,39 +900,39 @@ fn handle_debug_log_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
 
 /// Toggle recording on/off.
 fn handle_toggle_recording(state: &mut AppState) {
-    match &state.recording {
+    match &state.domain.recording {
         RecordingState::Idle => {
             // Start recording
-            if let Some(ref storage) = state.storage_manager {
+            if let Some(ref storage) = state.domain.storage_manager {
                 let session_id = uuid::Uuid::new_v4().to_string();
-                let vin = state.vehicle_info.as_ref().map(|v| v.vin.clone());
-                let vehicle_name = state.vehicle_info.as_ref().map(|v| v.display_name());
+                let vin = state.domain.vehicle_info.as_ref().map(|v| v.vin.clone());
+                let vehicle_name = state.domain.vehicle_info.as_ref().map(|v| v.display_name());
                 let recordings_dir = storage.recordings_dir().to_path_buf();
 
-                match recording::writer::RecordingWriter::new(
+                match obd2_core::recording::writer::RecordingWriter::new(
                     &recordings_dir,
                     &session_id,
                     vin,
                     vehicle_name,
-                    state.poll_interval_ms,
+                    state.domain.poll_interval_ms,
                 ) {
                     Ok(writer) => {
                         tracing::info!("Recording started: {}", session_id);
-                        state.recording = RecordingState::Recording {
+                        state.domain.recording = RecordingState::Recording {
                             writer,
                             start_instant: Instant::now(),
                         };
                     }
                     Err(e) => {
                         tracing::warn!("Failed to start recording: {}", e);
-                        state.last_error = Some(format!("Failed to start recording: {}", e));
+                        state.domain.last_error = Some(format!("Failed to start recording: {}", e));
                     }
                 }
             }
         }
         RecordingState::Recording { .. } => {
             // Stop recording — take ownership of writer to finish it
-            let old = std::mem::replace(&mut state.recording, RecordingState::Idle);
+            let old = std::mem::replace(&mut state.domain.recording, RecordingState::Idle);
             if let RecordingState::Recording {
                 writer,
                 start_instant,
@@ -944,12 +949,13 @@ fn handle_toggle_recording(state: &mut AppState) {
                             .map(|m| m.len())
                             .unwrap_or(0);
 
-                        let entry = recording::index::SessionEntry {
+                        let entry = obd2_core::recording::index::SessionEntry {
                             session_id: session_id.clone(),
                             start_time: chrono::Utc::now()
                                 - chrono::Duration::seconds(duration_secs as i64),
-                            vin: state.vehicle_info.as_ref().map(|v| v.vin.clone()),
+                            vin: state.domain.vehicle_info.as_ref().map(|v| v.vin.clone()),
                             vehicle_name: state
+                                .domain
                                 .vehicle_info
                                 .as_ref()
                                 .map(|v| v.display_name()),
@@ -960,7 +966,7 @@ fn handle_toggle_recording(state: &mut AppState) {
                             compressed: false,
                         };
 
-                        if let Some(ref mut storage) = state.storage_manager {
+                        if let Some(ref mut storage) = state.domain.storage_manager {
                             if let Err(e) = storage.register_session(entry) {
                                 tracing::warn!("Failed to register session: {}", e);
                             }
@@ -979,7 +985,7 @@ fn handle_toggle_recording(state: &mut AppState) {
                     }
                     Err(e) => {
                         tracing::warn!("Error finishing recording: {}", e);
-                        state.last_error =
+                        state.domain.last_error =
                             Some(format!("Error finishing recording: {}", e));
                     }
                 }
@@ -1166,9 +1172,9 @@ fn spawn_connect_and_poll(
                     // Post-open delay: macOS USB-serial drivers need time to configure
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    let serial = obd2::serial_transport::SerialTransport::new(stream);
+                    let serial = obd2_core::obd2::serial_transport::SerialTransport::new(stream);
                     let mut conn: Box<dyn Obd2Connection> =
-                        Box::new(obd2::elm327::Elm327::new(Box::new(serial)));
+                        Box::new(obd2_core::obd2::elm327::Elm327::new(Box::new(serial)));
 
                     match conn.initialize().await {
                         Ok(_) => {
@@ -1202,17 +1208,17 @@ fn spawn_connect_and_poll(
             DeviceKind::Ble { name } => {
                 tracing::info!("Scanning for BLE adapter: {}", name);
                 let name_filter = if name.is_empty() { None } else { Some(name.as_str()) };
-                match obd2::ble_transport::scan_for_adapter(
+                match obd2_core::obd2::ble_transport::scan_for_adapter(
                     name_filter,
                     Duration::from_secs(ble_scan_secs),
                 )
                 .await
                 {
                     Ok(peripheral) => {
-                        match obd2::ble_transport::BleTransport::connect(peripheral).await {
+                        match obd2_core::obd2::ble_transport::BleTransport::connect(peripheral).await {
                             Ok(ble) => {
                                 let mut conn: Box<dyn Obd2Connection> =
-                                    Box::new(obd2::elm327::Elm327::new(Box::new(ble)));
+                                    Box::new(obd2_core::obd2::elm327::Elm327::new(Box::new(ble)));
                                 match conn.initialize().await {
                                     Ok(_) => conn,
                                     Err(e) => {

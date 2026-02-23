@@ -1055,20 +1055,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "obd2-dash"
+name = "obd2-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "btleplug",
  "chrono",
- "clap",
- "crossterm",
  "flate2",
  "futures",
+ "obd2-db",
  "rand",
- "ratatui",
- "rusqlite",
  "serde",
  "serde_json",
  "serialport",
@@ -1076,9 +1073,40 @@ dependencies = [
  "tokio",
  "tokio-serial",
  "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "obd2-dash"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "clap",
+ "crossterm",
+ "futures",
+ "obd2-core",
+ "obd2-db",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "serialport",
+ "tokio",
+ "tokio-serial",
+ "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "obd2-db"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rusqlite",
+ "tracing",
 ]
 
 [[package]]

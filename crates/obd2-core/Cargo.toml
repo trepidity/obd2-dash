@@ -1,0 +1,22 @@
+[package]
+name = "obd2-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+obd2-db = { path = "../obd2-db" }
+tokio = { workspace = true }
+tokio-serial = "5.4"
+serialport = "4.7"
+btleplug = { version = "0.11", features = ["serde"] }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+flate2 = "1"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+futures = "0.3"
