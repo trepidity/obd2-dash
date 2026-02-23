@@ -18,5 +18,8 @@ connection.json
 *.swp
 *.swo
 
+# Python
+emulator/__pycache__/
+
 # macOS
 .DS_Store

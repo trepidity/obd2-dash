@@ -1064,6 +1064,7 @@ dependencies = [
  "chrono",
  "flate2",
  "futures",
+ "libc",
  "obd2-db",
  "rand",
  "serde",

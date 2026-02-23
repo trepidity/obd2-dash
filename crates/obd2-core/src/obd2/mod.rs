@@ -4,6 +4,8 @@ pub mod dtc;
 pub mod elm327;
 pub mod mock;
 pub mod pid;
+#[cfg(unix)]
+pub mod pty_transport;
 pub mod scanner;
 pub mod serial_transport;
 pub mod transport;
