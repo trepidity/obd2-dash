@@ -491,56 +491,122 @@ async fn run_headless(
 fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Database) {
     tracing::info!("VIN detected: {}", vin);
 
+    // 1. Try exact VIN match
     match database.get_vehicle(vin) {
         Ok(Some(info)) => {
-            tracing::info!("Vehicle identified: {}", info.display_name());
-            let engine_family_code = info.engine_family_code.clone();
-
-            // Re-resolve thresholds for this vehicle
-            match database.resolve_all_thresholds(
-                Some(&info.vin),
-                engine_family_code.as_deref(),
-                &Pid::all_known_codes(),
-            ) {
-                Ok(thresholds) => {
-                    tracing::info!("Re-resolved {} thresholds for VIN {}", thresholds.len(), vin);
-                    state.domain.thresholds_cache = thresholds;
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to resolve thresholds for VIN {}: {}", vin, e);
-                }
-            }
-
-            // Reconfigure fuel economy
-            state.domain.fuel_economy.configure(
-                info.displacement_l,
-                info.fuel_type.as_deref(),
-            );
-
-            state.domain.vehicle_info = Some(info);
+            tracing::info!("Exact VIN match: {}", info.display_name());
+            apply_vehicle_info(state, info, database);
+            return;
         }
-        Ok(None) => {
-            tracing::info!("VIN {} not found in database, creating minimal entry", vin);
-            let info = obd2_db::models::VehicleInfo {
-                vin: vin.to_string(),
-                year: None,
-                make: None,
-                model: None,
-                trim: None,
-                engine_family_id: None,
-                engine_family_code: None,
-                transmission_type: None,
-                drive_type: None,
-                fuel_type: None,
-                displacement_l: None,
-                cylinders: None,
-            };
-            state.domain.vehicle_info = Some(info);
-        }
+        Ok(None) => {} // Fall through to pattern match
         Err(e) => {
             tracing::warn!("Database error looking up VIN {}: {}", vin, e);
+            return;
         }
     }
+
+    // 2. Try VIN pattern match (positions 1-8 + position 10)
+    match database.get_vehicle_by_vin_pattern(vin) {
+        Ok(Some(info)) => {
+            tracing::info!(
+                "VIN pattern match: {} (from seeded data)",
+                info.display_name()
+            );
+            // Save to DB so future connections get an exact match
+            if let Err(e) = database.upsert_vehicle(&info) {
+                tracing::warn!("Failed to save pattern-matched vehicle: {}", e);
+            }
+            apply_vehicle_info(state, info, database);
+            return;
+        }
+        Ok(None) => {} // Fall through to VIN decode
+        Err(e) => {
+            tracing::warn!("Database error in VIN pattern match for {}: {}", vin, e);
+        }
+    }
+
+    // 3. Try basic VIN decode (year + manufacturer from VIN characters)
+    let decoded = obd2_core::vin::decode(vin);
+    if decoded.year.is_some() || decoded.manufacturer.is_some() {
+        tracing::info!(
+            "VIN decoded: year={:?}, manufacturer={:?}",
+            decoded.year,
+            decoded.manufacturer
+        );
+        let info = obd2_db::models::VehicleInfo {
+            vin: vin.to_string(),
+            year: decoded.year,
+            make: decoded.manufacturer,
+            model: None,
+            trim: None,
+            engine_family_id: None,
+            engine_family_code: None,
+            transmission_type: None,
+            drive_type: None,
+            fuel_type: None,
+            displacement_l: None,
+            cylinders: None,
+        };
+        // Save to DB so future connections get an exact match
+        if let Err(e) = database.upsert_vehicle(&info) {
+            tracing::warn!("Failed to save decoded vehicle: {}", e);
+        }
+        state.domain.vehicle_info = Some(info);
+        return;
+    }
+
+    // 4. Bare VIN fallback — no info could be determined
+    tracing::info!("VIN {} not recognized, creating minimal entry", vin);
+    state.domain.vehicle_info = Some(obd2_db::models::VehicleInfo {
+        vin: vin.to_string(),
+        year: None,
+        make: None,
+        model: None,
+        trim: None,
+        engine_family_id: None,
+        engine_family_code: None,
+        transmission_type: None,
+        drive_type: None,
+        fuel_type: None,
+        displacement_l: None,
+        cylinders: None,
+    });
+}
+
+/// Apply a fully-identified vehicle: resolve thresholds, configure fuel economy, set state.
+fn apply_vehicle_info(
+    state: &mut AppState,
+    info: obd2_db::models::VehicleInfo,
+    database: &obd2_db::Database,
+) {
+    let engine_family_code = info.engine_family_code.clone();
+
+    // Re-resolve thresholds for this vehicle
+    match database.resolve_all_thresholds(
+        Some(&info.vin),
+        engine_family_code.as_deref(),
+        &Pid::all_known_codes(),
+    ) {
+        Ok(thresholds) => {
+            tracing::info!(
+                "Re-resolved {} thresholds for VIN {}",
+                thresholds.len(),
+                info.vin
+            );
+            state.domain.thresholds_cache = thresholds;
+        }
+        Err(e) => {
+            tracing::warn!("Failed to resolve thresholds for VIN {}: {}", info.vin, e);
+        }
+    }
+
+    // Reconfigure fuel economy
+    state
+        .domain
+        .fuel_economy
+        .configure(info.displacement_l, info.fuel_type.as_deref());
+
+    state.domain.vehicle_info = Some(info);
 }
 
 /// Handle keys that don't map to simple Messages.

@@ -248,6 +248,48 @@ impl Database {
         }
     }
 
+    /// Look up a vehicle by VIN pattern — matches positions 1-8 (WMI + VDS = make/model/body/engine)
+    /// and position 10 (model year). Returns the matched vehicle info with the actual VIN substituted.
+    pub fn get_vehicle_by_vin_pattern(&self, vin: &str) -> Result<Option<VehicleInfo>> {
+        if vin.len() < 11 {
+            return Ok(None);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT v.vin, v.year, v.make, v.model, v.trim, v.engine_family_id, \
+                    ef.family_code, v.transmission_type, v.drive_type, \
+                    v.fuel_type, v.displacement_l, v.cylinders \
+             FROM vehicles v \
+             LEFT JOIN engine_families ef ON v.engine_family_id = ef.id \
+             WHERE substr(v.vin, 1, 8) = substr(?1, 1, 8) \
+               AND substr(v.vin, 10, 1) = substr(?1, 10, 1) \
+             LIMIT 1",
+        )?;
+
+        let result = stmt.query_row(rusqlite::params![vin], |row| {
+            Ok(VehicleInfo {
+                vin: vin.to_string(), // Use the actual VIN, not the seeded one
+                year: row.get(1)?,
+                make: row.get(2)?,
+                model: row.get(3)?,
+                trim: row.get(4)?,
+                engine_family_id: row.get(5)?,
+                engine_family_code: row.get(6)?,
+                transmission_type: row.get(7)?,
+                drive_type: row.get(8)?,
+                fuel_type: row.get(9)?,
+                displacement_l: row.get(10)?,
+                cylinders: row.get(11)?,
+            })
+        });
+
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Get engine family code for a vehicle.
     pub fn get_engine_family_code(&self, engine_family_id: i64) -> Result<Option<String>> {
         let mut stmt = self
@@ -460,6 +502,28 @@ mod tests {
         // W11B16 has high_warning = 6200, high_critical = 6800 (from seed)
         assert!((threshold.high_warning.unwrap() - 6200.0).abs() < 0.01);
         assert!((threshold.high_critical.unwrap() - 6800.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_vin_pattern_match() {
+        let db = Database::open_in_memory().unwrap();
+        seed::seed_all(&db).unwrap();
+
+        // The seeded Malibu VIN is 1G1ZD5ST0LF000001
+        // A real VIN sharing positions 1-8 and position 10 should match
+        let real_vin = "1G1ZD5ST2LF088849";
+        let vehicle = db.get_vehicle_by_vin_pattern(real_vin).unwrap().unwrap();
+        assert_eq!(vehicle.vin, real_vin); // Should have the actual VIN
+        assert_eq!(vehicle.make.as_deref(), Some("Chevrolet"));
+        assert_eq!(vehicle.model.as_deref(), Some("Malibu"));
+        assert_eq!(vehicle.year, Some(2020));
+
+        // A completely different VIN should not match
+        let unknown_vin = "5YJSA1E26MF000001";
+        assert!(db.get_vehicle_by_vin_pattern(unknown_vin).unwrap().is_none());
+
+        // Short VIN should return None gracefully
+        assert!(db.get_vehicle_by_vin_pattern("ABC").unwrap().is_none());
     }
 
     #[test]
