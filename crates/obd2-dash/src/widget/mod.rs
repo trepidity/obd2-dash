@@ -45,6 +45,9 @@ pub enum WidgetKind {
 
     // Driving behavior
     DrivingBehavior,
+
+    // Alerts
+    AlertsPanel,
 }
 
 /// Widget size within a row.
@@ -316,6 +319,14 @@ pub fn widget_registry() -> Vec<WidgetMeta> {
             category: WidgetCategory::Driving,
             default_size: WidgetSize::Half,
             description: "Smoothness score, acceleration, braking/jackrabbit events",
+        },
+        // Alerts
+        WidgetMeta {
+            kind: WidgetKind::AlertsPanel,
+            title: "Alerts",
+            category: WidgetCategory::Diagnostics,
+            default_size: WidgetSize::Half,
+            description: "Active threshold alerts and errors",
         },
     ]
 }

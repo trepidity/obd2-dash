@@ -8,7 +8,6 @@ use ratatui::{
 
 use crate::app::{AppState, DashboardLayout, PopupState, ScanMode};
 use obd2_core::ConnectionState;
-use obd2_db::models::AlertLevel;
 use crate::debug_log::LogBuffer;
 use obd2_core::obd2::dtc::DtcCategory;
 use obd2_core::PidReading;
@@ -138,13 +137,12 @@ fn render_debug_log(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer)
 fn render_compact(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
 
-    let footer_height = if state.domain.active_alerts.is_empty() { 3 } else { 4 };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(8),
-            Constraint::Length(footer_height),
+            Constraint::Length(3),
             Constraint::Length(1), // bottom margin
         ])
         .split(area);
@@ -228,8 +226,6 @@ fn render_full(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let config = &state.dashboard_config;
 
-    let footer_height = if state.domain.active_alerts.is_empty() { 3 } else { 4 };
-
     // Build row height constraints from config
     let mut constraints = vec![Constraint::Length(3)]; // Header
     for row in &config.rows {
@@ -239,7 +235,7 @@ fn render_full(frame: &mut Frame, state: &AppState) {
             RowHeight::Proportional(w) => constraints.push(Constraint::Ratio(w as u32, 10)),
         }
     }
-    constraints.push(Constraint::Length(footer_height)); // Footer
+    constraints.push(Constraint::Length(3)); // Footer
     constraints.push(Constraint::Length(1)); // bottom margin
 
     let chunks = Layout::default()
@@ -1610,30 +1606,6 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         lines.push(replay_line);
     }
 
-    // Alert line (if any alerts are active)
-    if !state.domain.active_alerts.is_empty() {
-        let alert_spans: Vec<Span> = state
-            .domain.active_alerts
-            .iter()
-            .enumerate()
-            .flat_map(|(i, alert)| {
-                let color = match alert.level {
-                    AlertLevel::Critical => Color::Red,
-                    AlertLevel::Warning => Color::Yellow,
-                };
-                let mut spans = vec![Span::styled(
-                    alert.to_string(),
-                    Style::default().fg(color).add_modifier(Modifier::BOLD),
-                )];
-                if i < state.domain.active_alerts.len() - 1 {
-                    spans.push(Span::raw("  "));
-                }
-                spans
-            })
-            .collect();
-        lines.push(Line::from(alert_spans));
-    }
-
     // Status line — varies by mode
     let paused = if state.paused { " | PAUSED" } else { "" };
 
@@ -1668,38 +1640,15 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         )
     };
 
-    // Build status line: help text + DTC count
-    let mut status_spans = vec![
-        Span::styled(
-            format!(" {}", help_text),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ];
-
-    if !state.domain.stored_dtcs.is_empty() {
-        let dtc_color = if state.domain.stored_dtcs.len() >= 3 {
-            Color::Red
-        } else {
-            Color::Yellow
-        };
-        status_spans.push(Span::styled(
-            format!(" | DTCs: {}", state.domain.stored_dtcs.len()),
-            Style::default().fg(dtc_color).add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    lines.push(Line::from(status_spans));
-
-    let border_color = match state.domain.worst_alert_level() {
-        Some(AlertLevel::Critical) => Color::Red,
-        Some(AlertLevel::Warning) => Color::Yellow,
-        None => Color::DarkGray,
-    };
+    lines.push(Line::from(Span::styled(
+        format!(" {}", help_text),
+        Style::default().fg(Color::DarkGray),
+    )));
 
     let footer = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color)),
+            .border_style(Style::default().fg(Color::DarkGray)),
     );
 
     frame.render_widget(footer, area);
