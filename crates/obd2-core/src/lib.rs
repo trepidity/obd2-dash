@@ -12,6 +12,7 @@ pub use obd2::mock::MockObd2;
 pub use obd2::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
 pub use obd2::connection_prefs::ConnectionPrefs;
 pub use obd2::dtc::DTC_SCENARIO_COUNT;
+pub use obd2::vin;
 pub use mock_profile::MockVehicleProfile;
 pub use recording::RecordingState;
 pub use recording::storage::{StorageConfig, StorageManager};

@@ -8,6 +8,7 @@ pub mod scanner;
 pub mod serial_transport;
 pub mod transport;
 pub mod types;
+pub mod vin;
 
 pub use dtc::Dtc;
 pub use pid::Pid;
