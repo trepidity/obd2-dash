@@ -145,6 +145,24 @@ fn pid_item(state: &AppState, pid: Pid) -> PanelItem {
         Pid::LongFuelTrimBank2 => state.domain.vehicle.long_fuel_trim_b2.as_ref().map(|r| r.value),
         Pid::BarometricPressure => state.domain.vehicle.barometric_pressure.as_ref().map(|r| r.value),
         Pid::ControlModuleVoltage => state.domain.vehicle.control_module_voltage.as_ref().map(|r| r.value),
+        Pid::TimingAdvance => state.domain.vehicle.timing_advance.as_ref().map(|r| r.value),
+        Pid::RunTimeSinceStart => state.domain.vehicle.run_time.as_ref().map(|r| r.value),
+        Pid::DistanceWithMil => state.domain.vehicle.distance_with_mil.as_ref().map(|r| r.value),
+        Pid::FuelRailGaugePressure => state.domain.vehicle.fuel_rail_gauge_pressure.as_ref().map(|r| r.value),
+        Pid::CommandedEgr => state.domain.vehicle.commanded_egr.as_ref().map(|r| r.value),
+        Pid::CommandedEvapPurge => state.domain.vehicle.commanded_evap_purge.as_ref().map(|r| r.value),
+        Pid::DistanceSinceDtcClear => state.domain.vehicle.distance_since_dtc_clear.as_ref().map(|r| r.value),
+        Pid::AbsoluteLoad => state.domain.vehicle.absolute_load.as_ref().map(|r| r.value),
+        Pid::CommandedEquivRatio => state.domain.vehicle.commanded_equiv_ratio.as_ref().map(|r| r.value),
+        Pid::RelativeThrottlePos => state.domain.vehicle.relative_throttle_pos.as_ref().map(|r| r.value),
+        Pid::AbsThrottlePosB => state.domain.vehicle.abs_throttle_pos_b.as_ref().map(|r| r.value),
+        Pid::AccelPedalPosD => state.domain.vehicle.accel_pedal_pos_d.as_ref().map(|r| r.value),
+        Pid::AccelPedalPosE => state.domain.vehicle.accel_pedal_pos_e.as_ref().map(|r| r.value),
+        Pid::CommandedThrottleActuator => state.domain.vehicle.commanded_throttle_actuator.as_ref().map(|r| r.value),
+        Pid::FuelRailAbsPressure => state.domain.vehicle.fuel_rail_abs_pressure.as_ref().map(|r| r.value),
+        Pid::DemandedTorque => state.domain.vehicle.demanded_torque.as_ref().map(|r| r.value),
+        Pid::ActualTorque => state.domain.vehicle.actual_torque.as_ref().map(|r| r.value),
+        Pid::ReferenceTorque => state.domain.vehicle.reference_torque.as_ref().map(|r| r.value),
     };
 
     PanelItem {
@@ -190,6 +208,24 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             if state.domain.vehicle.oil_pressure.is_some() {
                 items.push(pid_item(state, Pid::OilPressure));
             }
+            if state.domain.vehicle.fuel_rail_gauge_pressure.is_some() {
+                items.push(pid_item(state, Pid::FuelRailGaugePressure));
+            }
+            if state.domain.vehicle.fuel_rail_abs_pressure.is_some() {
+                items.push(pid_item(state, Pid::FuelRailAbsPressure));
+            }
+            if state.domain.vehicle.timing_advance.is_some() {
+                items.push(pid_item(state, Pid::TimingAdvance));
+            }
+            if state.domain.vehicle.demanded_torque.is_some() {
+                items.push(pid_item(state, Pid::DemandedTorque));
+            }
+            if state.domain.vehicle.actual_torque.is_some() {
+                items.push(pid_item(state, Pid::ActualTorque));
+            }
+            if state.domain.vehicle.reference_torque.is_some() {
+                items.push(pid_item(state, Pid::ReferenceTorque));
+            }
             items
         }
         PanelKind::Temperatures => {
@@ -216,6 +252,18 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             items.push(pid_item(state, Pid::LongFuelTrimBank1));
             items.push(pid_item(state, Pid::ShortFuelTrimBank2));
             items.push(pid_item(state, Pid::LongFuelTrimBank2));
+            if state.domain.vehicle.commanded_egr.is_some() {
+                items.push(pid_item(state, Pid::CommandedEgr));
+            }
+            if state.domain.vehicle.commanded_evap_purge.is_some() {
+                items.push(pid_item(state, Pid::CommandedEvapPurge));
+            }
+            if state.domain.vehicle.commanded_equiv_ratio.is_some() {
+                items.push(pid_item(state, Pid::CommandedEquivRatio));
+            }
+            if state.domain.vehicle.absolute_load.is_some() {
+                items.push(pid_item(state, Pid::AbsoluteLoad));
+            }
             items
         }
         PanelKind::SystemVehicle => {
@@ -236,6 +284,15 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             }
             if state.domain.vehicle.barometric_pressure.is_some() {
                 items.push(pid_item(state, Pid::BarometricPressure));
+            }
+            if state.domain.vehicle.run_time.is_some() {
+                items.push(pid_item(state, Pid::RunTimeSinceStart));
+            }
+            if state.domain.vehicle.distance_with_mil.is_some() {
+                items.push(pid_item(state, Pid::DistanceWithMil));
+            }
+            if state.domain.vehicle.distance_since_dtc_clear.is_some() {
+                items.push(pid_item(state, Pid::DistanceSinceDtcClear));
             }
             if let Some(info) = &state.domain.vehicle_info {
                 items.push(PanelItem {

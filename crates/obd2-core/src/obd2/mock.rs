@@ -54,6 +54,26 @@ pub struct MockObd2 {
     control_module_voltage: f64,
     engine_fuel_rate: f64,
 
+    // New PIDs
+    timing_advance: f64,
+    run_time: f64,
+    distance_with_mil: f64,
+    fuel_rail_gauge_pressure: f64,
+    commanded_egr: f64,
+    commanded_evap_purge: f64,
+    distance_since_dtc_clear: f64,
+    absolute_load: f64,
+    commanded_equiv_ratio: f64,
+    relative_throttle_pos: f64,
+    abs_throttle_pos_b: f64,
+    accel_pedal_pos_d: f64,
+    accel_pedal_pos_e: f64,
+    commanded_throttle_actuator: f64,
+    fuel_rail_abs_pressure: f64,
+    demanded_torque: f64,
+    actual_torque: f64,
+    reference_torque: f64,
+
     // Timing
     cycle: u64,
     last_tick: Instant,
@@ -101,6 +121,25 @@ impl MockObd2 {
             barometric_pressure: 101.3,
             control_module_voltage: voltage,
             engine_fuel_rate: 1.0,
+
+            timing_advance: 10.0,
+            run_time: 0.0,
+            distance_with_mil: 0.0,
+            fuel_rail_gauge_pressure: 35000.0,
+            commanded_egr: 0.0,
+            commanded_evap_purge: 0.0,
+            distance_since_dtc_clear: 500.0,
+            absolute_load: 15.0,
+            commanded_equiv_ratio: 1.0,
+            relative_throttle_pos: 0.0,
+            abs_throttle_pos_b: 12.0,
+            accel_pedal_pos_d: 0.0,
+            accel_pedal_pos_e: 0.0,
+            commanded_throttle_actuator: 8.0,
+            fuel_rail_abs_pressure: 35000.0,
+            demanded_torque: 0.0,
+            actual_torque: 0.0,
+            reference_torque: 250.0,
 
             cycle: 0,
             last_tick: Instant::now(),
@@ -285,6 +324,74 @@ impl MockObd2 {
         self.engine_fuel_rate = (self.rpm / 1000.0) * (self.engine_load / 100.0) * 8.0
             + rng.gen_range(-0.2..0.2);
         self.engine_fuel_rate = self.engine_fuel_rate.clamp(0.0, 3276.75);
+
+        // --- Additional PIDs ---
+
+        // Timing advance: oscillates ~10-25° tracking RPM
+        let rpm_frac_timing = (self.rpm - p.idle_rpm_warm).max(0.0) / (p.max_rpm - p.idle_rpm_warm);
+        self.timing_advance = 10.0 + rpm_frac_timing * 15.0 + rng.gen_range(-0.5..0.5);
+        self.timing_advance = self.timing_advance.clamp(-64.0, 63.5);
+
+        // Run time: increments each tick (~50ms per tick)
+        self.run_time += 0.05;
+
+        // Distance with MIL: slowly incrementing (only when MIL is on, simulated)
+        self.distance_with_mil += 0.001;
+
+        // Fuel rail gauge/abs pressure: direct injection ~35000-40000 kPa
+        let rail_base = 35000.0 + (self.engine_load / 100.0) * 5000.0;
+        self.fuel_rail_gauge_pressure = rail_base + rng.gen_range(-200.0..200.0);
+        self.fuel_rail_abs_pressure = self.fuel_rail_gauge_pressure + 101.0;
+
+        // Commanded EGR: low percentage, increases with load
+        self.commanded_egr = (self.engine_load / 100.0) * 15.0 + rng.gen_range(-0.5..0.5);
+        self.commanded_egr = self.commanded_egr.clamp(0.0, 100.0);
+
+        // Commanded EVAP purge: low percentage
+        self.commanded_evap_purge = 5.0 + rng.gen_range(-1.0..1.0);
+        self.commanded_evap_purge = self.commanded_evap_purge.clamp(0.0, 100.0);
+
+        // Distance since DTC clear: slowly incrementing
+        self.distance_since_dtc_clear += 0.002;
+
+        // Absolute load: tracks engine load
+        self.absolute_load = self.engine_load + rng.gen_range(-1.0..1.0);
+        self.absolute_load = self.absolute_load.clamp(0.0, 25700.0);
+
+        // Commanded equiv ratio: ~1.0 ± small drift
+        self.commanded_equiv_ratio = 1.0 + rng.gen_range(-0.02..0.02);
+        self.commanded_equiv_ratio = self.commanded_equiv_ratio.clamp(0.0, 2.0);
+
+        // Relative throttle position
+        self.relative_throttle_pos = self.throttle_position * 0.9 + rng.gen_range(-0.5..0.5);
+        self.relative_throttle_pos = self.relative_throttle_pos.clamp(0.0, 100.0);
+
+        // Abs throttle pos B: slightly offset from throttle
+        self.abs_throttle_pos_b = self.throttle_position + 4.0 + rng.gen_range(-0.3..0.3);
+        self.abs_throttle_pos_b = self.abs_throttle_pos_b.clamp(0.0, 100.0);
+
+        // Accel pedal pos D: tracks throttle
+        self.accel_pedal_pos_d = self.throttle_position * 0.95 + rng.gen_range(-0.3..0.3);
+        self.accel_pedal_pos_d = self.accel_pedal_pos_d.clamp(0.0, 100.0);
+
+        // Accel pedal pos E: similar to D
+        self.accel_pedal_pos_e = self.accel_pedal_pos_d + rng.gen_range(-0.5..0.5);
+        self.accel_pedal_pos_e = self.accel_pedal_pos_e.clamp(0.0, 100.0);
+
+        // Commanded throttle actuator
+        self.commanded_throttle_actuator = self.throttle_position + rng.gen_range(-0.5..0.5);
+        self.commanded_throttle_actuator = self.commanded_throttle_actuator.clamp(0.0, 100.0);
+
+        // Demanded torque: proportional to load
+        self.demanded_torque = (self.engine_load / 100.0) * 80.0 - 10.0 + rng.gen_range(-1.0..1.0);
+        self.demanded_torque = self.demanded_torque.clamp(-125.0, 130.0);
+
+        // Actual torque: follows demanded with small lag
+        self.actual_torque += (self.demanded_torque - self.actual_torque) * 0.3 + rng.gen_range(-0.5..0.5);
+        self.actual_torque = self.actual_torque.clamp(-125.0, 130.0);
+
+        // Reference torque: constant for engine type
+        // (stays at initial value — 250 Nm for 1.5L turbo)
     }
 }
 
@@ -333,6 +440,24 @@ impl Obd2Connection for MockObd2 {
             Pid::EngineFuelRate => (self.engine_fuel_rate, pid.unit()),
             Pid::TransmissionTemp => (self.transmission_temp, pid.unit()),
             Pid::OilPressure => (self.oil_pressure, pid.unit()),
+            Pid::TimingAdvance => (self.timing_advance, pid.unit()),
+            Pid::RunTimeSinceStart => (self.run_time, pid.unit()),
+            Pid::DistanceWithMil => (self.distance_with_mil, pid.unit()),
+            Pid::FuelRailGaugePressure => (self.fuel_rail_gauge_pressure, pid.unit()),
+            Pid::CommandedEgr => (self.commanded_egr, pid.unit()),
+            Pid::CommandedEvapPurge => (self.commanded_evap_purge, pid.unit()),
+            Pid::DistanceSinceDtcClear => (self.distance_since_dtc_clear, pid.unit()),
+            Pid::AbsoluteLoad => (self.absolute_load, pid.unit()),
+            Pid::CommandedEquivRatio => (self.commanded_equiv_ratio, pid.unit()),
+            Pid::RelativeThrottlePos => (self.relative_throttle_pos, pid.unit()),
+            Pid::AbsThrottlePosB => (self.abs_throttle_pos_b, pid.unit()),
+            Pid::AccelPedalPosD => (self.accel_pedal_pos_d, pid.unit()),
+            Pid::AccelPedalPosE => (self.accel_pedal_pos_e, pid.unit()),
+            Pid::CommandedThrottleActuator => (self.commanded_throttle_actuator, pid.unit()),
+            Pid::FuelRailAbsPressure => (self.fuel_rail_abs_pressure, pid.unit()),
+            Pid::DemandedTorque => (self.demanded_torque, pid.unit()),
+            Pid::ActualTorque => (self.actual_torque, pid.unit()),
+            Pid::ReferenceTorque => (self.reference_torque, pid.unit()),
         };
 
         Ok(PidReading::new(value, unit))

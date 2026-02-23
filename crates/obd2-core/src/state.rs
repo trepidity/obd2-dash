@@ -192,6 +192,60 @@ impl DomainState {
                     Pid::OilPressure => {
                         self.vehicle.oil_pressure = Some(reading);
                     }
+                    Pid::TimingAdvance => {
+                        self.vehicle.timing_advance = Some(reading);
+                    }
+                    Pid::RunTimeSinceStart => {
+                        self.vehicle.run_time = Some(reading);
+                    }
+                    Pid::DistanceWithMil => {
+                        self.vehicle.distance_with_mil = Some(reading);
+                    }
+                    Pid::FuelRailGaugePressure => {
+                        self.vehicle.fuel_rail_gauge_pressure = Some(reading);
+                    }
+                    Pid::CommandedEgr => {
+                        self.vehicle.commanded_egr = Some(reading);
+                    }
+                    Pid::CommandedEvapPurge => {
+                        self.vehicle.commanded_evap_purge = Some(reading);
+                    }
+                    Pid::DistanceSinceDtcClear => {
+                        self.vehicle.distance_since_dtc_clear = Some(reading);
+                    }
+                    Pid::AbsoluteLoad => {
+                        self.vehicle.absolute_load = Some(reading);
+                    }
+                    Pid::CommandedEquivRatio => {
+                        self.vehicle.commanded_equiv_ratio = Some(reading);
+                    }
+                    Pid::RelativeThrottlePos => {
+                        self.vehicle.relative_throttle_pos = Some(reading);
+                    }
+                    Pid::AbsThrottlePosB => {
+                        self.vehicle.abs_throttle_pos_b = Some(reading);
+                    }
+                    Pid::AccelPedalPosD => {
+                        self.vehicle.accel_pedal_pos_d = Some(reading);
+                    }
+                    Pid::AccelPedalPosE => {
+                        self.vehicle.accel_pedal_pos_e = Some(reading);
+                    }
+                    Pid::CommandedThrottleActuator => {
+                        self.vehicle.commanded_throttle_actuator = Some(reading);
+                    }
+                    Pid::FuelRailAbsPressure => {
+                        self.vehicle.fuel_rail_abs_pressure = Some(reading);
+                    }
+                    Pid::DemandedTorque => {
+                        self.vehicle.demanded_torque = Some(reading);
+                    }
+                    Pid::ActualTorque => {
+                        self.vehicle.actual_torque = Some(reading);
+                    }
+                    Pid::ReferenceTorque => {
+                        self.vehicle.reference_torque = Some(reading);
+                    }
                 }
                 // Recompute derived boost pressure (MAP - Barometric)
                 self.vehicle.boost_pressure = match (

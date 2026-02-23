@@ -318,6 +318,32 @@ pub struct VehicleData {
 
     // Pressures (extended)
     pub oil_pressure: Option<PidReading>,
+    pub fuel_rail_gauge_pressure: Option<PidReading>,
+    pub fuel_rail_abs_pressure: Option<PidReading>,
+
+    // Timing / torque
+    pub timing_advance: Option<PidReading>,
+    pub demanded_torque: Option<PidReading>,
+    pub actual_torque: Option<PidReading>,
+    pub reference_torque: Option<PidReading>,
+
+    // Throttle / pedal
+    pub relative_throttle_pos: Option<PidReading>,
+    pub abs_throttle_pos_b: Option<PidReading>,
+    pub accel_pedal_pos_d: Option<PidReading>,
+    pub accel_pedal_pos_e: Option<PidReading>,
+    pub commanded_throttle_actuator: Option<PidReading>,
+
+    // EGR / EVAP / load / equiv ratio
+    pub commanded_egr: Option<PidReading>,
+    pub commanded_evap_purge: Option<PidReading>,
+    pub absolute_load: Option<PidReading>,
+    pub commanded_equiv_ratio: Option<PidReading>,
+
+    // Distance / run time
+    pub run_time: Option<PidReading>,
+    pub distance_with_mil: Option<PidReading>,
+    pub distance_since_dtc_clear: Option<PidReading>,
 
     // Derived values (computed, not polled)
     pub boost_pressure: Option<f64>,
@@ -358,6 +384,24 @@ impl Default for VehicleData {
             catalyst_temp_b1s2: None,
             catalyst_temp_b2s2: None,
             oil_pressure: None,
+            fuel_rail_gauge_pressure: None,
+            fuel_rail_abs_pressure: None,
+            timing_advance: None,
+            demanded_torque: None,
+            actual_torque: None,
+            reference_torque: None,
+            relative_throttle_pos: None,
+            abs_throttle_pos_b: None,
+            accel_pedal_pos_d: None,
+            accel_pedal_pos_e: None,
+            commanded_throttle_actuator: None,
+            commanded_egr: None,
+            commanded_evap_purge: None,
+            absolute_load: None,
+            commanded_equiv_ratio: None,
+            run_time: None,
+            distance_with_mil: None,
+            distance_since_dtc_clear: None,
             boost_pressure: None,
             rpm_history: PidHistory::new(),
             speed_history: PidHistory::new(),
