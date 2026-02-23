@@ -19,6 +19,7 @@ pub enum Message {
     AdapterDetected(AdapterInfo),
     Error(String),
     // UI-only
+    VinDetected(String),
     DeviceFound(DiscoveredDevice),
     ScanComplete,
     StartConnect(DeviceKind),
@@ -135,6 +136,9 @@ impl AppState {
                 self.domain.update(DomainMessage::Error(e));
             }
             // UI-only messages handled here
+            Message::VinDetected(_) => {
+                // Handled in the main event loop (triggers database lookup)
+            }
             Message::DeviceFound(dev) => {
                 // Deduplicate by kind
                 if !self.scan_devices.iter().any(|d| d.kind == dev.kind) {

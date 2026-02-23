@@ -222,6 +222,7 @@ async fn main() -> Result<()> {
             obd_handle.expect("headless mode requires --mock, --port, or --ble"),
             vehicle_info,
             thresholds,
+            database,
         )
         .await
     } else {
@@ -240,6 +241,7 @@ async fn main() -> Result<()> {
             cli.baud,
             cli.ble_scan_secs,
             log_buffer,
+            database,
         )
         .await
     }
@@ -260,6 +262,7 @@ async fn run_tui(
     default_baud: u32,
     ble_scan_secs: u64,
     log_buffer: debug_log::LogBuffer,
+    database: obd2_db::Database,
 ) -> Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
@@ -308,6 +311,9 @@ async fn run_tui(
             }
             msg = obd_rx.recv(), if !state.domain.recording.is_replaying() => {
                 match msg {
+                    Some(Message::VinDetected(vin)) => {
+                        handle_vin_detected(&mut state, &vin, &database);
+                    }
                     Some(m) => state.update(m),
                     None => break,
                 }
@@ -406,6 +412,7 @@ async fn run_headless(
     obd_handle: tokio::task::JoinHandle<()>,
     vehicle_info: Option<obd2_db::models::VehicleInfo>,
     thresholds: std::collections::HashMap<u8, obd2_db::models::ResolvedThreshold>,
+    database: obd2_db::Database,
 ) -> Result<()> {
     let mut state = AppState::new(poll_ms);
     state.domain.vehicle_info = vehicle_info;
@@ -427,6 +434,9 @@ async fn run_headless(
         tokio::select! {
             msg = obd_rx.recv() => {
                 match msg {
+                    Some(Message::VinDetected(vin)) => {
+                        handle_vin_detected(&mut state, &vin, &database);
+                    }
                     Some(m) => state.update(m),
                     None => break,
                 }
@@ -475,6 +485,62 @@ async fn run_headless(
     obd_handle.abort();
     tracing::info!("obd2-dash headless exiting");
     Ok(())
+}
+
+/// Handle a VIN detected from the OBD2 connection — look up vehicle in database.
+fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Database) {
+    tracing::info!("VIN detected: {}", vin);
+
+    match database.get_vehicle(vin) {
+        Ok(Some(info)) => {
+            tracing::info!("Vehicle identified: {}", info.display_name());
+            let engine_family_code = info.engine_family_code.clone();
+
+            // Re-resolve thresholds for this vehicle
+            match database.resolve_all_thresholds(
+                Some(&info.vin),
+                engine_family_code.as_deref(),
+                &Pid::all_known_codes(),
+            ) {
+                Ok(thresholds) => {
+                    tracing::info!("Re-resolved {} thresholds for VIN {}", thresholds.len(), vin);
+                    state.domain.thresholds_cache = thresholds;
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to resolve thresholds for VIN {}: {}", vin, e);
+                }
+            }
+
+            // Reconfigure fuel economy
+            state.domain.fuel_economy.configure(
+                info.displacement_l,
+                info.fuel_type.as_deref(),
+            );
+
+            state.domain.vehicle_info = Some(info);
+        }
+        Ok(None) => {
+            tracing::info!("VIN {} not found in database, creating minimal entry", vin);
+            let info = obd2_db::models::VehicleInfo {
+                vin: vin.to_string(),
+                year: None,
+                make: None,
+                model: None,
+                trim: None,
+                engine_family_id: None,
+                engine_family_code: None,
+                transmission_type: None,
+                drive_type: None,
+                fuel_type: None,
+                displacement_l: None,
+                cylinders: None,
+            };
+            state.domain.vehicle_info = Some(info);
+        }
+        Err(e) => {
+            tracing::warn!("Database error looking up VIN {}: {}", vin, e);
+        }
+    }
 }
 
 /// Handle keys that don't map to simple Messages.
@@ -1075,6 +1141,16 @@ fn spawn_obd2_poll(
             }
         }
 
+        // Read VIN
+        match conn.read_vin().await {
+            Ok(vin) => {
+                let _ = tx.send(Message::VinDetected(vin));
+            }
+            Err(e) => {
+                tracing::warn!("Could not read VIN: {e}");
+            }
+        }
+
         // Read initial voltage
         match conn.read_voltage().await {
             Ok(v) => {
@@ -1266,6 +1342,16 @@ fn spawn_connect_and_poll(
         };
         if let Err(e) = prefs.save(&prefs_path) {
             tracing::warn!("Failed to save connection prefs: {}", e);
+        }
+
+        // Read VIN
+        match conn.read_vin().await {
+            Ok(vin) => {
+                let _ = tx.send(Message::VinDetected(vin));
+            }
+            Err(e) => {
+                tracing::warn!("Could not read VIN: {e}");
+            }
         }
 
         // Read initial voltage

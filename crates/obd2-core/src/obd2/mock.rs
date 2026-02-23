@@ -347,6 +347,10 @@ impl Obd2Connection for MockObd2 {
         Ok(dtc::scenario_dtcs(scenario))
     }
 
+    async fn read_vin(&mut self) -> Result<String, Obd2Error> {
+        Ok(self.profile.vin.clone())
+    }
+
     fn adapter_info(&self) -> Option<&AdapterInfo> {
         // Return a static-like mock adapter info
         None
