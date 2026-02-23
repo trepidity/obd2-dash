@@ -143,6 +143,45 @@ static DTC_CORRELATIONS: &[DtcCorrelation] = &[
             Pid::LongFuelTrimBank2,
         ],
     },
+    // Intake air temperature sensor
+    DtcCorrelation {
+        pattern: "P0110",
+        pids: &[
+            Pid::IntakeAirTemp,
+            Pid::CoolantTemp,
+            Pid::AmbientAirTemp,
+            Pid::EngineLoad,
+            Pid::Maf,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0111",
+        pids: &[
+            Pid::IntakeAirTemp,
+            Pid::CoolantTemp,
+            Pid::AmbientAirTemp,
+            Pid::EngineLoad,
+            Pid::Maf,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0112",
+        pids: &[
+            Pid::IntakeAirTemp,
+            Pid::CoolantTemp,
+            Pid::AmbientAirTemp,
+            Pid::EngineLoad,
+        ],
+    },
+    DtcCorrelation {
+        pattern: "P0113",
+        pids: &[
+            Pid::IntakeAirTemp,
+            Pid::CoolantTemp,
+            Pid::AmbientAirTemp,
+            Pid::EngineLoad,
+        ],
+    },
     // Idle control
     DtcCorrelation {
         pattern: "P0505",
@@ -553,6 +592,28 @@ pub fn common_causes(code: &str) -> Option<&'static [&'static str]> {
             "IAT sensor installed incorrectly",
             "Open or short in IAT circuit",
         ]),
+        "P0111" => Some(&[
+            "IAT sensor reading outside expected range for conditions",
+            "Dirty or contaminated IAT sensor element",
+            "IAT sensor positioned too close to heat source",
+            "Intake air leak affecting sensor reading",
+            "Faulty IAT sensor (slow response or drift)",
+            "Corroded or loose IAT sensor connector",
+        ]),
+        "P0112" => Some(&[
+            "Short to ground in IAT sensor circuit",
+            "Faulty IAT sensor (internal short)",
+            "Damaged wiring to IAT sensor",
+            "Water intrusion in IAT sensor connector",
+            "Faulty ECM/PCM IAT input circuit",
+        ]),
+        "P0113" => Some(&[
+            "Open circuit in IAT sensor wiring",
+            "Disconnected IAT sensor connector",
+            "Faulty IAT sensor (open element)",
+            "Corroded terminals at IAT sensor",
+            "Faulty ECM/PCM IAT input circuit",
+        ]),
         "P0120" => Some(&[
             "Faulty throttle position sensor (TPS)",
             "Damaged wiring to TPS",
@@ -658,6 +719,29 @@ pub fn suggested_actions(code: &str) -> Option<&'static [&'static str]> {
             "Verify sensor reads ambient temp when cold",
             "Replace IAT sensor if out of spec",
         ]),
+        "P0111" => Some(&[
+            "Compare IAT reading to ambient temp with engine cold",
+            "Monitor IAT reading while driving (should track conditions)",
+            "Check for heat soak from exhaust or engine near sensor",
+            "Inspect IAT sensor for contamination (oil, debris)",
+            "Clean IAT sensor element with electronics cleaner",
+            "Check for intake air leaks between filter and throttle",
+            "Replace IAT sensor if reading is sluggish or erratic",
+        ]),
+        "P0112" => Some(&[
+            "Check IAT sensor connector for water or corrosion",
+            "Measure IAT sensor resistance (compare to spec chart)",
+            "Inspect wiring for short to ground",
+            "Disconnect sensor and check if code changes to P0113",
+            "Replace IAT sensor if resistance is too low",
+        ]),
+        "P0113" => Some(&[
+            "Check IAT sensor connector is fully seated",
+            "Measure voltage at IAT sensor connector (key on)",
+            "Check wiring continuity from sensor to ECM/PCM",
+            "Inspect for broken or corroded terminals",
+            "Replace IAT sensor if circuit tests good",
+        ]),
         "P0120" => Some(&[
             "Check TPS voltage sweep (smooth 0.5-4.5V)",
             "Inspect TPS wiring for damage or chafing",
@@ -690,8 +774,8 @@ mod tests {
 
     #[test]
     fn test_prefix_fallback() {
-        // P0110 is not an exact match, but starts with "P01"
-        let pids = get_correlated_pids("P0110");
+        // P0150 has no exact match, but starts with "P01" so falls back to prefix group
+        let pids = get_correlated_pids("P0150");
         assert!(!pids.is_empty());
         assert!(pids.contains(&Pid::ShortFuelTrimBank1));
     }
