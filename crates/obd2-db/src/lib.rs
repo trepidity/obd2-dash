@@ -511,7 +511,7 @@ mod tests {
 
         // The seeded Malibu VIN is 1G1ZD5ST0LF000001
         // A real VIN sharing positions 1-8 and position 10 should match
-        let real_vin = "1G1ZD5ST2LF088849";
+        let real_vin = "1G1ZD5ST2LF000000";
         let vehicle = db.get_vehicle_by_vin_pattern(real_vin).unwrap().unwrap();
         assert_eq!(vehicle.vin, real_vin); // Should have the actual VIN
         assert_eq!(vehicle.make.as_deref(), Some("Chevrolet"));
