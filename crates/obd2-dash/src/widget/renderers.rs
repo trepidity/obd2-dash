@@ -64,6 +64,7 @@ pub fn render_widget(
         WidgetKind::CatalystTemps => render_single_catalyst_temps(frame, area, state, block),
         WidgetKind::RecordingStatus => render_recording_status(frame, area, state, block),
         WidgetKind::DrivingBehavior => render_driving_behavior(frame, area, state, block),
+        WidgetKind::AlertsPanel => render_alerts_panel(frame, area, state, block),
     }
 }
 
@@ -79,6 +80,14 @@ fn make_widget_block(kind: WidgetKind, focused: bool, state: &AppState) -> Block
                     Color::Red
                 } else {
                     Color::Yellow
+                }
+            }
+            WidgetKind::AlertsPanel => {
+                match state.domain.worst_alert_level() {
+                    Some(obd2_db::models::AlertLevel::Critical) => Color::Red,
+                    Some(obd2_db::models::AlertLevel::Warning) => Color::Yellow,
+                    None if state.domain.last_error.is_some() => Color::Red,
+                    None => Color::DarkGray,
                 }
             }
             _ => Color::DarkGray,
@@ -128,6 +137,15 @@ fn widget_title(kind: WidgetKind, state: &AppState) -> String {
         WidgetKind::CatalystTemps => " CATALYST TEMPS ".to_string(),
         WidgetKind::RecordingStatus => " RECORDING ".to_string(),
         WidgetKind::DrivingBehavior => " DRIVING BEHAVIOR ".to_string(),
+        WidgetKind::AlertsPanel => {
+            let count = state.domain.active_alerts.len()
+                + if state.domain.last_error.is_some() { 1 } else { 0 };
+            if count == 0 {
+                " ALERTS ".to_string()
+            } else {
+                format!(" ALERTS ({}) ", count)
+            }
+        }
     }
 }
 
@@ -637,6 +655,44 @@ fn render_recording_status(frame: &mut Frame, area: Rect, state: &AppState, bloc
                 Style::default().fg(Color::Magenta),
             )));
         }
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
+}
+
+fn render_alerts_panel(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+
+    // Threshold alerts
+    for alert in &state.domain.active_alerts {
+        let color = match alert.level {
+            obd2_db::models::AlertLevel::Critical => Color::Red,
+            obd2_db::models::AlertLevel::Warning => Color::Yellow,
+        };
+        lines.push(Line::from(Span::styled(
+            format!(" {}", alert),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    // Last error
+    if let Some(ref err) = state.domain.last_error {
+        lines.push(Line::from(Span::styled(
+            format!(" Error: {}", err),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    // No alerts message
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No active alerts",
+            Style::default().fg(Color::DarkGray),
+        )));
     }
 
     let paragraph = Paragraph::new(lines);

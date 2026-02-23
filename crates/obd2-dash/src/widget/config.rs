@@ -56,7 +56,7 @@ impl DashboardConfig {
                     ],
                     height: RowHeight::Min(10),
                 },
-                // Row 1: FuelSystem | SystemInfo | DTCs — Fixed(12)
+                // Row 1: FuelSystem | SystemInfo | DTCs | Alerts — Fixed(12)
                 WidgetRow {
                     widgets: vec![
                         WidgetSlot {
@@ -69,6 +69,10 @@ impl DashboardConfig {
                         },
                         WidgetSlot {
                             kind: WidgetKind::DtcPanel,
+                            size: WidgetSize::Half,
+                        },
+                        WidgetSlot {
+                            kind: WidgetKind::AlertsPanel,
                             size: WidgetSize::Half,
                         },
                     ],
@@ -186,6 +190,7 @@ impl DashboardConfig {
                 // Default proportions based on the original layout
                 match (row_idx, n) {
                     (0, 2) => vec![60, 40],
+                    (1, 4) => vec![27, 27, 23, 23],
                     (1, 3) => vec![35, 35, 30],
                     _ => {
                         let each = 100 / n as u16;
