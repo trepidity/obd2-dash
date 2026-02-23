@@ -1635,7 +1635,6 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Status line — varies by mode
-    let error_text = state.domain.last_error.as_deref().unwrap_or("OK");
     let paused = if state.paused { " | PAUSED" } else { "" };
 
     let layout_toggle = match state.layout {
@@ -1669,8 +1668,8 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         )
     };
 
-    // Build left side: help text + DTC count
-    let mut left_spans = vec![
+    // Build status line: help text + DTC count
+    let mut status_spans = vec![
         Span::styled(
             format!(" {}", help_text),
             Style::default().fg(Color::DarkGray),
@@ -1683,35 +1682,11 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         } else {
             Color::Yellow
         };
-        left_spans.push(Span::styled(
+        status_spans.push(Span::styled(
             format!(" | DTCs: {}", state.domain.stored_dtcs.len()),
             Style::default().fg(dtc_color).add_modifier(Modifier::BOLD),
         ));
     }
-
-    // Build right side: Status indicator
-    let status_label = "Status: ";
-    let right_spans = vec![
-        Span::styled(status_label, Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            format!("{} ", error_text),
-            if state.domain.last_error.is_some() {
-                Style::default().fg(Color::Red)
-            } else {
-                Style::default().fg(Color::Green)
-            },
-        ),
-    ];
-
-    // Calculate padding to right-align status
-    let inner_width = area.width.saturating_sub(2) as usize; // subtract border chars
-    let left_len: usize = left_spans.iter().map(|s| s.content.len()).sum();
-    let right_len: usize = right_spans.iter().map(|s| s.content.len()).sum();
-    let pad = inner_width.saturating_sub(left_len + right_len);
-
-    let mut status_spans = left_spans;
-    status_spans.push(Span::raw(" ".repeat(pad)));
-    status_spans.extend(right_spans);
 
     lines.push(Line::from(status_spans));
 
