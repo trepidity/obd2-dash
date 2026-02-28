@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
 use obd2_db::models::{Alert, AlertLevel, ResolvedThreshold, VehicleInfo};
@@ -50,6 +50,7 @@ pub struct DomainState {
     pub speed_unit: SpeedUnit,
     pub vehicle_info: Option<VehicleInfo>,
     pub active_alerts: Vec<Alert>,
+    pub alert_history: VecDeque<String>,
     pub thresholds_cache: HashMap<u8, ResolvedThreshold>,
     pub stored_dtcs: Vec<Dtc>,
     pub fuel_economy: FuelEconomyState,
@@ -71,6 +72,7 @@ impl DomainState {
             speed_unit: SpeedUnit::Kmh,
             vehicle_info: None,
             active_alerts: Vec::new(),
+            alert_history: VecDeque::new(),
             thresholds_cache: HashMap::new(),
             stored_dtcs: Vec::new(),
             fuel_economy: FuelEconomyState::new(),
@@ -280,6 +282,12 @@ impl DomainState {
                 self.adapter_info = Some(info);
             }
             DomainMessage::Error(e) => {
+                tracing::error!(target: "alerts", "Error: {}", e);
+                self.alert_history.push_back(format!("Error: {}", e));
+                const MAX_ALERT_HISTORY: usize = 100;
+                while self.alert_history.len() > MAX_ALERT_HISTORY {
+                    self.alert_history.pop_front();
+                }
                 self.last_error = Some(e);
             }
         }
@@ -295,6 +303,16 @@ impl DomainState {
         // Check against threshold if we have one
         if let Some(threshold) = self.thresholds_cache.get(&code) {
             if let Some(alert) = threshold.check(value, pid.name()) {
+                let msg = format!("{}", alert);
+                match alert.level {
+                    AlertLevel::Critical => tracing::error!(target: "alerts", "{}", msg),
+                    AlertLevel::Warning => tracing::warn!(target: "alerts", "{}", msg),
+                }
+                self.alert_history.push_back(msg);
+                const MAX_ALERT_HISTORY: usize = 100;
+                while self.alert_history.len() > MAX_ALERT_HISTORY {
+                    self.alert_history.pop_front();
+                }
                 self.active_alerts.push(alert);
             }
         }

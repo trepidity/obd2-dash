@@ -665,36 +665,38 @@ fn render_alerts_panel(frame: &mut Frame, area: Rect, state: &AppState, block: B
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let mut lines = Vec::new();
-
-    // Threshold alerts
-    for alert in &state.domain.active_alerts {
-        let color = match alert.level {
-            obd2_db::models::AlertLevel::Critical => Color::Red,
-            obd2_db::models::AlertLevel::Warning => Color::Yellow,
-        };
-        lines.push(Line::from(Span::styled(
-            format!(" {}", alert),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )));
-    }
-
-    // Last error
-    if let Some(ref err) = state.domain.last_error {
-        lines.push(Line::from(Span::styled(
-            format!(" Error: {}", err),
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-        )));
-    }
-
-    // No alerts message
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
+    if state.domain.alert_history.is_empty() {
+        let paragraph = Paragraph::new(Line::from(Span::styled(
             " No active alerts",
             Style::default().fg(Color::DarkGray),
         )));
+        frame.render_widget(paragraph, inner);
+        return;
     }
 
-    let paragraph = Paragraph::new(lines);
+    let body_height = inner.height as usize;
+    let total = state.domain.alert_history.len();
+
+    // Show the most recent entries that fit in the visible area
+    let start = total.saturating_sub(body_height);
+    let visible: Vec<Line> = state.domain.alert_history
+        .iter()
+        .skip(start)
+        .map(|msg| {
+            let color = if msg.starts_with("[CRIT]") {
+                Color::Red
+            } else if msg.starts_with("[WARN]") {
+                Color::Yellow
+            } else {
+                Color::Red // errors
+            };
+            Line::from(Span::styled(
+                format!(" {}", msg),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ))
+        })
+        .collect();
+
+    let paragraph = Paragraph::new(visible);
     frame.render_widget(paragraph, inner);
 }
