@@ -179,99 +179,107 @@ async fn main() -> Result<()> {
             cli.ble_scan_secs,
         ))
     } else if cli.emu {
-        // Emulator mode: open PTY without serial ioctls
-        if let Some(ref port) = cli.port {
-            let port_path = port.clone();
-            let tx = obd_tx.clone();
-            Some(tokio::spawn(async move {
-                let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
+        #[cfg(unix)]
+        {
+            // Emulator mode: open PTY without serial ioctls
+            if let Some(ref port) = cli.port {
+                let port_path = port.clone();
+                let tx = obd_tx.clone();
+                Some(tokio::spawn(async move {
+                    let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
 
-                let pty = match obd2_core::obd2::pty_transport::PtyTransport::open(&port_path) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let msg = format!("Failed to open PTY {}: {}", port_path, e);
-                        tracing::error!("{}", msg);
-                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
-                            msg.clone(),
-                        )));
-                        let _ = tx.send(Message::Error(msg));
-                        return;
-                    }
-                };
-                tracing::info!("Emulator PTY opened: {}", port_path);
-
-                let mut conn: Box<dyn Obd2Connection> =
-                    Box::new(obd2_core::obd2::elm327::Elm327::new(Box::new(pty)));
-
-                match conn.initialize().await {
-                    Ok(_) => {
-                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
-                        if let Some(info) = conn.adapter_info() {
-                            let _ = tx.send(Message::AdapterDetected(info.clone()));
+                    let pty = match obd2_core::obd2::pty_transport::PtyTransport::open(&port_path) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            let msg = format!("Failed to open PTY {}: {}", port_path, e);
+                            tracing::error!("{}", msg);
+                            let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                                msg.clone(),
+                            )));
+                            let _ = tx.send(Message::Error(msg));
+                            return;
                         }
-                    }
-                    Err(e) => {
-                        let msg = format!("Init failed: {}", e);
-                        tracing::error!("{}", msg);
-                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
-                            msg.clone(),
-                        )));
-                        let _ = tx.send(Message::Error(msg));
-                        return;
-                    }
-                }
+                    };
+                    tracing::info!("Emulator PTY opened: {}", port_path);
 
-                // Read VIN
-                match conn.read_vin().await {
-                    Ok(vin) => {
-                        let _ = tx.send(Message::VinDetected(vin));
-                    }
-                    Err(e) => {
-                        tracing::warn!("Could not read VIN: {e}");
-                    }
-                }
+                    let mut conn: Box<dyn Obd2Connection> =
+                        Box::new(obd2_core::obd2::elm327::Elm327::new(Box::new(pty)));
 
-                // Read initial voltage
-                match conn.read_voltage().await {
-                    Ok(v) => {
-                        let _ = tx.send(Message::VoltageUpdate(v));
-                    }
-                    Err(e) => {
-                        tracing::warn!("Could not read voltage: {e}");
-                    }
-                }
-
-                // Poll loop
-                let mut interval = tokio::time::interval(Duration::from_millis(poll_ms));
-                let mut voltage_counter = 0u32;
-                loop {
-                    interval.tick().await;
-                    for &pid in Pid::all() {
-                        match conn.query_pid(pid).await {
-                            Ok(reading) => {
-                                if tx.send(Message::PidUpdate(pid, reading)).is_err() {
-                                    return;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("PID {pid:?} query failed: {e}");
-                                let _ = tx.send(Message::Error(format!("{pid:?}: {e}")));
+                    match conn.initialize().await {
+                        Ok(_) => {
+                            let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
+                            if let Some(info) = conn.adapter_info() {
+                                let _ = tx.send(Message::AdapterDetected(info.clone()));
                             }
                         }
+                        Err(e) => {
+                            let msg = format!("Init failed: {}", e);
+                            tracing::error!("{}", msg);
+                            let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                                msg.clone(),
+                            )));
+                            let _ = tx.send(Message::Error(msg));
+                            return;
+                        }
                     }
-                    voltage_counter += 1;
-                    if voltage_counter.is_multiple_of(10) {
-                        if let Ok(v) = conn.read_voltage().await {
+
+                    // Read VIN
+                    match conn.read_vin().await {
+                        Ok(vin) => {
+                            let _ = tx.send(Message::VinDetected(vin));
+                        }
+                        Err(e) => {
+                            tracing::warn!("Could not read VIN: {e}");
+                        }
+                    }
+
+                    // Read initial voltage
+                    match conn.read_voltage().await {
+                        Ok(v) => {
                             let _ = tx.send(Message::VoltageUpdate(v));
                         }
-                        if let Ok(dtcs) = conn.read_dtcs().await {
-                            let _ = tx.send(Message::DtcUpdate(dtcs));
+                        Err(e) => {
+                            tracing::warn!("Could not read voltage: {e}");
                         }
                     }
-                }
-            }))
-        } else {
-            tracing::error!("--emu requires --port <PTY path>");
+
+                    // Poll loop
+                    let mut interval = tokio::time::interval(Duration::from_millis(poll_ms));
+                    let mut voltage_counter = 0u32;
+                    loop {
+                        interval.tick().await;
+                        for &pid in Pid::all() {
+                            match conn.query_pid(pid).await {
+                                Ok(reading) => {
+                                    if tx.send(Message::PidUpdate(pid, reading)).is_err() {
+                                        return;
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("PID {pid:?} query failed: {e}");
+                                    let _ = tx.send(Message::Error(format!("{pid:?}: {e}")));
+                                }
+                            }
+                        }
+                        voltage_counter += 1;
+                        if voltage_counter.is_multiple_of(10) {
+                            if let Ok(v) = conn.read_voltage().await {
+                                let _ = tx.send(Message::VoltageUpdate(v));
+                            }
+                            if let Ok(dtcs) = conn.read_dtcs().await {
+                                let _ = tx.send(Message::DtcUpdate(dtcs));
+                            }
+                        }
+                    }
+                }))
+            } else {
+                tracing::error!("--emu requires --port <PTY path>");
+                None
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            tracing::error!("--emu mode is only supported on Unix (macOS/Linux)");
             None
         }
     } else if let Some(ref port) = cli.port {
