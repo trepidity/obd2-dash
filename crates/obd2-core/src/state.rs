@@ -62,14 +62,15 @@ pub struct DomainState {
 
 impl DomainState {
     pub fn new(poll_interval_ms: u64) -> Self {
+        let (temp_unit, speed_unit) = detect_system_units();
         Self {
             vehicle: VehicleData::default(),
             connection: ConnectionState::Disconnected,
             adapter_info: None,
             last_error: None,
             poll_interval_ms,
-            temp_unit: TemperatureUnit::Celsius,
-            speed_unit: SpeedUnit::Kmh,
+            temp_unit,
+            speed_unit,
             vehicle_info: None,
             active_alerts: Vec::new(),
             alert_history: VecDeque::new(),
@@ -366,5 +367,29 @@ impl DomainState {
             SpeedUnit::Kmh => (r.value, "km/h"),
             SpeedUnit::Mph => (r.value * 0.621371, "mph"),
         })
+    }
+}
+
+/// Detect system locale and return appropriate temperature/speed units.
+///
+/// Uses the system locale to determine measurement conventions:
+/// - `en_US` → Fahrenheit + mph
+/// - `en_GB` → Celsius + mph
+/// - `en_LR` (Liberia), `my_MM` (Myanmar) → Fahrenheit + mph
+/// - Everything else → Celsius + km/h
+fn detect_system_units() -> (TemperatureUnit, SpeedUnit) {
+    let locale = sys_locale::get_locale().unwrap_or_default().to_lowercase();
+    // Normalize separators: sys-locale may return "en-US" or "en_US"
+    let locale = locale.replace('-', "_");
+
+    if locale.starts_with("en_us") || locale.starts_with("en_lr") || locale.starts_with("my_mm") {
+        tracing::debug!("Locale '{}' → Fahrenheit + mph", locale);
+        (TemperatureUnit::Fahrenheit, SpeedUnit::Mph)
+    } else if locale.starts_with("en_gb") {
+        tracing::debug!("Locale '{}' → Celsius + mph", locale);
+        (TemperatureUnit::Celsius, SpeedUnit::Mph)
+    } else {
+        tracing::debug!("Locale '{}' → Celsius + km/h", locale);
+        (TemperatureUnit::Celsius, SpeedUnit::Kmh)
     }
 }
