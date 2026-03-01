@@ -145,6 +145,7 @@ impl DashboardConfig {
     }
 
     /// Convert (row, col) coordinates to a flat widget index.
+    #[allow(dead_code)]
     pub fn row_col_to_flat(&self, row: usize, col: usize) -> Option<usize> {
         if row >= self.rows.len() {
             return None;

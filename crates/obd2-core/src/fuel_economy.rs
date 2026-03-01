@@ -292,11 +292,7 @@ impl FuelEconomyState {
     ) -> Option<GoldStandardResult> {
         // Tier 1: Direct fuel rate from PID 0x5E
         let (source, fuel_rate_lph) = if let Some(rate) = snap.engine_fuel_rate_lph {
-            if rate > 0.01 {
-                (GoldSource::DirectFuelRate, rate)
-            } else {
-                (GoldSource::DirectFuelRate, rate)
-            }
+            (GoldSource::DirectFuelRate, rate)
         } else if let Some(maf) = snap.maf_gs {
             // Tier 2 fallback: MAF-derived
             // fuel_rate (L/h) = MAF(g/s) / (AFR × density(kg/L)) × 3600 / 1000
@@ -402,19 +398,18 @@ impl FuelEconomyState {
         let catalyst_warmup = calc_catalyst_correction(snap);
 
         // 6. Throttle transient: rapid opening → up to +15%
-        let throttle_transient = if let (Some(current), Some(prev)) =
-            (snap.throttle_pct, self.prev_throttle)
-        {
-            let delta = current - prev;
-            if delta > 5.0 {
-                // Opening rapidly
-                1.0 + (delta / 100.0 * 1.5).clamp(0.0, 0.15)
+        let throttle_transient =
+            if let (Some(current), Some(prev)) = (snap.throttle_pct, self.prev_throttle) {
+                let delta = current - prev;
+                if delta > 5.0 {
+                    // Opening rapidly
+                    1.0 + (delta / 100.0 * 1.5).clamp(0.0, 0.15)
+                } else {
+                    1.0
+                }
             } else {
                 1.0
-            }
-        } else {
-            1.0
-        };
+            };
 
         // 7. High-load / WOT: >85% load → up to +20%
         let high_load_wot = if let Some(load) = snap.engine_load_pct {

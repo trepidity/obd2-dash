@@ -35,10 +35,10 @@ mod inner {
                 if flags < 0 {
                     return Err(io::Error::last_os_error());
                 }
-                if flags & libc::O_NONBLOCK == 0 {
-                    if libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
-                        return Err(io::Error::last_os_error());
-                    }
+                if flags & libc::O_NONBLOCK == 0
+                    && libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0
+                {
+                    return Err(io::Error::last_os_error());
                 }
             }
             Ok(Self {
@@ -99,9 +99,8 @@ mod inner {
                 };
 
                 let fd = self.inner.get_ref().as_raw_fd();
-                let ret = unsafe {
-                    libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len())
-                };
+                let ret =
+                    unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
 
                 if ret < 0 {
                     let err = io::Error::last_os_error();

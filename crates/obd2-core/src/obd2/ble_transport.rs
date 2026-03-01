@@ -16,15 +16,15 @@ use super::types::Obd2Error;
 
 /// OBDLink/STN custom UART service (FFF0).
 #[allow(dead_code)]
-const STN_SERVICE: uuid::Uuid = uuid::Uuid::from_u128(0x0000FFF0_0000_1000_8000_00805f9b34fb);
-const STN_NOTIFY: uuid::Uuid = uuid::Uuid::from_u128(0x0000FFF1_0000_1000_8000_00805f9b34fb);
-const STN_WRITE: uuid::Uuid = uuid::Uuid::from_u128(0x0000FFF2_0000_1000_8000_00805f9b34fb);
+const STN_SERVICE: uuid::Uuid = uuid::Uuid::from_u128(0x0000_FFF0_0000_1000_8000_0080_5F9B_34FB);
+const STN_NOTIFY: uuid::Uuid = uuid::Uuid::from_u128(0x0000_FFF1_0000_1000_8000_0080_5F9B_34FB);
+const STN_WRITE: uuid::Uuid = uuid::Uuid::from_u128(0x0000_FFF2_0000_1000_8000_0080_5F9B_34FB);
 
 /// Nordic UART Service (NUS) — used by some generic ELM327 BLE adapters.
 #[allow(dead_code)]
-const NUS_SERVICE: uuid::Uuid = uuid::Uuid::from_u128(0x6E400001_b5a3_f393_e0a9_e50e24dcca9e);
-const NUS_TX: uuid::Uuid = uuid::Uuid::from_u128(0x6E400003_b5a3_f393_e0a9_e50e24dcca9e); // notify
-const NUS_RX: uuid::Uuid = uuid::Uuid::from_u128(0x6E400002_b5a3_f393_e0a9_e50e24dcca9e); // write
+const NUS_SERVICE: uuid::Uuid = uuid::Uuid::from_u128(0x6E40_0001_B5A3_F393_E0A9_E50E_24DC_CA9E);
+const NUS_TX: uuid::Uuid = uuid::Uuid::from_u128(0x6E40_0003_B5A3_F393_E0A9_E50E_24DC_CA9E); // notify
+const NUS_RX: uuid::Uuid = uuid::Uuid::from_u128(0x6E40_0002_B5A3_F393_E0A9_E50E_24DC_CA9E); // write
 
 /// Known name prefixes for OBD2 BLE adapters.
 const ADAPTER_NAME_PATTERNS: &[&str] = &["OBDLink", "OBD", "ELM327", "STN", "OBDII", "Vgate"];
@@ -150,7 +150,8 @@ fn find_uart_characteristics(chars: &[Characteristic]) -> Result<UartChars, Obd2
             || c.properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE)
     });
     let notifiable = chars.iter().find(|c| {
-        c.properties.contains(CharPropFlags::NOTIFY) || c.properties.contains(CharPropFlags::INDICATE)
+        c.properties.contains(CharPropFlags::NOTIFY)
+            || c.properties.contains(CharPropFlags::INDICATE)
     });
 
     if let (Some(w), Some(n)) = (writable, notifiable) {
@@ -209,7 +210,12 @@ impl BleTransport {
             chars.len()
         );
         for c in &chars {
-            tracing::debug!("  char {} props={:?} service={}", c.uuid, c.properties, c.service_uuid);
+            tracing::debug!(
+                "  char {} props={:?} service={}",
+                c.uuid,
+                c.properties,
+                c.service_uuid
+            );
         }
 
         let uart = find_uart_characteristics(&chars)?;

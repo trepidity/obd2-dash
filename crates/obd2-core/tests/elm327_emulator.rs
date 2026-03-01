@@ -205,10 +205,7 @@ async fn test_full_elm327_pipeline() {
         "CoolantTemp {} not near 90",
         coolant.value
     );
-    eprintln!(
-        "PASS: CoolantTemp = {:.1} {}",
-        coolant.value, coolant.unit
-    );
+    eprintln!("PASS: CoolantTemp = {:.1} {}", coolant.value, coolant.unit);
 
     let speed = conn
         .query_pid(Pid::VehicleSpeed)

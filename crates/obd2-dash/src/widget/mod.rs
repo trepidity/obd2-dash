@@ -108,7 +108,9 @@ impl WidgetCategory {
             WidgetCategory::Diagnostics => "Diagnostic trouble codes panel",
             WidgetCategory::SystemVehicle => "Battery, VIN, vehicle details",
             WidgetCategory::Recording => "Recording status indicator",
-            WidgetCategory::Driving => "Smoothness score, acceleration, braking and jackrabbit detection",
+            WidgetCategory::Driving => {
+                "Smoothness score, acceleration, braking and jackrabbit detection"
+            }
         }
     }
 }
@@ -332,12 +334,10 @@ pub fn widget_registry() -> Vec<WidgetMeta> {
 }
 
 /// Get widgets belonging to a specific category.
+#[allow(dead_code)]
 pub fn widgets_for_category(category: WidgetCategory) -> Vec<&'static WidgetMeta> {
     // Leak the registry into a static so we can return references.
     // This is fine — it's called once per edit session at most.
     let registry: &'static Vec<WidgetMeta> = Box::leak(Box::new(widget_registry()));
-    registry
-        .iter()
-        .filter(|m| m.category == category)
-        .collect()
+    registry.iter().filter(|m| m.category == category).collect()
 }

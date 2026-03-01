@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use obd2_core::{
-    AdapterInfo, ConnectionState, DeviceKind, DiscoveredDevice, DomainMessage, DomainState,
-    Dtc, Pid, PidReading, ScanEvent,
-};
 use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
+use obd2_core::{
+    AdapterInfo, ConnectionState, DeviceKind, DiscoveredDevice, DomainMessage, DomainState, Dtc,
+    Pid, PidReading, ScanEvent,
+};
 
 /// Messages flowing into the app state (TEA / Elm-style).
 #[derive(Debug)]

@@ -403,23 +403,20 @@ impl Database {
              WHERE scope_type = ?1 AND scope_id = ?2 AND pid_code = ?3",
         )?;
 
-        let result = stmt.query_row(
-            rusqlite::params![scope_type, scope_id, pid_code],
-            |row| {
-                Ok(PidThreshold {
-                    scope_type: row.get(0)?,
-                    scope_id: row.get(1)?,
-                    pid_code: row.get::<_, i32>(2)? as u8,
-                    min_value: row.get(3)?,
-                    max_value: row.get(4)?,
-                    low_warning: row.get(5)?,
-                    high_warning: row.get(6)?,
-                    low_critical: row.get(7)?,
-                    high_critical: row.get(8)?,
-                    notes: row.get(9)?,
-                })
-            },
-        );
+        let result = stmt.query_row(rusqlite::params![scope_type, scope_id, pid_code], |row| {
+            Ok(PidThreshold {
+                scope_type: row.get(0)?,
+                scope_id: row.get(1)?,
+                pid_code: row.get::<_, i32>(2)? as u8,
+                min_value: row.get(3)?,
+                max_value: row.get(4)?,
+                low_warning: row.get(5)?,
+                high_warning: row.get(6)?,
+                low_critical: row.get(7)?,
+                high_critical: row.get(8)?,
+                notes: row.get(9)?,
+            })
+        });
 
         match result {
             Ok(t) => Ok(Some(t)),
@@ -520,7 +517,10 @@ mod tests {
 
         // A completely different VIN should not match
         let unknown_vin = "5YJSA1E26MF000001";
-        assert!(db.get_vehicle_by_vin_pattern(unknown_vin).unwrap().is_none());
+        assert!(db
+            .get_vehicle_by_vin_pattern(unknown_vin)
+            .unwrap()
+            .is_none());
 
         // Short VIN should return None gracefully
         assert!(db.get_vehicle_by_vin_pattern("ABC").unwrap().is_none());
@@ -532,10 +532,7 @@ mod tests {
         seed::seed_all(&db).unwrap();
 
         // PID 0x04 (engine load) with no overrides — should return default
-        let threshold = db
-            .resolve_threshold(0x04, None, None)
-            .unwrap()
-            .unwrap();
+        let threshold = db.resolve_threshold(0x04, None, None).unwrap().unwrap();
         assert!((threshold.max_value - 100.0).abs() < 0.01);
     }
 }

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use obd2_db::models::{ResolvedThreshold, VehicleInfo};
 use crate::obd2::dtc::Dtc;
 use crate::obd2::types::VehicleData;
 use crate::obd2::Pid;
+use obd2_db::models::{ResolvedThreshold, VehicleInfo};
 
 use super::provider::{DiagnosticContext, SensorSnapshot, SensorStatus, VehicleInfoSummary};
 
@@ -304,19 +304,11 @@ static DTC_CORRELATIONS: &[DtcCorrelation] = &[
     // O2 heater circuits
     DtcCorrelation {
         pattern: "P0030",
-        pids: &[
-            Pid::ControlModuleVoltage,
-            Pid::CoolantTemp,
-            Pid::EngineLoad,
-        ],
+        pids: &[Pid::ControlModuleVoltage, Pid::CoolantTemp, Pid::EngineLoad],
     },
     DtcCorrelation {
         pattern: "P0036",
-        pids: &[
-            Pid::ControlModuleVoltage,
-            Pid::CoolantTemp,
-            Pid::EngineLoad,
-        ],
+        pids: &[Pid::ControlModuleVoltage, Pid::CoolantTemp, Pid::EngineLoad],
     },
     // O2 sensor voltage codes
     DtcCorrelation {
@@ -510,24 +502,17 @@ static DTC_CORRELATIONS: &[DtcCorrelation] = &[
     // Bxxxx — Body
     DtcCorrelation {
         pattern: "B",
-        pids: &[
-            Pid::ControlModuleVoltage,
-        ],
+        pids: &[Pid::ControlModuleVoltage],
     },
     // Cxxxx — Chassis
     DtcCorrelation {
         pattern: "C",
-        pids: &[
-            Pid::VehicleSpeed,
-            Pid::ControlModuleVoltage,
-        ],
+        pids: &[Pid::VehicleSpeed, Pid::ControlModuleVoltage],
     },
     // Uxxxx — Network
     DtcCorrelation {
         pattern: "U",
-        pids: &[
-            Pid::ControlModuleVoltage,
-        ],
+        pids: &[Pid::ControlModuleVoltage],
     },
 ];
 
@@ -609,7 +594,11 @@ fn pid_value(v: &VehicleData, pid: Pid) -> Option<f64> {
 }
 
 /// Determine sensor status from threshold checks.
-fn sensor_status(thresholds: &HashMap<u8, ResolvedThreshold>, pid: Pid, value: Option<f64>) -> SensorStatus {
+fn sensor_status(
+    thresholds: &HashMap<u8, ResolvedThreshold>,
+    pid: Pid,
+    value: Option<f64>,
+) -> SensorStatus {
     let value = match value {
         Some(v) => v,
         None => return SensorStatus::NoData,
@@ -696,7 +685,11 @@ fn short_name(pid: Pid) -> &'static str {
 // ─── Public builders ─────────────────────────────────────────────────────────
 
 /// Build sensor snapshots for the given PIDs from current state.
-fn build_sensor_snapshots(vehicle: &VehicleData, thresholds: &HashMap<u8, ResolvedThreshold>, pids: &[Pid]) -> Vec<SensorSnapshot> {
+fn build_sensor_snapshots(
+    vehicle: &VehicleData,
+    thresholds: &HashMap<u8, ResolvedThreshold>,
+    pids: &[Pid],
+) -> Vec<SensorSnapshot> {
     pids.iter()
         .map(|&pid| {
             let value = pid_value(vehicle, pid);
@@ -954,8 +947,7 @@ pub fn common_causes(code: &str) -> Option<&'static [&'static str]> {
             "Faulty PCM heater driver circuit",
         ]),
         // O2 sensor voltage
-        "P0131" | "P0132" | "P0133" | "P0134"
-        | "P0137" | "P0138" => Some(&[
+        "P0131" | "P0132" | "P0133" | "P0134" | "P0137" | "P0138" => Some(&[
             "Faulty O2 sensor",
             "Exhaust leak near O2 sensor",
             "Wiring damage or short in O2 circuit",
@@ -1160,8 +1152,7 @@ pub fn suggested_actions(code: &str) -> Option<&'static [&'static str]> {
             "Replace O2 sensor if heater is open/short",
         ]),
         // O2 sensor voltage
-        "P0131" | "P0132" | "P0133" | "P0134"
-        | "P0137" | "P0138" => Some(&[
+        "P0131" | "P0132" | "P0133" | "P0134" | "P0137" | "P0138" => Some(&[
             "Inspect O2 sensor wiring for damage",
             "Check for exhaust leaks near sensor",
             "Monitor O2 sensor voltage (live data)",

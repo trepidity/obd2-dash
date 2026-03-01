@@ -1,4 +1,4 @@
-/// Diagnostic Trouble Code (DTC) support — decoding, descriptions, and mock scenarios.
+//! Diagnostic Trouble Code (DTC) support — decoding, descriptions, and mock scenarios.
 
 /// Top-level DTC category derived from the first two bits of byte A.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,10 +221,7 @@ pub fn dtc_description(code: &str) -> &'static str {
 pub fn scenario_dtcs(scenario: u8) -> Vec<Dtc> {
     match scenario {
         0 => vec![],
-        1 => vec![
-            Dtc::from_code("P0420"),
-            Dtc::from_code("P0171"),
-        ],
+        1 => vec![Dtc::from_code("P0420"), Dtc::from_code("P0171")],
         2 => vec![
             Dtc::from_code("P0300"),
             Dtc::from_code("P0171"),

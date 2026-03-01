@@ -63,7 +63,7 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         redline_rpm: Some(6500),
         idle_rpm_cold: Some(1100),
         idle_rpm_warm: Some(700),
-        max_power_kw: Some(119.0), // 160 hp
+        max_power_kw: Some(119.0),  // 160 hp
         max_torque_nm: Some(250.0), // 184 lb-ft
     })?;
 
@@ -81,7 +81,7 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         redline_rpm: Some(6500),
         idle_rpm_cold: Some(1100),
         idle_rpm_warm: Some(700),
-        max_power_kw: Some(186.0), // 250 hp
+        max_power_kw: Some(186.0),  // 250 hp
         max_torque_nm: Some(353.0), // 260 lb-ft
     })?;
 
@@ -556,7 +556,7 @@ fn seed_default_thresholds(db: &Database) -> Result<()> {
 
 fn seed_engine_family_overrides(db: &Database) -> Result<()> {
     // W11B16 (Mini Cooper S) — higher redline, tighter coolant
-    let w11_overrides = vec![
+    let w11_overrides = [
         PidThreshold {
             scope_type: "engine_family".to_string(),
             scope_id: "W11B16".to_string(),
@@ -584,7 +584,7 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
     ];
 
     // LLY (Duramax) — much lower redline, diesel specifics
-    let lly_overrides = vec![
+    let lly_overrides = [
         PidThreshold {
             scope_type: "engine_family".to_string(),
             scope_id: "LLY".to_string(),
@@ -612,7 +612,7 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
     ];
 
     // LFV (Malibu 1.5L Turbo) — turbo engines run hotter
-    let lfv_overrides = vec![
+    let lfv_overrides = [
         PidThreshold {
             scope_type: "engine_family".to_string(),
             scope_id: "LFV".to_string(),
@@ -640,7 +640,7 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
     ];
 
     // LSY (Malibu 2.0L Turbo) — turbo engines run hotter
-    let lsy_overrides = vec![
+    let lsy_overrides = [
         PidThreshold {
             scope_type: "engine_family".to_string(),
             scope_id: "LSY".to_string(),
@@ -667,7 +667,8 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
         },
     ];
 
-    for t in w11_overrides.iter()
+    for t in w11_overrides
+        .iter()
         .chain(lly_overrides.iter())
         .chain(lfv_overrides.iter())
         .chain(lsy_overrides.iter())

@@ -23,9 +23,7 @@ impl Elm327 {
     /// Send an AT/OBD command and read response lines until the '>' prompt.
     async fn send_command(&mut self, cmd: &str) -> Result<Vec<String>, Obd2Error> {
         tracing::debug!(target: "obd2::elm327", "TX cmd: {}", cmd);
-        self.transport
-            .send(format!("{}\r", cmd).as_bytes())
-            .await?;
+        self.transport.send(format!("{}\r", cmd).as_bytes()).await?;
 
         let lines = self.read_until_prompt().await?;
         tracing::debug!(target: "obd2::elm327", "RX {} lines: {:?}", lines.len(), lines);
@@ -167,11 +165,10 @@ impl Obd2Connection for Elm327 {
                 let bytes = Self::parse_hex_response(&upper)?;
                 // bytes[0] = service ID (0x41), bytes[1] = PID code, rest = data
                 if bytes.len() < 3 {
-                    return Err(Obd2Error::ParseError(
-                        "response too short".into(),
-                    ));
+                    return Err(Obd2Error::ParseError("response too short".into()));
                 }
-                let reading = pid.parse_value(&bytes[2..])?;
+                let mut reading = pid.parse_value(&bytes[2..])?;
+                reading.raw_bytes = Some(bytes[2..].to_vec());
                 tracing::debug!(target: "obd2::elm327", "PID {:?} = {:.2} {}", pid, reading.value, reading.unit);
                 return Ok(reading);
             }
@@ -187,7 +184,7 @@ impl Obd2Connection for Elm327 {
         let resp = self.send_command("ATRV").await?;
         for line in &resp {
             // Response is like "12.4V" or "12.4"
-            let cleaned = line.replace('V', "").replace('v', "");
+            let cleaned = line.replace(['V', 'v'], "");
             if let Ok(v) = cleaned.trim().parse::<f64>() {
                 tracing::debug!(target: "obd2::elm327", "Voltage: {:.1}V", v);
                 return Ok(v);
@@ -278,7 +275,7 @@ impl Obd2Connection for Elm327 {
         let vin: String = data_bytes
             .iter()
             .take(17)
-            .filter(|&&b| b >= 0x20 && b <= 0x7E)
+            .filter(|&&b| (0x20..=0x7E).contains(&b))
             .map(|&b| b as char)
             .collect();
 
