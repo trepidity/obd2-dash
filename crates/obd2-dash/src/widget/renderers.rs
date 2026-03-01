@@ -327,6 +327,9 @@ fn render_single_speed(frame: &mut Frame, area: Rect, state: &AppState, block: B
 }
 
 fn render_single_load(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
     let load_val = state
         .domain
         .vehicle
@@ -334,14 +337,89 @@ fn render_single_load(frame: &mut Frame, area: Rect, state: &AppState, block: Bl
         .as_ref()
         .map(|r| r.value)
         .unwrap_or(0.0);
-    let color = ui::threshold_color_for_pid(state, 0x04, load_val, || Color::Magenta);
+    let has_data = state.domain.vehicle.engine_load.is_some();
 
-    let gauge = Gauge::default()
-        .block(block)
-        .gauge_style(Style::default().fg(color))
-        .label(format!("{:.1}%", load_val))
-        .ratio((load_val / 100.0).clamp(0.0, 1.0));
-    frame.render_widget(gauge, area);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Value display
+            Constraint::Length(1), // Segmented bar
+            Constraint::Length(1), // Scale labels
+            Constraint::Min(2),    // Sparkline history
+        ])
+        .split(inner);
+
+    // Row 1: Large percentage value
+    let val_color =
+        ui::threshold_color_for_pid(state, 0x04, load_val, || load_zone_color(load_val));
+    let val_text = if has_data {
+        format!("{:.1}%", load_val)
+    } else {
+        "--%".to_string()
+    };
+    let val_line = Paragraph::new(Line::from(vec![Span::styled(
+        val_text,
+        Style::default().fg(val_color).add_modifier(Modifier::BOLD),
+    )]))
+    .alignment(Alignment::Center);
+    frame.render_widget(val_line, chunks[0]);
+
+    // Row 2: Segmented bar with color zones
+    let bar_width = chunks[1].width.saturating_sub(2) as usize; // padding
+    let filled = ((load_val / 100.0) * bar_width as f64).round() as usize;
+    let mut spans = vec![Span::raw(" ")];
+    for i in 0..bar_width {
+        let segment_pct = (i as f64 / bar_width as f64) * 100.0;
+        if i < filled {
+            let color = load_zone_color(segment_pct);
+            spans.push(Span::styled("\u{2588}", Style::default().fg(color))); // █
+        } else {
+            spans.push(Span::styled(
+                "\u{2591}",
+                Style::default().fg(Color::DarkGray),
+            )); // ░
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), chunks[1]);
+
+    // Row 3: Scale labels
+    let scale_width = chunks[2].width as usize;
+    let mut scale = format!(" 0{:^w$}100", "25      50      75", w = scale_width - 7);
+    scale.truncate(scale_width);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            scale,
+            Style::default().fg(Color::DarkGray),
+        ))),
+        chunks[2],
+    );
+
+    // Row 4: Sparkline history
+    let hist: Vec<u64> = state
+        .domain
+        .vehicle
+        .load_history
+        .readings
+        .iter()
+        .copied()
+        .collect();
+    let sparkline = Sparkline::default()
+        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
+        .data(&hist)
+        .max(100)
+        .style(Style::default().fg(val_color));
+    frame.render_widget(sparkline, chunks[3]);
+}
+
+/// Color zones for engine load: green < 50%, yellow 50-75%, red > 75%.
+fn load_zone_color(pct: f64) -> Color {
+    if pct < 50.0 {
+        Color::Green
+    } else if pct < 75.0 {
+        Color::Yellow
+    } else {
+        Color::Red
+    }
 }
 
 fn render_single_throttle(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
@@ -468,6 +546,9 @@ fn render_single_oil_pressure(frame: &mut Frame, area: Rect, state: &AppState, b
 }
 
 fn render_single_fuel_tank(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
     let val = state
         .domain
         .vehicle
@@ -475,22 +556,142 @@ fn render_single_fuel_tank(frame: &mut Frame, area: Rect, state: &AppState, bloc
         .as_ref()
         .map(|r| r.value)
         .unwrap_or(0.0);
-    let color = ui::threshold_color_for_pid(state, 0x2F, val, || {
-        if val < 15.0 {
-            Color::Red
-        } else if val < 25.0 {
-            Color::Yellow
-        } else {
-            Color::Green
-        }
-    });
+    let has_data = state.domain.vehicle.fuel_tank_level.is_some();
 
-    let gauge = Gauge::default()
-        .block(block)
-        .gauge_style(Style::default().fg(color))
-        .label(format!("{:.1}%", val))
-        .ratio((val / 100.0).clamp(0.0, 1.0));
-    frame.render_widget(gauge, area);
+    let fuel_color = ui::threshold_color_for_pid(state, 0x2F, val, || fuel_zone_color(val));
+
+    // Layout: vertical tank on the left, info on the right
+    let h_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(6), Constraint::Min(8)])
+        .split(inner);
+
+    // Left side: vertical fuel tank gauge
+    let tank_height = h_chunks[0].height as usize;
+    let filled_rows = ((val / 100.0) * tank_height as f64).round() as usize;
+
+    // Block characters for partial fill: ▁▂▃▄▅▆▇█
+    let fill_chars = [
+        ' ', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
+        '\u{2588}',
+    ];
+
+    let mut tank_lines: Vec<Line> = Vec::new();
+    for row in 0..tank_height {
+        let row_from_bottom = tank_height - 1 - row;
+        let row_pct = (row_from_bottom as f64 / tank_height as f64) * 100.0;
+        let color = fuel_zone_color(row_pct);
+
+        let fill = if row_from_bottom < filled_rows {
+            // Fully filled row
+            Span::styled(" \u{2588}\u{2588}\u{2588} ", Style::default().fg(color))
+        } else if row_from_bottom == filled_rows {
+            // Partial fill row - use fractional block
+            let frac = (val / 100.0) * tank_height as f64 - filled_rows as f64;
+            let idx = (frac * 8.0).round() as usize;
+            let ch = fill_chars[idx.min(8)];
+            if ch == ' ' {
+                Span::styled("      ", Style::default().fg(Color::DarkGray))
+            } else {
+                let s = format!(" {}{}{} ", ch, ch, ch);
+                Span::styled(s, Style::default().fg(color))
+            }
+        } else {
+            // Empty row
+            Span::styled("      ", Style::default().fg(Color::DarkGray))
+        };
+        tank_lines.push(Line::from(fill));
+    }
+    frame.render_widget(Paragraph::new(tank_lines), h_chunks[0]);
+
+    // Right side: value + scale labels
+    let r_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2), // Value
+            Constraint::Min(1),    // Scale
+        ])
+        .split(h_chunks[1]);
+
+    // Value display
+    let val_text = if has_data {
+        format!("{:.1}%", val)
+    } else {
+        "--%".to_string()
+    };
+    let val_para = Paragraph::new(vec![
+        Line::from(Span::styled(
+            val_text,
+            Style::default().fg(fuel_color).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            fuel_level_label(val),
+            Style::default().fg(fuel_color),
+        )),
+    ]);
+    frame.render_widget(val_para, r_chunks[0]);
+
+    // Scale markers
+    let scale_height = r_chunks[1].height as usize;
+    let markers = ["F", "3/4", "1/2", "1/4", "E"];
+    let mut scale_lines: Vec<Line> = Vec::new();
+    for row in 0..scale_height {
+        let frac = row as f64 / scale_height.max(1) as f64;
+        let marker_idx = (frac * (markers.len() - 1) as f64).round() as usize;
+        let label = if scale_height >= markers.len() {
+            // Only show marker if this row is close enough to the target position
+            let target_row = (marker_idx as f64 / (markers.len() - 1) as f64
+                * (scale_height - 1) as f64)
+                .round() as usize;
+            if row == target_row {
+                markers[marker_idx]
+            } else {
+                ""
+            }
+        } else if row < markers.len() {
+            markers[row]
+        } else {
+            ""
+        };
+        let color = if label == "E" {
+            Color::Red
+        } else if label == "F" {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        scale_lines.push(Line::from(Span::styled(
+            format!(" {}", label),
+            Style::default().fg(color),
+        )));
+    }
+    frame.render_widget(Paragraph::new(scale_lines), r_chunks[1]);
+}
+
+fn fuel_zone_color(pct: f64) -> Color {
+    if pct < 15.0 {
+        Color::Red
+    } else if pct < 25.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    }
+}
+
+fn fuel_level_label(pct: f64) -> &'static str {
+    if pct < 5.0 {
+        "CRITICAL"
+    } else if pct < 25.0 {
+        "Low"
+    } else if pct < 50.0 {
+        "Quarter+"
+    } else if pct < 75.0 {
+        "Half+"
+    } else if pct < 90.0 {
+        "Good"
+    } else {
+        "Full"
+    }
 }
 
 fn render_single_fuel_trims(
