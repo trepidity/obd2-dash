@@ -175,12 +175,7 @@ impl StorageManager {
     pub fn storage_stats(&self) -> StorageStats {
         let total_bytes = self.index.total_size_bytes();
         let session_count = self.index.sessions.len();
-        let raw_count = self
-            .index
-            .sessions
-            .iter()
-            .filter(|s| !s.compressed)
-            .count();
+        let raw_count = self.index.sessions.iter().filter(|s| !s.compressed).count();
         let compressed_count = session_count - raw_count;
 
         StorageStats {

@@ -40,12 +40,8 @@ pub fn spawn_scan(
         if let Ok(ports) = serialport::available_ports() {
             for port in ports {
                 let detail = match &port.port_type {
-                    serialport::SerialPortType::UsbPort(info) => {
-                        info.product.clone()
-                    }
-                    serialport::SerialPortType::BluetoothPort => {
-                        Some("Bluetooth".into())
-                    }
+                    serialport::SerialPortType::UsbPort(info) => info.product.clone(),
+                    serialport::SerialPortType::BluetoothPort => Some("Bluetooth".into()),
                     _ => None,
                 };
                 let display_name = if let Some(ref d) = detail {

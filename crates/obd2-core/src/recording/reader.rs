@@ -4,7 +4,7 @@ use std::path::Path;
 
 use flate2::read::GzDecoder;
 
-use super::format::{RecordingFrame, SessionHeader, read_file_header};
+use super::format::{read_file_header, RecordingFrame, SessionHeader};
 
 /// Read all frames from a recording file (supports both raw and gzip-compressed).
 pub fn read_recording(path: &Path) -> std::io::Result<(SessionHeader, Vec<RecordingFrame>)> {
@@ -19,15 +19,14 @@ pub fn read_recording(path: &Path) -> std::io::Result<(SessionHeader, Vec<Record
     }
 }
 
-fn read_from_reader<R: Read>(mut reader: R) -> std::io::Result<(SessionHeader, Vec<RecordingFrame>)> {
-    let header = read_file_header(&mut reader)?;
+fn read_from_reader<R: Read>(
+    mut reader: R,
+) -> std::io::Result<(SessionHeader, Vec<RecordingFrame>)> {
+    let (header, version) = read_file_header(&mut reader)?;
     let mut frames = Vec::new();
 
-    loop {
-        match RecordingFrame::read_from(&mut reader)? {
-            Some(frame) => frames.push(frame),
-            None => break,
-        }
+    while let Some(frame) = RecordingFrame::read_from(&mut reader, version)? {
+        frames.push(frame);
     }
 
     Ok((header, frames))
@@ -39,9 +38,11 @@ pub fn read_header(path: &Path) -> std::io::Result<SessionHeader> {
 
     if path.to_str().unwrap_or("").ends_with(".obd2rec.gz") {
         let mut reader = GzDecoder::new(BufReader::new(file));
-        read_file_header(&mut reader)
+        let (header, _version) = read_file_header(&mut reader)?;
+        Ok(header)
     } else {
         let mut reader = BufReader::new(file);
-        read_file_header(&mut reader)
+        let (header, _version) = read_file_header(&mut reader)?;
+        Ok(header)
     }
 }

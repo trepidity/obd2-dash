@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 
-use super::format::{RecordingFrame, SessionHeader, write_file_header};
+use super::format::{write_file_header, RecordingFrame, SessionHeader};
 
 /// Append-only writer for recording OBD2 data to a binary file.
 pub struct RecordingWriter {
@@ -46,9 +46,15 @@ impl RecordingWriter {
         })
     }
 
-    /// Write a PID frame.
-    pub fn write_pid(&mut self, offset_ms: u32, pid_code: u8, value: f64) -> std::io::Result<()> {
-        let frame = RecordingFrame::pid(offset_ms, pid_code, value);
+    /// Write a PID frame with optional raw hex bytes.
+    pub fn write_pid(
+        &mut self,
+        offset_ms: u32,
+        pid_code: u8,
+        value: f64,
+        raw_bytes: &[u8],
+    ) -> std::io::Result<()> {
+        let frame = RecordingFrame::pid_with_raw(offset_ms, pid_code, value, raw_bytes);
         frame.write_to(&mut self.writer)?;
         self.frame_count += 1;
         Ok(())

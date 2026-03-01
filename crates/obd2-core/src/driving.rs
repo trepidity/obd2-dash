@@ -26,6 +26,12 @@ pub struct DrivingBehavior {
     accel_state: EventState,
 }
 
+impl Default for DrivingBehavior {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DrivingBehavior {
     pub fn new() -> Self {
         Self {
@@ -114,8 +120,7 @@ impl DrivingBehavior {
         }
 
         let mean = window.iter().sum::<f64>() / window.len() as f64;
-        let variance =
-            window.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / window.len() as f64;
+        let variance = window.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / window.len() as f64;
         let std_dev = variance.sqrt();
 
         self.smoothness_score = (100.0 - std_dev * 80.0).clamp(0.0, 100.0);

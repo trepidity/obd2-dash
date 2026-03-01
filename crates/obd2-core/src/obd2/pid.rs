@@ -3,50 +3,50 @@ use super::types::{Obd2Error, PidReading};
 /// OBD-II Mode 01 PIDs we support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Pid {
-    EngineLoad,           // 0x04
-    CoolantTemp,          // 0x05
-    ShortFuelTrimBank1,   // 0x06
-    LongFuelTrimBank1,    // 0x07
-    ShortFuelTrimBank2,   // 0x08
-    LongFuelTrimBank2,    // 0x09
-    FuelPressure,         // 0x0A
-    IntakeMap,            // 0x0B
-    EngineRpm,            // 0x0C
-    VehicleSpeed,         // 0x0D
-    IntakeAirTemp,        // 0x0F
-    Maf,                  // 0x10
-    ThrottlePosition,     // 0x11
-    FuelTankLevel,        // 0x2F
-    BarometricPressure,   // 0x33
-    CatalystTempB1S1,     // 0x3C
-    CatalystTempB2S1,     // 0x3D
-    CatalystTempB1S2,     // 0x3E
-    CatalystTempB2S2,     // 0x3F
-    ControlModuleVoltage, // 0x42
-    AmbientAirTemp,       // 0x46
-    TimingAdvance,        // 0x0E
-    RunTimeSinceStart,    // 0x1F
-    DistanceWithMil,      // 0x21
-    FuelRailGaugePressure, // 0x23
-    CommandedEgr,         // 0x2C
-    CommandedEvapPurge,   // 0x2E
-    DistanceSinceDtcClear, // 0x31
-    AbsoluteLoad,         // 0x43
-    CommandedEquivRatio,  // 0x44
-    RelativeThrottlePos,  // 0x45
-    AbsThrottlePosB,      // 0x47
-    AccelPedalPosD,       // 0x49
-    AccelPedalPosE,       // 0x4A
+    EngineLoad,                // 0x04
+    CoolantTemp,               // 0x05
+    ShortFuelTrimBank1,        // 0x06
+    LongFuelTrimBank1,         // 0x07
+    ShortFuelTrimBank2,        // 0x08
+    LongFuelTrimBank2,         // 0x09
+    FuelPressure,              // 0x0A
+    IntakeMap,                 // 0x0B
+    EngineRpm,                 // 0x0C
+    VehicleSpeed,              // 0x0D
+    IntakeAirTemp,             // 0x0F
+    Maf,                       // 0x10
+    ThrottlePosition,          // 0x11
+    FuelTankLevel,             // 0x2F
+    BarometricPressure,        // 0x33
+    CatalystTempB1S1,          // 0x3C
+    CatalystTempB2S1,          // 0x3D
+    CatalystTempB1S2,          // 0x3E
+    CatalystTempB2S2,          // 0x3F
+    ControlModuleVoltage,      // 0x42
+    AmbientAirTemp,            // 0x46
+    TimingAdvance,             // 0x0E
+    RunTimeSinceStart,         // 0x1F
+    DistanceWithMil,           // 0x21
+    FuelRailGaugePressure,     // 0x23
+    CommandedEgr,              // 0x2C
+    CommandedEvapPurge,        // 0x2E
+    DistanceSinceDtcClear,     // 0x31
+    AbsoluteLoad,              // 0x43
+    CommandedEquivRatio,       // 0x44
+    RelativeThrottlePos,       // 0x45
+    AbsThrottlePosB,           // 0x47
+    AccelPedalPosD,            // 0x49
+    AccelPedalPosE,            // 0x4A
     CommandedThrottleActuator, // 0x4C
-    FuelRailAbsPressure,  // 0x59
-    EngineOilTemp,        // 0x5C
-    EngineFuelRate,       // 0x5E
-    DemandedTorque,       // 0x61
-    ActualTorque,         // 0x62
-    ReferenceTorque,      // 0x63
+    FuelRailAbsPressure,       // 0x59
+    EngineOilTemp,             // 0x5C
+    EngineFuelRate,            // 0x5E
+    DemandedTorque,            // 0x61
+    ActualTorque,              // 0x62
+    ReferenceTorque,           // 0x63
     // Extended / manufacturer-specific (not standard Mode 01)
-    TransmissionTemp,     // 0xFE (custom)
-    OilPressure,          // 0xFD (custom)
+    TransmissionTemp, // 0xFE (custom)
+    OilPressure,      // 0xFD (custom)
 }
 
 impl Pid {
@@ -228,8 +228,7 @@ impl Pid {
             Pid::RunTimeSinceStart => "s",
             Pid::DistanceWithMil => "km",
             Pid::FuelRailGaugePressure => "kPa",
-            Pid::CommandedEgr
-            | Pid::CommandedEvapPurge => "%",
+            Pid::CommandedEgr | Pid::CommandedEvapPurge => "%",
             Pid::FuelTankLevel => "%",
             Pid::DistanceSinceDtcClear => "km",
             Pid::BarometricPressure => "kPa",
@@ -260,10 +259,15 @@ impl Pid {
     /// `data` should contain only the data bytes (after service ID and PID byte).
     pub fn parse_value(&self, data: &[u8]) -> Result<PidReading, Obd2Error> {
         match self {
-            Pid::EngineLoad | Pid::ThrottlePosition | Pid::FuelTankLevel
-            | Pid::CommandedEgr | Pid::CommandedEvapPurge
-            | Pid::RelativeThrottlePos | Pid::AbsThrottlePosB
-            | Pid::AccelPedalPosD | Pid::AccelPedalPosE
+            Pid::EngineLoad
+            | Pid::ThrottlePosition
+            | Pid::FuelTankLevel
+            | Pid::CommandedEgr
+            | Pid::CommandedEvapPurge
+            | Pid::RelativeThrottlePos
+            | Pid::AbsThrottlePosB
+            | Pid::AccelPedalPosD
+            | Pid::AccelPedalPosE
             | Pid::CommandedThrottleActuator => {
                 // A * 100 / 255
                 if data.is_empty() {
@@ -467,9 +471,7 @@ impl Pid {
             Pid::OilPressure => {
                 // (256A + B) / 4  (kPa)
                 if data.len() < 2 {
-                    return Err(Obd2Error::ParseError(
-                        "Oil Pressure: need 2 bytes".into(),
-                    ));
+                    return Err(Obd2Error::ParseError("Oil Pressure: need 2 bytes".into()));
                 }
                 let value = (256.0 * data[0] as f64 + data[1] as f64) / 4.0;
                 Ok(PidReading::new(value, self.unit()))
@@ -659,7 +661,9 @@ mod tests {
     #[test]
     fn test_parse_control_module_voltage() {
         // ~12.5V
-        let reading = Pid::ControlModuleVoltage.parse_value(&[0x30, 0xD4]).unwrap();
+        let reading = Pid::ControlModuleVoltage
+            .parse_value(&[0x30, 0xD4])
+            .unwrap();
         // (256*0x30 + 0xD4) / 1000 = (12288 + 212) / 1000 = 12.5
         assert!((reading.value - 12.5).abs() < 0.01);
     }

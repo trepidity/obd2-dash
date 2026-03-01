@@ -83,7 +83,11 @@ impl SessionIndex {
 
     /// Update the file path and compressed flag for a session after compression.
     pub fn mark_compressed(&mut self, session_id: &str, new_path: PathBuf, new_size: u64) {
-        if let Some(entry) = self.sessions.iter_mut().find(|s| s.session_id == session_id) {
+        if let Some(entry) = self
+            .sessions
+            .iter_mut()
+            .find(|s| s.session_id == session_id)
+        {
             entry.file_path = new_path;
             entry.file_size_bytes = new_size;
             entry.compressed = true;

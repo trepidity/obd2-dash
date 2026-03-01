@@ -1,5 +1,5 @@
 use super::config::{DashboardConfig, RowHeight, WidgetRow, WidgetSlot};
-use super::{WidgetCategory, WidgetKind, WidgetSize, widget_registry};
+use super::{widget_registry, WidgetCategory, WidgetKind, WidgetSize};
 
 /// Current phase of the edit mode state machine.
 #[derive(Debug, Clone)]
@@ -14,10 +14,7 @@ pub enum EditPhase {
         selected: usize,
     },
     /// Picking a size for the new widget.
-    SizePicker {
-        kind: WidgetKind,
-        selected: usize,
-    },
+    SizePicker { kind: WidgetKind, selected: usize },
 }
 
 /// Full state for edit mode.

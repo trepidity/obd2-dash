@@ -1,12 +1,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use obd2_db::models::{Alert, AlertLevel, ResolvedThreshold, VehicleInfo};
 use crate::driving::DrivingBehavior;
 use crate::fuel_economy::{FuelEconomyState, SensorSnapshot};
 use crate::obd2::{AdapterInfo, Dtc, Pid, PidReading, VehicleData};
-use crate::recording::RecordingState;
 use crate::recording::storage::StorageManager;
+use crate::recording::RecordingState;
+use obd2_db::models::{Alert, AlertLevel, ResolvedThreshold, VehicleInfo};
 
 /// Domain-only events (no scanner/UI messages).
 #[derive(Debug)]
@@ -95,7 +95,8 @@ impl DomainState {
             let offset_ms = start_instant.elapsed().as_millis() as u32;
             match &msg {
                 DomainMessage::PidUpdate(pid, reading) => {
-                    let _ = writer.write_pid(offset_ms, pid.code(), reading.value);
+                    let raw = reading.raw_bytes.as_deref().unwrap_or(&[]);
+                    let _ = writer.write_pid(offset_ms, pid.code(), reading.value, raw);
                 }
                 DomainMessage::VoltageUpdate(v) => {
                     let _ = writer.write_voltage(offset_ms, *v);
@@ -119,7 +120,12 @@ impl DomainState {
                     }
                     Pid::VehicleSpeed => {
                         self.vehicle.speed_history.push(reading.value as u64);
-                        let throttle = self.vehicle.throttle_position.as_ref().map(|r| r.value).unwrap_or(0.0);
+                        let throttle = self
+                            .vehicle
+                            .throttle_position
+                            .as_ref()
+                            .map(|r| r.value)
+                            .unwrap_or(0.0);
                         self.driving.update(reading.value, throttle);
                         self.vehicle.speed = Some(reading);
                     }
@@ -250,13 +256,11 @@ impl DomainState {
                     }
                 }
                 // Recompute derived boost pressure (MAP - Barometric)
-                self.vehicle.boost_pressure = match (
-                    &self.vehicle.intake_map,
-                    &self.vehicle.barometric_pressure,
-                ) {
-                    (Some(map), Some(baro)) => Some(map.value - baro.value),
-                    _ => None,
-                };
+                self.vehicle.boost_pressure =
+                    match (&self.vehicle.intake_map, &self.vehicle.barometric_pressure) {
+                        (Some(map), Some(baro)) => Some(map.value - baro.value),
+                        _ => None,
+                    };
                 self.check_threshold(pid, value);
 
                 // Recalculate fuel economy
@@ -278,7 +282,11 @@ impl DomainState {
                 self.connection = state;
             }
             DomainMessage::AdapterDetected(info) => {
-                tracing::info!("Adapter detected: {} ({})", info.chipset, info.firmware_version);
+                tracing::info!(
+                    "Adapter detected: {} ({})",
+                    info.chipset,
+                    info.firmware_version
+                );
                 self.adapter_info = Some(info);
             }
             DomainMessage::Error(e) => {
@@ -354,12 +362,9 @@ impl DomainState {
 
     /// Get display-ready speed value.
     pub fn display_speed(&self) -> Option<(f64, &'static str)> {
-        self.vehicle
-            .speed
-            .as_ref()
-            .map(|r| match self.speed_unit {
-                SpeedUnit::Kmh => (r.value, "km/h"),
-                SpeedUnit::Mph => (r.value * 0.621371, "mph"),
-            })
+        self.vehicle.speed.as_ref().map(|r| match self.speed_unit {
+            SpeedUnit::Kmh => (r.value, "km/h"),
+            SpeedUnit::Mph => (r.value * 0.621371, "mph"),
+        })
     }
 }

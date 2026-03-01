@@ -17,18 +17,16 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 
 use app::{AppState, DashboardLayout, Message, ScanMode};
 use obd2_core::{
-    ConnectionPrefs, ConnectionState, DeviceKind, MockObd2,
-    MockVehicleProfile, Obd2Connection, Pid, PidReading, RecordingState,
-    ScanEvent, SpeedUnit, StorageConfig, StorageManager, TemperatureUnit,
-    DTC_SCENARIO_COUNT,
+    ConnectionPrefs, ConnectionState, DeviceKind, MockObd2, MockVehicleProfile, Obd2Connection,
+    Pid, PidReading, RecordingState, ScanEvent, SpeedUnit, StorageConfig, StorageManager,
+    TemperatureUnit, DTC_SCENARIO_COUNT,
+};
+use tui::{
+    event::{key_to_message, Event, EventHandler},
+    panel as tui_panel, Tui,
 };
 use widget::config::DashboardConfig;
 use widget::edit_mode::{EditModeState, EditPhase};
-use tui::{
-    event::{key_to_message, Event, EventHandler},
-    panel as tui_panel,
-    Tui,
-};
 
 #[derive(Parser, Debug)]
 #[command(name = "obd2-dash", about = "OBD2 vehicle diagnostics TUI dashboard")]
@@ -193,7 +191,9 @@ async fn main() -> Result<()> {
                     Err(e) => {
                         let msg = format!("Failed to open PTY {}: {}", port_path, e);
                         tracing::error!("{}", msg);
-                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(msg.clone())));
+                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                            msg.clone(),
+                        )));
                         let _ = tx.send(Message::Error(msg));
                         return;
                     }
@@ -213,7 +213,9 @@ async fn main() -> Result<()> {
                     Err(e) => {
                         let msg = format!("Init failed: {}", e);
                         tracing::error!("{}", msg);
-                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(msg.clone())));
+                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                            msg.clone(),
+                        )));
                         let _ = tx.send(Message::Error(msg));
                         return;
                     }
@@ -221,14 +223,22 @@ async fn main() -> Result<()> {
 
                 // Read VIN
                 match conn.read_vin().await {
-                    Ok(vin) => { let _ = tx.send(Message::VinDetected(vin)); }
-                    Err(e) => { tracing::warn!("Could not read VIN: {e}"); }
+                    Ok(vin) => {
+                        let _ = tx.send(Message::VinDetected(vin));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Could not read VIN: {e}");
+                    }
                 }
 
                 // Read initial voltage
                 match conn.read_voltage().await {
-                    Ok(v) => { let _ = tx.send(Message::VoltageUpdate(v)); }
-                    Err(e) => { tracing::warn!("Could not read voltage: {e}"); }
+                    Ok(v) => {
+                        let _ = tx.send(Message::VoltageUpdate(v));
+                    }
+                    Err(e) => {
+                        tracing::warn!("Could not read voltage: {e}");
+                    }
                 }
 
                 // Poll loop
@@ -250,7 +260,7 @@ async fn main() -> Result<()> {
                         }
                     }
                     voltage_counter += 1;
-                    if voltage_counter % 10 == 0 {
+                    if voltage_counter.is_multiple_of(10) {
                         if let Ok(v) = conn.read_voltage().await {
                             let _ = tx.send(Message::VoltageUpdate(v));
                         }
@@ -341,6 +351,7 @@ async fn main() -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_tui(
     poll_ms: u64,
     obd_rx: &mut mpsc::UnboundedReceiver<Message>,
@@ -366,8 +377,16 @@ async fn run_tui(
     state.domain.vehicle_info = vehicle_info;
     state.domain.thresholds_cache = thresholds;
     state.domain.fuel_economy.configure(
-        state.domain.vehicle_info.as_ref().and_then(|v| v.displacement_l),
-        state.domain.vehicle_info.as_ref().and_then(|v| v.fuel_type.as_deref()),
+        state
+            .domain
+            .vehicle_info
+            .as_ref()
+            .and_then(|v| v.displacement_l),
+        state
+            .domain
+            .vehicle_info
+            .as_ref()
+            .and_then(|v| v.fuel_type.as_deref()),
     );
     state.dashboard_config = dashboard_config;
     state.config_path = Some(config_path);
@@ -827,7 +846,9 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
             state.show_debug_log = true;
             state.debug_log_scroll = 0;
         }
-        KeyCode::Char('s') | KeyCode::Char('S') if !state.domain.recording.is_replaying() && state.edit_mode.is_none() => {
+        KeyCode::Char('s') | KeyCode::Char('S')
+            if !state.domain.recording.is_replaying() && state.edit_mode.is_none() =>
+        {
             // Start device scan
             state.scan_mode = ScanMode::Scanning;
             state.scan_devices.clear();
@@ -1018,13 +1039,12 @@ fn handle_session_picker_key(state: &mut AppState, key: crossterm::event::KeyEve
                 if let Some(session) = sessions.get(state.session_picker_selected) {
                     match obd2_core::recording::reader::read_recording(&session.file_path) {
                         Ok((_header, frames)) => {
-                            let controller =
-                                obd2_core::recording::replay::ReplayController::new((*session).clone(), frames);
-                            state.domain.recording = RecordingState::Replaying(controller);
-                            tracing::info!(
-                                "Starting replay of session {}",
-                                session.session_id
+                            let controller = obd2_core::recording::replay::ReplayController::new(
+                                (*session).clone(),
+                                frames,
                             );
+                            state.domain.recording = RecordingState::Replaying(controller);
+                            tracing::info!("Starting replay of session {}", session.session_id);
                         }
                         Err(e) => {
                             tracing::warn!("Failed to read recording: {}", e);
@@ -1171,9 +1191,7 @@ fn handle_toggle_recording(state: &mut AppState) {
 
                 match writer.finish() {
                     Ok(path) => {
-                        let file_size = std::fs::metadata(&path)
-                            .map(|m| m.len())
-                            .unwrap_or(0);
+                        let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
 
                         let entry = obd2_core::recording::index::SessionEntry {
                             session_id: session_id.clone(),
@@ -1211,8 +1229,7 @@ fn handle_toggle_recording(state: &mut AppState) {
                     }
                     Err(e) => {
                         tracing::warn!("Error finishing recording: {}", e);
-                        state.domain.last_error =
-                            Some(format!("Error finishing recording: {}", e));
+                        state.domain.last_error = Some(format!("Error finishing recording: {}", e));
                     }
                 }
             }
@@ -1248,7 +1265,11 @@ fn widget_kind_item_count(kind: widget::WidgetKind, state: &AppState) -> usize {
 }
 
 /// Build a popup for a widget at a flat index.
-fn widget_build_popup(flat_idx: usize, item_idx: usize, state: &AppState) -> Option<app::PopupState> {
+fn widget_build_popup(
+    flat_idx: usize,
+    item_idx: usize,
+    state: &AppState,
+) -> Option<app::PopupState> {
     if let Some(slot) = state.dashboard_config.widget_at(flat_idx) {
         widget_kind_build_popup(slot.kind, item_idx, state)
     } else {
@@ -1344,7 +1365,7 @@ fn spawn_obd2_poll(
 
             // Read voltage and DTCs every 10 cycles (~2.5s)
             voltage_counter += 1;
-            if voltage_counter % 10 == 0 {
+            if voltage_counter.is_multiple_of(10) {
                 if let Ok(v) = conn.read_voltage().await {
                     let _ = tx.send(Message::VoltageUpdate(v));
                 }
@@ -1370,7 +1391,10 @@ fn spawn_connect_and_poll(
         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
 
         let mut conn: Box<dyn Obd2Connection> = match &device {
-            DeviceKind::Serial { port_path, baud: device_baud } => {
+            DeviceKind::Serial {
+                port_path,
+                baud: device_baud,
+            } => {
                 let actual_baud = if *device_baud > 0 { *device_baud } else { baud };
                 tracing::info!("Opening serial port: {} @ {} baud", port_path, actual_baud);
 
@@ -1389,18 +1413,13 @@ fn spawn_connect_and_poll(
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
 
-                    let builder = tokio_serial::new(port_path, actual_baud)
-                        .timeout(Duration::from_secs(10));
+                    let builder =
+                        tokio_serial::new(port_path, actual_baud).timeout(Duration::from_secs(10));
                     let stream = match tokio_serial::SerialStream::open(&builder) {
                         Ok(s) => s,
                         Err(e) => {
                             last_error = format!("Failed to open {}: {}", port_path, e);
-                            tracing::warn!(
-                                "{} (attempt {}/{})",
-                                last_error,
-                                attempt,
-                                MAX_ATTEMPTS
-                            );
+                            tracing::warn!("{} (attempt {}/{})", last_error, attempt, MAX_ATTEMPTS);
                             continue;
                         }
                     };
@@ -1419,12 +1438,7 @@ fn spawn_connect_and_poll(
                         }
                         Err(e) => {
                             last_error = format!("Init failed: {}", e);
-                            tracing::warn!(
-                                "{} (attempt {}/{})",
-                                last_error,
-                                attempt,
-                                MAX_ATTEMPTS
-                            );
+                            tracing::warn!("{} (attempt {}/{})", last_error, attempt, MAX_ATTEMPTS);
                             continue;
                         }
                     }
@@ -1443,7 +1457,11 @@ fn spawn_connect_and_poll(
             }
             DeviceKind::Ble { name } => {
                 tracing::info!("Scanning for BLE adapter: {}", name);
-                let name_filter = if name.is_empty() { None } else { Some(name.as_str()) };
+                let name_filter = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.as_str())
+                };
                 match obd2_core::obd2::ble_transport::scan_for_adapter(
                     name_filter,
                     Duration::from_secs(ble_scan_secs),
@@ -1451,7 +1469,9 @@ fn spawn_connect_and_poll(
                 .await
                 {
                     Ok(peripheral) => {
-                        match obd2_core::obd2::ble_transport::BleTransport::connect(peripheral).await {
+                        match obd2_core::obd2::ble_transport::BleTransport::connect(peripheral)
+                            .await
+                        {
                             Ok(ble) => {
                                 let mut conn: Box<dyn Obd2Connection> =
                                     Box::new(obd2_core::obd2::elm327::Elm327::new(Box::new(ble)));
@@ -1471,9 +1491,9 @@ fn spawn_connect_and_poll(
                             Err(e) => {
                                 let msg = format!("BLE connect failed: {}", e);
                                 tracing::warn!("{}", msg);
-                                let _ = tx.send(Message::ConnectionStatus(
-                                    ConnectionState::Error(msg.clone()),
-                                ));
+                                let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                                    msg.clone(),
+                                )));
                                 let _ = tx.send(Message::Error(msg));
                                 return;
                             }
@@ -1546,7 +1566,7 @@ fn spawn_connect_and_poll(
             }
 
             voltage_counter += 1;
-            if voltage_counter % 10 == 0 {
+            if voltage_counter.is_multiple_of(10) {
                 if let Ok(v) = conn.read_voltage().await {
                     let _ = tx.send(Message::VoltageUpdate(v));
                 }
@@ -1559,6 +1579,7 @@ fn spawn_connect_and_poll(
 }
 
 /// Try to auto-detect a serial port that looks like an ELM327 adapter.
+#[allow(dead_code)]
 fn auto_detect_port() -> Result<String> {
     let ports = serialport::available_ports()
         .map_err(|e| anyhow::anyhow!("failed to enumerate serial ports: {e}"))?;

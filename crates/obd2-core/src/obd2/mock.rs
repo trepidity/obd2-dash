@@ -189,8 +189,7 @@ impl MockObd2 {
         // RPM: oscillates between idle and ~60% of max
         let rpm_swing = (p.max_rpm - p.idle_rpm_warm) * 0.6;
         let target_rpm = p.idle_rpm_warm + rpm_swing * 0.5 * (1.0 + (t * 0.3).sin());
-        self.rpm +=
-            (target_rpm - self.rpm) * p.rpm_responsiveness + rng.gen_range(-20.0..20.0);
+        self.rpm += (target_rpm - self.rpm) * p.rpm_responsiveness + rng.gen_range(-20.0..20.0);
         self.rpm = self.rpm.clamp(0.0, p.max_rpm * 1.05);
 
         // Speed: follows RPM via vehicle-specific ratio
@@ -206,8 +205,7 @@ impl MockObd2 {
         self.coolant_temp = self.coolant_temp.clamp(-40.0, 215.0);
 
         // Engine load: proportional to RPM fraction of max
-        self.engine_load =
-            (self.rpm / p.max_rpm) * 100.0 + rng.gen_range(-2.0..2.0);
+        self.engine_load = (self.rpm / p.max_rpm) * 100.0 + rng.gen_range(-2.0..2.0);
         self.engine_load = self.engine_load.clamp(0.0, 100.0);
 
         // Battery voltage: slight fluctuation
@@ -218,8 +216,8 @@ impl MockObd2 {
         // Throttle: follows RPM demand (8% idle → 93% WOT)
         let rpm_frac = (self.rpm - p.idle_rpm_warm).max(0.0) / (p.max_rpm - p.idle_rpm_warm);
         let target_throttle = 8.0 + rpm_frac * 85.0;
-        self.throttle_position += (target_throttle - self.throttle_position) * 0.15
-            + rng.gen_range(-0.5..0.5);
+        self.throttle_position +=
+            (target_throttle - self.throttle_position) * 0.15 + rng.gen_range(-0.5..0.5);
         self.throttle_position = self.throttle_position.clamp(0.0, 100.0);
 
         // Intake MAP: ~25 kPa idle → ~105 kPa WOT, follows load
@@ -238,21 +236,19 @@ impl MockObd2 {
 
         // Fuel trims: random walk around 0%, mean-reverting
         // Short-term: faster response
-        self.short_fuel_trim_b1 += (0.0 - self.short_fuel_trim_b1) * 0.05
-            + rng.gen_range(-0.8..0.8);
+        self.short_fuel_trim_b1 +=
+            (0.0 - self.short_fuel_trim_b1) * 0.05 + rng.gen_range(-0.8..0.8);
         self.short_fuel_trim_b1 = self.short_fuel_trim_b1.clamp(-25.0, 25.0);
 
-        self.short_fuel_trim_b2 += (0.0 - self.short_fuel_trim_b2) * 0.05
-            + rng.gen_range(-0.8..0.8);
+        self.short_fuel_trim_b2 +=
+            (0.0 - self.short_fuel_trim_b2) * 0.05 + rng.gen_range(-0.8..0.8);
         self.short_fuel_trim_b2 = self.short_fuel_trim_b2.clamp(-25.0, 25.0);
 
         // Long-term: slower response
-        self.long_fuel_trim_b1 += (0.0 - self.long_fuel_trim_b1) * 0.01
-            + rng.gen_range(-0.3..0.3);
+        self.long_fuel_trim_b1 += (0.0 - self.long_fuel_trim_b1) * 0.01 + rng.gen_range(-0.3..0.3);
         self.long_fuel_trim_b1 = self.long_fuel_trim_b1.clamp(-25.0, 25.0);
 
-        self.long_fuel_trim_b2 += (0.0 - self.long_fuel_trim_b2) * 0.01
-            + rng.gen_range(-0.3..0.3);
+        self.long_fuel_trim_b2 += (0.0 - self.long_fuel_trim_b2) * 0.01 + rng.gen_range(-0.3..0.3);
         self.long_fuel_trim_b2 = self.long_fuel_trim_b2.clamp(-25.0, 25.0);
 
         // Intake air temp: ambient + engine bay warming (up to ~15°C above ambient)
@@ -280,14 +276,14 @@ impl MockObd2 {
         let target_cat_b2s2 = target_cat_b1s2 - 10.0;
 
         let cat_rate = 0.02;
-        self.catalyst_temp_b1s1 += (target_cat_b1s1 - self.catalyst_temp_b1s1) * cat_rate
-            + rng.gen_range(-1.0..1.0);
-        self.catalyst_temp_b2s1 += (target_cat_b2s1 - self.catalyst_temp_b2s1) * cat_rate
-            + rng.gen_range(-1.0..1.0);
-        self.catalyst_temp_b1s2 += (target_cat_b1s2 - self.catalyst_temp_b1s2) * cat_rate
-            + rng.gen_range(-1.0..1.0);
-        self.catalyst_temp_b2s2 += (target_cat_b2s2 - self.catalyst_temp_b2s2) * cat_rate
-            + rng.gen_range(-1.0..1.0);
+        self.catalyst_temp_b1s1 +=
+            (target_cat_b1s1 - self.catalyst_temp_b1s1) * cat_rate + rng.gen_range(-1.0..1.0);
+        self.catalyst_temp_b2s1 +=
+            (target_cat_b2s1 - self.catalyst_temp_b2s1) * cat_rate + rng.gen_range(-1.0..1.0);
+        self.catalyst_temp_b1s2 +=
+            (target_cat_b1s2 - self.catalyst_temp_b1s2) * cat_rate + rng.gen_range(-1.0..1.0);
+        self.catalyst_temp_b2s2 +=
+            (target_cat_b2s2 - self.catalyst_temp_b2s2) * cat_rate + rng.gen_range(-1.0..1.0);
         self.catalyst_temp_b1s1 = self.catalyst_temp_b1s1.clamp(-40.0, 6513.5);
         self.catalyst_temp_b2s1 = self.catalyst_temp_b2s1.clamp(-40.0, 6513.5);
         self.catalyst_temp_b1s2 = self.catalyst_temp_b1s2.clamp(-40.0, 6513.5);
@@ -306,8 +302,8 @@ impl MockObd2 {
         // Oil pressure: ~350 kPa warm, drops at low RPM/idle (~200 kPa)
         let rpm_frac_for_pressure = (self.rpm / p.max_rpm).clamp(0.0, 1.0);
         let target_oil_pressure = 200.0 + rpm_frac_for_pressure * 200.0;
-        self.oil_pressure += (target_oil_pressure - self.oil_pressure) * 0.1
-            + rng.gen_range(-3.0..3.0);
+        self.oil_pressure +=
+            (target_oil_pressure - self.oil_pressure) * 0.1 + rng.gen_range(-3.0..3.0);
         self.oil_pressure = self.oil_pressure.clamp(0.0, 1000.0);
 
         // Fuel tank level: starts 75%, slowly decreases
@@ -321,8 +317,8 @@ impl MockObd2 {
         self.control_module_voltage = self.voltage + rng.gen_range(-0.1..0.1);
 
         // Fuel rate: proportional to RPM * load
-        self.engine_fuel_rate = (self.rpm / 1000.0) * (self.engine_load / 100.0) * 8.0
-            + rng.gen_range(-0.2..0.2);
+        self.engine_fuel_rate =
+            (self.rpm / 1000.0) * (self.engine_load / 100.0) * 8.0 + rng.gen_range(-0.2..0.2);
         self.engine_fuel_rate = self.engine_fuel_rate.clamp(0.0, 3276.75);
 
         // --- Additional PIDs ---
@@ -387,7 +383,8 @@ impl MockObd2 {
         self.demanded_torque = self.demanded_torque.clamp(-125.0, 130.0);
 
         // Actual torque: follows demanded with small lag
-        self.actual_torque += (self.demanded_torque - self.actual_torque) * 0.3 + rng.gen_range(-0.5..0.5);
+        self.actual_torque +=
+            (self.demanded_torque - self.actual_torque) * 0.3 + rng.gen_range(-0.5..0.5);
         self.actual_torque = self.actual_torque.clamp(-125.0, 130.0);
 
         // Reference torque: constant for engine type

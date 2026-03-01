@@ -18,12 +18,14 @@ pub enum PanelKind {
     FuelEconomy,
 }
 
+#[allow(dead_code)]
 pub struct PanelDef {
     pub kind: PanelKind,
     pub title: &'static str,
     pub index: usize,
 }
 
+#[allow(dead_code)]
 pub struct GridRow {
     pub panels: Vec<PanelDef>,
     pub default_constraints: Vec<Constraint>,
@@ -31,10 +33,10 @@ pub struct GridRow {
 }
 
 impl GridRow {
+    #[allow(dead_code)]
     pub fn constraints_for_focus(&self, focused_index: Option<usize>) -> Vec<Constraint> {
-        let focused_local = focused_index.and_then(|fi| {
-            self.panels.iter().position(|p| p.index == fi)
-        });
+        let focused_local =
+            focused_index.and_then(|fi| self.panels.iter().position(|p| p.index == fi));
 
         match focused_local {
             Some(pos) => {
@@ -57,18 +59,28 @@ impl GridRow {
     }
 }
 
+#[allow(dead_code)]
 pub struct Grid {
     pub rows: Vec<GridRow>,
 }
 
 impl Grid {
+    #[allow(dead_code)]
     pub fn full_layout() -> Grid {
         Grid {
             rows: vec![
                 GridRow {
                     panels: vec![
-                        PanelDef { kind: PanelKind::GaugesEngine, title: "GAUGES + ENGINE", index: 0 },
-                        PanelDef { kind: PanelKind::Temperatures, title: "TEMPERATURES", index: 1 },
+                        PanelDef {
+                            kind: PanelKind::GaugesEngine,
+                            title: "GAUGES + ENGINE",
+                            index: 0,
+                        },
+                        PanelDef {
+                            kind: PanelKind::Temperatures,
+                            title: "TEMPERATURES",
+                            index: 1,
+                        },
                     ],
                     default_constraints: vec![
                         Constraint::Percentage(60),
@@ -78,9 +90,21 @@ impl Grid {
                 },
                 GridRow {
                     panels: vec![
-                        PanelDef { kind: PanelKind::FuelSystem, title: "FUEL SYSTEM", index: 2 },
-                        PanelDef { kind: PanelKind::SystemVehicle, title: "SYSTEM / VEHICLE", index: 3 },
-                        PanelDef { kind: PanelKind::Dtcs, title: "DTCs", index: 4 },
+                        PanelDef {
+                            kind: PanelKind::FuelSystem,
+                            title: "FUEL SYSTEM",
+                            index: 2,
+                        },
+                        PanelDef {
+                            kind: PanelKind::SystemVehicle,
+                            title: "SYSTEM / VEHICLE",
+                            index: 3,
+                        },
+                        PanelDef {
+                            kind: PanelKind::Dtcs,
+                            title: "DTCs",
+                            index: 4,
+                        },
                     ],
                     default_constraints: vec![
                         Constraint::Percentage(35),
@@ -90,12 +114,12 @@ impl Grid {
                     focused_expand_pct: 50,
                 },
                 GridRow {
-                    panels: vec![
-                        PanelDef { kind: PanelKind::FuelEconomy, title: "FUEL ECONOMY", index: 5 },
-                    ],
-                    default_constraints: vec![
-                        Constraint::Percentage(100),
-                    ],
+                    panels: vec![PanelDef {
+                        kind: PanelKind::FuelEconomy,
+                        title: "FUEL ECONOMY",
+                        index: 5,
+                    }],
+                    default_constraints: vec![Constraint::Percentage(100)],
                     focused_expand_pct: 100,
                 },
             ],
@@ -112,10 +136,27 @@ pub struct PanelItem {
 }
 
 pub enum PanelItemDetail {
-    Pid { pid_code: u8, current_value: Option<f64>, unit: &'static str, name: &'static str },
-    DerivedValue { label: &'static str, value: Option<f64>, unit: &'static str, description: &'static str },
-    Dtc { code: String, description: String, category: String },
-    VehicleField { field_name: &'static str, value: String },
+    Pid {
+        pid_code: u8,
+        current_value: Option<f64>,
+        unit: &'static str,
+        name: &'static str,
+    },
+    DerivedValue {
+        label: &'static str,
+        value: Option<f64>,
+        unit: &'static str,
+        description: &'static str,
+    },
+    Dtc {
+        code: String,
+        description: String,
+        category: String,
+    },
+    VehicleField {
+        field_name: &'static str,
+        value: String,
+    },
 }
 
 fn pid_item(state: &AppState, pid: Pid) -> PanelItem {
@@ -123,46 +164,201 @@ fn pid_item(state: &AppState, pid: Pid) -> PanelItem {
         Pid::EngineRpm => state.domain.vehicle.rpm.as_ref().map(|r| r.value),
         Pid::VehicleSpeed => state.domain.vehicle.speed.as_ref().map(|r| r.value),
         Pid::EngineLoad => state.domain.vehicle.engine_load.as_ref().map(|r| r.value),
-        Pid::ThrottlePosition => state.domain.vehicle.throttle_position.as_ref().map(|r| r.value),
+        Pid::ThrottlePosition => state
+            .domain
+            .vehicle
+            .throttle_position
+            .as_ref()
+            .map(|r| r.value),
         Pid::IntakeMap => state.domain.vehicle.intake_map.as_ref().map(|r| r.value),
         Pid::Maf => state.domain.vehicle.maf.as_ref().map(|r| r.value),
         Pid::FuelPressure => state.domain.vehicle.fuel_pressure.as_ref().map(|r| r.value),
         Pid::OilPressure => state.domain.vehicle.oil_pressure.as_ref().map(|r| r.value),
         Pid::CoolantTemp => state.domain.vehicle.coolant_temp.as_ref().map(|r| r.value),
-        Pid::EngineOilTemp => state.domain.vehicle.engine_oil_temp.as_ref().map(|r| r.value),
-        Pid::TransmissionTemp => state.domain.vehicle.transmission_temp.as_ref().map(|r| r.value),
-        Pid::IntakeAirTemp => state.domain.vehicle.intake_air_temp.as_ref().map(|r| r.value),
-        Pid::AmbientAirTemp => state.domain.vehicle.ambient_air_temp.as_ref().map(|r| r.value),
-        Pid::CatalystTempB1S1 => state.domain.vehicle.catalyst_temp_b1s1.as_ref().map(|r| r.value),
-        Pid::CatalystTempB2S1 => state.domain.vehicle.catalyst_temp_b2s1.as_ref().map(|r| r.value),
-        Pid::CatalystTempB1S2 => state.domain.vehicle.catalyst_temp_b1s2.as_ref().map(|r| r.value),
-        Pid::CatalystTempB2S2 => state.domain.vehicle.catalyst_temp_b2s2.as_ref().map(|r| r.value),
-        Pid::FuelTankLevel => state.domain.vehicle.fuel_tank_level.as_ref().map(|r| r.value),
-        Pid::EngineFuelRate => state.domain.vehicle.engine_fuel_rate.as_ref().map(|r| r.value),
-        Pid::ShortFuelTrimBank1 => state.domain.vehicle.short_fuel_trim_b1.as_ref().map(|r| r.value),
-        Pid::LongFuelTrimBank1 => state.domain.vehicle.long_fuel_trim_b1.as_ref().map(|r| r.value),
-        Pid::ShortFuelTrimBank2 => state.domain.vehicle.short_fuel_trim_b2.as_ref().map(|r| r.value),
-        Pid::LongFuelTrimBank2 => state.domain.vehicle.long_fuel_trim_b2.as_ref().map(|r| r.value),
-        Pid::BarometricPressure => state.domain.vehicle.barometric_pressure.as_ref().map(|r| r.value),
-        Pid::ControlModuleVoltage => state.domain.vehicle.control_module_voltage.as_ref().map(|r| r.value),
-        Pid::TimingAdvance => state.domain.vehicle.timing_advance.as_ref().map(|r| r.value),
+        Pid::EngineOilTemp => state
+            .domain
+            .vehicle
+            .engine_oil_temp
+            .as_ref()
+            .map(|r| r.value),
+        Pid::TransmissionTemp => state
+            .domain
+            .vehicle
+            .transmission_temp
+            .as_ref()
+            .map(|r| r.value),
+        Pid::IntakeAirTemp => state
+            .domain
+            .vehicle
+            .intake_air_temp
+            .as_ref()
+            .map(|r| r.value),
+        Pid::AmbientAirTemp => state
+            .domain
+            .vehicle
+            .ambient_air_temp
+            .as_ref()
+            .map(|r| r.value),
+        Pid::CatalystTempB1S1 => state
+            .domain
+            .vehicle
+            .catalyst_temp_b1s1
+            .as_ref()
+            .map(|r| r.value),
+        Pid::CatalystTempB2S1 => state
+            .domain
+            .vehicle
+            .catalyst_temp_b2s1
+            .as_ref()
+            .map(|r| r.value),
+        Pid::CatalystTempB1S2 => state
+            .domain
+            .vehicle
+            .catalyst_temp_b1s2
+            .as_ref()
+            .map(|r| r.value),
+        Pid::CatalystTempB2S2 => state
+            .domain
+            .vehicle
+            .catalyst_temp_b2s2
+            .as_ref()
+            .map(|r| r.value),
+        Pid::FuelTankLevel => state
+            .domain
+            .vehicle
+            .fuel_tank_level
+            .as_ref()
+            .map(|r| r.value),
+        Pid::EngineFuelRate => state
+            .domain
+            .vehicle
+            .engine_fuel_rate
+            .as_ref()
+            .map(|r| r.value),
+        Pid::ShortFuelTrimBank1 => state
+            .domain
+            .vehicle
+            .short_fuel_trim_b1
+            .as_ref()
+            .map(|r| r.value),
+        Pid::LongFuelTrimBank1 => state
+            .domain
+            .vehicle
+            .long_fuel_trim_b1
+            .as_ref()
+            .map(|r| r.value),
+        Pid::ShortFuelTrimBank2 => state
+            .domain
+            .vehicle
+            .short_fuel_trim_b2
+            .as_ref()
+            .map(|r| r.value),
+        Pid::LongFuelTrimBank2 => state
+            .domain
+            .vehicle
+            .long_fuel_trim_b2
+            .as_ref()
+            .map(|r| r.value),
+        Pid::BarometricPressure => state
+            .domain
+            .vehicle
+            .barometric_pressure
+            .as_ref()
+            .map(|r| r.value),
+        Pid::ControlModuleVoltage => state
+            .domain
+            .vehicle
+            .control_module_voltage
+            .as_ref()
+            .map(|r| r.value),
+        Pid::TimingAdvance => state
+            .domain
+            .vehicle
+            .timing_advance
+            .as_ref()
+            .map(|r| r.value),
         Pid::RunTimeSinceStart => state.domain.vehicle.run_time.as_ref().map(|r| r.value),
-        Pid::DistanceWithMil => state.domain.vehicle.distance_with_mil.as_ref().map(|r| r.value),
-        Pid::FuelRailGaugePressure => state.domain.vehicle.fuel_rail_gauge_pressure.as_ref().map(|r| r.value),
+        Pid::DistanceWithMil => state
+            .domain
+            .vehicle
+            .distance_with_mil
+            .as_ref()
+            .map(|r| r.value),
+        Pid::FuelRailGaugePressure => state
+            .domain
+            .vehicle
+            .fuel_rail_gauge_pressure
+            .as_ref()
+            .map(|r| r.value),
         Pid::CommandedEgr => state.domain.vehicle.commanded_egr.as_ref().map(|r| r.value),
-        Pid::CommandedEvapPurge => state.domain.vehicle.commanded_evap_purge.as_ref().map(|r| r.value),
-        Pid::DistanceSinceDtcClear => state.domain.vehicle.distance_since_dtc_clear.as_ref().map(|r| r.value),
+        Pid::CommandedEvapPurge => state
+            .domain
+            .vehicle
+            .commanded_evap_purge
+            .as_ref()
+            .map(|r| r.value),
+        Pid::DistanceSinceDtcClear => state
+            .domain
+            .vehicle
+            .distance_since_dtc_clear
+            .as_ref()
+            .map(|r| r.value),
         Pid::AbsoluteLoad => state.domain.vehicle.absolute_load.as_ref().map(|r| r.value),
-        Pid::CommandedEquivRatio => state.domain.vehicle.commanded_equiv_ratio.as_ref().map(|r| r.value),
-        Pid::RelativeThrottlePos => state.domain.vehicle.relative_throttle_pos.as_ref().map(|r| r.value),
-        Pid::AbsThrottlePosB => state.domain.vehicle.abs_throttle_pos_b.as_ref().map(|r| r.value),
-        Pid::AccelPedalPosD => state.domain.vehicle.accel_pedal_pos_d.as_ref().map(|r| r.value),
-        Pid::AccelPedalPosE => state.domain.vehicle.accel_pedal_pos_e.as_ref().map(|r| r.value),
-        Pid::CommandedThrottleActuator => state.domain.vehicle.commanded_throttle_actuator.as_ref().map(|r| r.value),
-        Pid::FuelRailAbsPressure => state.domain.vehicle.fuel_rail_abs_pressure.as_ref().map(|r| r.value),
-        Pid::DemandedTorque => state.domain.vehicle.demanded_torque.as_ref().map(|r| r.value),
+        Pid::CommandedEquivRatio => state
+            .domain
+            .vehicle
+            .commanded_equiv_ratio
+            .as_ref()
+            .map(|r| r.value),
+        Pid::RelativeThrottlePos => state
+            .domain
+            .vehicle
+            .relative_throttle_pos
+            .as_ref()
+            .map(|r| r.value),
+        Pid::AbsThrottlePosB => state
+            .domain
+            .vehicle
+            .abs_throttle_pos_b
+            .as_ref()
+            .map(|r| r.value),
+        Pid::AccelPedalPosD => state
+            .domain
+            .vehicle
+            .accel_pedal_pos_d
+            .as_ref()
+            .map(|r| r.value),
+        Pid::AccelPedalPosE => state
+            .domain
+            .vehicle
+            .accel_pedal_pos_e
+            .as_ref()
+            .map(|r| r.value),
+        Pid::CommandedThrottleActuator => state
+            .domain
+            .vehicle
+            .commanded_throttle_actuator
+            .as_ref()
+            .map(|r| r.value),
+        Pid::FuelRailAbsPressure => state
+            .domain
+            .vehicle
+            .fuel_rail_abs_pressure
+            .as_ref()
+            .map(|r| r.value),
+        Pid::DemandedTorque => state
+            .domain
+            .vehicle
+            .demanded_torque
+            .as_ref()
+            .map(|r| r.value),
         Pid::ActualTorque => state.domain.vehicle.actual_torque.as_ref().map(|r| r.value),
-        Pid::ReferenceTorque => state.domain.vehicle.reference_torque.as_ref().map(|r| r.value),
+        Pid::ReferenceTorque => state
+            .domain
+            .vehicle
+            .reference_torque
+            .as_ref()
+            .map(|r| r.value),
     };
 
     PanelItem {
@@ -242,9 +438,7 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             ]
         }
         PanelKind::FuelSystem => {
-            let mut items = vec![
-                pid_item(state, Pid::FuelTankLevel),
-            ];
+            let mut items = vec![pid_item(state, Pid::FuelTankLevel)];
             if state.domain.vehicle.engine_fuel_rate.is_some() {
                 items.push(pid_item(state, Pid::EngineFuelRate));
             }
@@ -273,7 +467,10 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                     label: "Batt Voltage".to_string(),
                     detail: PanelItemDetail::VehicleField {
                         field_name: "Battery Voltage",
-                        value: state.domain.vehicle.battery_voltage
+                        value: state
+                            .domain
+                            .vehicle
+                            .battery_voltage
                             .map(|v| format!("{:.1}V", v))
                             .unwrap_or_default(),
                     },
@@ -345,8 +542,11 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             }
             items
         }
-        PanelKind::Dtcs => {
-            state.domain.stored_dtcs.iter().map(|dtc| {
+        PanelKind::Dtcs => state
+            .domain
+            .stored_dtcs
+            .iter()
+            .map(|dtc| {
                 let cat = format!("{:?}", dtc.category);
                 PanelItem {
                     label: dtc.code.clone(),
@@ -356,14 +556,16 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                         category: cat,
                     },
                 }
-            }).collect()
-        }
+            })
+            .collect(),
         PanelKind::FuelEconomy => {
             let fe = &state.domain.fuel_economy;
             let mut items = Vec::new();
 
             // Gold standard items (4)
-            let gold_source = fe.gold.as_ref()
+            let gold_source = fe
+                .gold
+                .as_ref()
                 .map(|g| g.source.label().to_string())
                 .unwrap_or_else(|| "Waiting...".to_string());
             items.push(PanelItem {
@@ -478,13 +680,21 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
     let item = items.get(item_index)?;
 
     let (title, body) = match &item.detail {
-        PanelItemDetail::Pid { pid_code, current_value, unit, name } => {
+        PanelItemDetail::Pid {
+            pid_code,
+            current_value,
+            unit,
+            name,
+        } => {
             let mut lines = vec![
                 format!("PID: 0x{:02X}", pid_code),
                 format!("Name: {}", name),
-                format!("Value: {}", current_value
-                    .map(|v| format!("{:.2} {}", v, unit))
-                    .unwrap_or_else(|| "-- (no data)".to_string())),
+                format!(
+                    "Value: {}",
+                    current_value
+                        .map(|v| format!("{:.2} {}", v, unit))
+                        .unwrap_or_else(|| "-- (no data)".to_string())
+                ),
                 String::new(),
             ];
 
@@ -502,24 +712,39 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
                 if let Some(hc) = threshold.high_critical {
                     lines.push(format!("  High Critical: {:.1} {}", hc, threshold.unit));
                 }
-                lines.push(format!("  Range: {:.1} - {:.1} {}", threshold.min_value, threshold.max_value, threshold.unit));
+                lines.push(format!(
+                    "  Range: {:.1} - {:.1} {}",
+                    threshold.min_value, threshold.max_value, threshold.unit
+                ));
             } else {
                 lines.push("No thresholds configured".to_string());
             }
 
             (name.to_string(), lines)
         }
-        PanelItemDetail::DerivedValue { label, value, unit, description } => {
+        PanelItemDetail::DerivedValue {
+            label,
+            value,
+            unit,
+            description,
+        } => {
             let lines = vec![
-                format!("Value: {}", value
-                    .map(|v| format!("{:.2} {}", v, unit))
-                    .unwrap_or_else(|| "-- (no data)".to_string())),
+                format!(
+                    "Value: {}",
+                    value
+                        .map(|v| format!("{:.2} {}", v, unit))
+                        .unwrap_or_else(|| "-- (no data)".to_string())
+                ),
                 String::new(),
                 format!("Source: {}", description),
             ];
             (label.to_string(), lines)
         }
-        PanelItemDetail::Dtc { code, description, category } => {
+        PanelItemDetail::Dtc {
+            code,
+            description,
+            category,
+        } => {
             let mut lines = vec![
                 format!("Code: {}", code),
                 format!("Category: {}", category),
@@ -529,8 +754,13 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
 
             // Build diagnostic context and run local analysis
             let context = obd2_core::diagnostics::correlation::build_diagnostic_context(
-                &state.domain.vehicle, &state.domain.thresholds_cache, &state.domain.stored_dtcs,
-                state.domain.vehicle_info.as_ref(), code, description, category,
+                &state.domain.vehicle,
+                &state.domain.thresholds_cache,
+                &state.domain.stored_dtcs,
+                state.domain.vehicle_info.as_ref(),
+                code,
+                description,
+                category,
             );
             let provider = obd2_core::diagnostics::provider::LocalDiagnosticProvider;
             if let Some(result) = provider.diagnose_sync(&context) {
@@ -540,9 +770,7 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
             (code.clone(), lines)
         }
         PanelItemDetail::VehicleField { field_name, value } => {
-            let lines = vec![
-                format!("{}: {}", field_name, value),
-            ];
+            let lines = vec![format!("{}: {}", field_name, value)];
             (field_name.to_string(), lines)
         }
     };
@@ -552,6 +780,7 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
 
 // ─── Block / rendering ───────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn panel_block(panel: &PanelDef, focused: bool, state: &AppState) -> Block<'static> {
     let (border_type, border_color) = if focused {
         (BorderType::Double, Color::Cyan)
@@ -577,6 +806,7 @@ pub fn panel_block(panel: &PanelDef, focused: bool, state: &AppState) -> Block<'
         .border_style(Style::default().fg(border_color))
 }
 
+#[allow(dead_code)]
 fn dtc_border_color(state: &AppState) -> Color {
     if state.domain.stored_dtcs.is_empty() {
         Color::DarkGray
@@ -587,7 +817,14 @@ fn dtc_border_color(state: &AppState) -> Color {
     }
 }
 
-pub fn render_panel(frame: &mut Frame, area: Rect, panel: &PanelDef, focused: bool, state: &AppState) {
+#[allow(dead_code)]
+pub fn render_panel(
+    frame: &mut Frame,
+    area: Rect,
+    panel: &PanelDef,
+    focused: bool,
+    state: &AppState,
+) {
     let block = panel_block(panel, focused, state);
     let selected = if focused {
         state.panel_selections.get(&panel.index).copied()
@@ -595,15 +832,26 @@ pub fn render_panel(frame: &mut Frame, area: Rect, panel: &PanelDef, focused: bo
         None
     };
     match panel.kind {
-        PanelKind::GaugesEngine => super::ui::render_full_gauges_and_engine(frame, area, state, block, selected),
-        PanelKind::Temperatures => super::ui::render_full_temperatures(frame, area, state, block, selected),
-        PanelKind::FuelSystem => super::ui::render_full_fuel_system(frame, area, state, block, selected),
-        PanelKind::SystemVehicle => super::ui::render_full_system_info(frame, area, state, block, selected),
+        PanelKind::GaugesEngine => {
+            super::ui::render_full_gauges_and_engine(frame, area, state, block, selected)
+        }
+        PanelKind::Temperatures => {
+            super::ui::render_full_temperatures(frame, area, state, block, selected)
+        }
+        PanelKind::FuelSystem => {
+            super::ui::render_full_fuel_system(frame, area, state, block, selected)
+        }
+        PanelKind::SystemVehicle => {
+            super::ui::render_full_system_info(frame, area, state, block, selected)
+        }
         PanelKind::Dtcs => super::ui::render_full_dtcs(frame, area, state, block, selected),
-        PanelKind::FuelEconomy => super::ui::render_full_fuel_economy(frame, area, state, block, selected),
+        PanelKind::FuelEconomy => {
+            super::ui::render_full_fuel_economy(frame, area, state, block, selected)
+        }
     }
 }
 
+#[allow(dead_code)]
 pub fn render_grid(frame: &mut Frame, rows_areas: &[Rect], state: &AppState) {
     let grid = Grid::full_layout();
 

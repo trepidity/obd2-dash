@@ -47,8 +47,13 @@ impl Tui {
         Ok(())
     }
 
-    pub fn draw(&mut self, state: &crate::app::AppState, log_buffer: &crate::debug_log::LogBuffer) -> anyhow::Result<()> {
-        self.terminal.draw(|frame| ui::render(frame, state, log_buffer))?;
+    pub fn draw(
+        &mut self,
+        state: &crate::app::AppState,
+        log_buffer: &crate::debug_log::LogBuffer,
+    ) -> anyhow::Result<()> {
+        self.terminal
+            .draw(|frame| ui::render(frame, state, log_buffer))?;
         Ok(())
     }
 }

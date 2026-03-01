@@ -7,14 +7,14 @@ use ratatui::{
 };
 
 use crate::app::{AppState, DashboardLayout, PopupState, ScanMode};
-use obd2_core::ConnectionState;
 use crate::debug_log::LogBuffer;
-use obd2_core::obd2::dtc::DtcCategory;
-use obd2_core::PidReading;
-use obd2_core::RecordingState;
 use crate::widget::config::RowHeight;
 use crate::widget::edit_mode::EditPhase;
 use crate::widget::renderers;
+use obd2_core::obd2::dtc::DtcCategory;
+use obd2_core::ConnectionState;
+use obd2_core::PidReading;
+use obd2_core::RecordingState;
 
 pub fn render(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer) {
     // Full-screen debug log takeover
@@ -58,7 +58,7 @@ fn render_debug_log(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer)
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // Header
-            Constraint::Min(1),   // Log body
+            Constraint::Min(1),    // Log body
             Constraint::Length(1), // Footer
         ])
         .split(area);
@@ -94,7 +94,9 @@ fn render_debug_log(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer)
     let total = lines_data.len();
 
     // scroll=0 means bottom (newest), higher values scroll up (older)
-    let scroll = state.debug_log_scroll.min(total.saturating_sub(body_height));
+    let scroll = state
+        .debug_log_scroll
+        .min(total.saturating_sub(body_height));
     let end = total.saturating_sub(scroll);
     let start = end.saturating_sub(body_height);
 
@@ -123,12 +125,10 @@ fn render_debug_log(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer)
     frame.render_widget(log_para, chunks[1]);
 
     // Footer
-    let footer = Paragraph::new(Line::from(vec![
-        Span::styled(
-            " Up/Down/PgUp/PgDn:scroll  Home:top  End:bottom  l/Esc:close  q:quit ",
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]));
+    let footer = Paragraph::new(Line::from(vec![Span::styled(
+        " Up/Down/PgUp/PgDn:scroll  Home:top  End:bottom  l/Esc:close  q:quit ",
+        Style::default().fg(Color::DarkGray),
+    )]));
     frame.render_widget(footer, chunks[2]);
 }
 
@@ -156,13 +156,15 @@ fn render_compact_header(frame: &mut Frame, area: Rect, state: &AppState) {
     let (status_text, status_color) = connection_style(&state.domain.connection);
 
     let voltage_text = state
-        .domain.vehicle
+        .domain
+        .vehicle
         .battery_voltage
         .map(|v| format!("{v:.1}V"))
         .unwrap_or_else(|| "--.-V".into());
 
     let vehicle_name = state
-        .domain.vehicle_info
+        .domain
+        .vehicle_info
         .as_ref()
         .map(|v| v.display_name())
         .unwrap_or_else(|| "OBD2 Dashboard".to_string());
@@ -188,12 +190,11 @@ fn render_compact_header(frame: &mut Frame, area: Rect, state: &AppState) {
         ));
     }
 
-    let header = Paragraph::new(Line::from(spans))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
+    let header = Paragraph::new(Line::from(spans)).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
 
     frame.render_widget(header, area);
 }
@@ -253,7 +254,11 @@ fn render_full(frame: &mut Frame, state: &AppState) {
         // Determine focused column within this row
         let focused_col = state.focused_widget.and_then(|fw| {
             let (r, c) = config.flat_to_row_col(fw)?;
-            if r == row_idx { Some(c) } else { None }
+            if r == row_idx {
+                Some(c)
+            } else {
+                None
+            }
         });
 
         let percentages = config.row_widget_percentages(row_idx, focused_col);
@@ -289,19 +294,22 @@ fn render_full(frame: &mut Frame, state: &AppState) {
 
 fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
     let voltage_text = state
-        .domain.vehicle
+        .domain
+        .vehicle
         .battery_voltage
         .map(|v| format!("{v:.1}V"))
         .unwrap_or_else(|| "--.-V".into());
 
     let vehicle_name = state
-        .domain.vehicle_info
+        .domain
+        .vehicle_info
         .as_ref()
         .map(|v| v.display_name())
         .unwrap_or_else(|| "OBD2 Dashboard".to_string());
 
     let vin_short = state
-        .domain.vehicle_info
+        .domain
+        .vehicle_info
         .as_ref()
         .map(|v| {
             if v.vin.len() > 10 {
@@ -313,22 +321,24 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
         .unwrap_or_default();
 
     let engine_code = state
-        .domain.vehicle_info
+        .domain
+        .vehicle_info
         .as_ref()
         .and_then(|v| v.engine_family_code.as_deref())
         .unwrap_or("");
 
-    let mut spans = vec![
-        Span::styled(
-            format!(" {} ", vehicle_name),
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let mut spans = vec![Span::styled(
+        format!(" {} ", vehicle_name),
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )];
 
     if !vin_short.is_empty() {
-        spans.push(Span::styled(" | VIN: ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            " | VIN: ",
+            Style::default().fg(Color::DarkGray),
+        ));
         spans.push(Span::styled(vin_short, Style::default().fg(Color::White)));
     }
 
@@ -354,9 +364,7 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
             let elapsed = start_instant.elapsed().as_secs();
             spans.push(Span::styled(
                 format!("REC {:02}:{:02}", elapsed / 60, elapsed % 60),
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ));
         }
         RecordingState::Idle => {
@@ -366,7 +374,10 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
-    spans.push(Span::styled(voltage_text, Style::default().fg(Color::Yellow)));
+    spans.push(Span::styled(
+        voltage_text,
+        Style::default().fg(Color::Yellow),
+    ));
 
     // Show adapter chipset if detected
     if let Some(ref info) = state.domain.adapter_info {
@@ -406,15 +417,22 @@ pub(crate) fn render_full_gauges_and_engine(
             Constraint::Length(2), // RPM sparkline
             Constraint::Length(3), // Speed gauge
             Constraint::Length(2), // Speed sparkline
-            Constraint::Min(1),   // Engine data panel
+            Constraint::Min(1),    // Engine data panel
         ])
         .split(inner);
 
     // RPM gauge — item 0
-    let rpm_val = state.domain.vehicle.rpm.as_ref().map(|r| r.value).unwrap_or(0.0);
+    let rpm_val = state
+        .domain
+        .vehicle
+        .rpm
+        .as_ref()
+        .map(|r| r.value)
+        .unwrap_or(0.0);
     let rpm_color = threshold_color_for_pid(state, 0x0C, rpm_val, || rpm_color_default(rpm_val));
     let max_rpm = state
-        .domain.thresholds_cache
+        .domain
+        .thresholds_cache
         .get(&0x0C)
         .and_then(|t| t.high_critical)
         .map(|c| c * 1.15)
@@ -438,7 +456,14 @@ pub(crate) fn render_full_gauges_and_engine(
         .ratio((rpm_val / max_rpm).clamp(0.0, 1.0));
     frame.render_widget(gauge, chunks[0]);
 
-    let rpm_hist: Vec<u64> = state.domain.vehicle.rpm_history.readings.iter().copied().collect();
+    let rpm_hist: Vec<u64> = state
+        .domain
+        .vehicle
+        .rpm_history
+        .readings
+        .iter()
+        .copied()
+        .collect();
     let sparkline = Sparkline::default()
         .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
         .data(&rpm_hist)
@@ -468,7 +493,14 @@ pub(crate) fn render_full_gauges_and_engine(
         .ratio((speed_val / 260.0).clamp(0.0, 1.0));
     frame.render_widget(gauge, chunks[2]);
 
-    let speed_hist: Vec<u64> = state.domain.vehicle.speed_history.readings.iter().copied().collect();
+    let speed_hist: Vec<u64> = state
+        .domain
+        .vehicle
+        .speed_history
+        .readings
+        .iter()
+        .copied()
+        .collect();
     let sparkline = Sparkline::default()
         .block(Block::default().borders(Borders::LEFT | Borders::RIGHT))
         .data(&speed_hist)
@@ -481,14 +513,40 @@ pub(crate) fn render_full_gauges_and_engine(
     let engine_item_start = 2; // Items 0=RPM, 1=Speed, 2+=engine lines
 
     // Load gauge line
-    let load_val = state.domain.vehicle.engine_load.as_ref().map(|r| r.value).unwrap_or(0.0);
+    let load_val = state
+        .domain
+        .vehicle
+        .engine_load
+        .as_ref()
+        .map(|r| r.value)
+        .unwrap_or(0.0);
     let load_color = threshold_color_for_pid(state, 0x04, load_val, || Color::Magenta);
-    lines.push(make_engine_line("Load", &format!("{:.1}%", load_val), load_color, selected_item, engine_item_start, 0));
+    lines.push(make_engine_line(
+        "Load",
+        &format!("{:.1}%", load_val),
+        load_color,
+        selected_item,
+        engine_item_start,
+        0,
+    ));
 
     // Throttle
-    let throttle_val = state.domain.vehicle.throttle_position.as_ref().map(|r| r.value).unwrap_or(0.0);
+    let throttle_val = state
+        .domain
+        .vehicle
+        .throttle_position
+        .as_ref()
+        .map(|r| r.value)
+        .unwrap_or(0.0);
     let throttle_color = threshold_color_for_pid(state, 0x11, throttle_val, || Color::Cyan);
-    lines.push(make_engine_line("Thrtl", &format!("{:.1}%", throttle_val), throttle_color, selected_item, engine_item_start, 1));
+    lines.push(make_engine_line(
+        "Thrtl",
+        &format!("{:.1}%", throttle_val),
+        throttle_color,
+        selected_item,
+        engine_item_start,
+        1,
+    ));
 
     // Conditional engine items
     let mut engine_idx = 2usize;
@@ -496,37 +554,82 @@ pub(crate) fn render_full_gauges_and_engine(
     // MAP
     if let Some(r) = &state.domain.vehicle.intake_map {
         let color = threshold_color_for_pid(state, 0x0B, r.value, || Color::White);
-        lines.push(make_engine_line("MAP", &format!("{:.0} kPa", r.value), color, selected_item, engine_item_start, engine_idx));
+        lines.push(make_engine_line(
+            "MAP",
+            &format!("{:.0} kPa", r.value),
+            color,
+            selected_item,
+            engine_item_start,
+            engine_idx,
+        ));
         engine_idx += 1;
     }
 
     // MAF
     if let Some(r) = &state.domain.vehicle.maf {
         let color = threshold_color_for_pid(state, 0x10, r.value, || Color::White);
-        lines.push(make_engine_line("MAF", &format!("{:.1} g/s", r.value), color, selected_item, engine_item_start, engine_idx));
+        lines.push(make_engine_line(
+            "MAF",
+            &format!("{:.1} g/s", r.value),
+            color,
+            selected_item,
+            engine_item_start,
+            engine_idx,
+        ));
         engine_idx += 1;
     }
 
     // Fuel pressure
     if let Some(r) = &state.domain.vehicle.fuel_pressure {
         let color = threshold_color_for_pid(state, 0x0A, r.value, || Color::White);
-        lines.push(make_engine_line("Fuel P", &format!("{:.0} kPa", r.value), color, selected_item, engine_item_start, engine_idx));
+        lines.push(make_engine_line(
+            "Fuel P",
+            &format!("{:.0} kPa", r.value),
+            color,
+            selected_item,
+            engine_item_start,
+            engine_idx,
+        ));
         engine_idx += 1;
     }
 
     // Boost pressure (derived: MAP - Barometric)
     if let Some(boost) = state.domain.vehicle.boost_pressure {
-        let color = if boost > 0.5 { Color::Green } else { Color::DarkGray };
-        lines.push(make_engine_line("Boost", &format!("{:.1} kPa", boost), color, selected_item, engine_item_start, engine_idx));
+        let color = if boost > 0.5 {
+            Color::Green
+        } else {
+            Color::DarkGray
+        };
+        lines.push(make_engine_line(
+            "Boost",
+            &format!("{:.1} kPa", boost),
+            color,
+            selected_item,
+            engine_item_start,
+            engine_idx,
+        ));
         engine_idx += 1;
     }
 
     // Oil pressure
     if let Some(r) = &state.domain.vehicle.oil_pressure {
         let color = threshold_color_for_pid(state, 0xFD, r.value, || {
-            if r.value < 100.0 { Color::Red } else if r.value < 150.0 { Color::Yellow } else { Color::Green }
+            if r.value < 100.0 {
+                Color::Red
+            } else if r.value < 150.0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            }
         });
-        lines.push(make_engine_line("Oil P", &format!("{:.0} kPa", r.value), color, selected_item, engine_item_start, engine_idx));
+        lines.push(make_engine_line(
+            "Oil P",
+            &format!("{:.0} kPa", r.value),
+            color,
+            selected_item,
+            engine_item_start,
+            engine_idx,
+        ));
         let _ = engine_idx; // suppress unused warning
     }
 
@@ -548,10 +651,17 @@ pub(crate) fn render_full_temperatures(
 ) {
     let mut lines = Vec::new();
 
-    let add_temp = |lines: &mut Vec<Line>, label: &str, reading: &Option<PidReading>, pid_code: u8, state: &AppState, idx: usize, sel: Option<usize>| {
+    let add_temp = |lines: &mut Vec<Line>,
+                    label: &str,
+                    reading: &Option<PidReading>,
+                    pid_code: u8,
+                    state: &AppState,
+                    idx: usize,
+                    sel: Option<usize>| {
         let line = if let Some(r) = reading {
             let (val, unit) = state.domain.display_temp_value(r);
-            let color = threshold_color_for_pid(state, pid_code, r.value, || temp_color_default(r.value));
+            let color =
+                threshold_color_for_pid(state, pid_code, r.value, || temp_color_default(r.value));
             make_value_line(label, &format!("{:.1}{}", val, unit), color)
         } else {
             make_value_line(label, "--", Color::DarkGray)
@@ -559,15 +669,87 @@ pub(crate) fn render_full_temperatures(
         lines.push(maybe_highlight(line, sel, idx));
     };
 
-    add_temp(&mut lines, "Coolant", &state.domain.vehicle.coolant_temp, 0x05, state, 0, selected_item);
-    add_temp(&mut lines, "Oil", &state.domain.vehicle.engine_oil_temp, 0x5C, state, 1, selected_item);
-    add_temp(&mut lines, "Trans", &state.domain.vehicle.transmission_temp, 0xFE, state, 2, selected_item);
-    add_temp(&mut lines, "Intake Air", &state.domain.vehicle.intake_air_temp, 0x0F, state, 3, selected_item);
-    add_temp(&mut lines, "Ambient", &state.domain.vehicle.ambient_air_temp, 0x46, state, 4, selected_item);
-    add_temp(&mut lines, "Cat B1S1", &state.domain.vehicle.catalyst_temp_b1s1, 0x3C, state, 5, selected_item);
-    add_temp(&mut lines, "Cat B2S1", &state.domain.vehicle.catalyst_temp_b2s1, 0x3D, state, 6, selected_item);
-    add_temp(&mut lines, "Cat B1S2", &state.domain.vehicle.catalyst_temp_b1s2, 0x3E, state, 7, selected_item);
-    add_temp(&mut lines, "Cat B2S2", &state.domain.vehicle.catalyst_temp_b2s2, 0x3F, state, 8, selected_item);
+    add_temp(
+        &mut lines,
+        "Coolant",
+        &state.domain.vehicle.coolant_temp,
+        0x05,
+        state,
+        0,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Oil",
+        &state.domain.vehicle.engine_oil_temp,
+        0x5C,
+        state,
+        1,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Trans",
+        &state.domain.vehicle.transmission_temp,
+        0xFE,
+        state,
+        2,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Intake Air",
+        &state.domain.vehicle.intake_air_temp,
+        0x0F,
+        state,
+        3,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Ambient",
+        &state.domain.vehicle.ambient_air_temp,
+        0x46,
+        state,
+        4,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Cat B1S1",
+        &state.domain.vehicle.catalyst_temp_b1s1,
+        0x3C,
+        state,
+        5,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Cat B2S1",
+        &state.domain.vehicle.catalyst_temp_b2s1,
+        0x3D,
+        state,
+        6,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Cat B1S2",
+        &state.domain.vehicle.catalyst_temp_b1s2,
+        0x3E,
+        state,
+        7,
+        selected_item,
+    );
+    add_temp(
+        &mut lines,
+        "Cat B2S2",
+        &state.domain.vehicle.catalyst_temp_b2s2,
+        0x3F,
+        state,
+        8,
+        selected_item,
+    );
 
     let temps = Paragraph::new(lines).block(block);
     frame.render_widget(temps, area);
@@ -586,7 +768,13 @@ pub(crate) fn render_full_fuel_system(
     // Fuel tank level — always item 0
     let tank_line = if let Some(r) = &state.domain.vehicle.fuel_tank_level {
         let color = threshold_color_for_pid(state, 0x2F, r.value, || {
-            if r.value < 15.0 { Color::Red } else if r.value < 25.0 { Color::Yellow } else { Color::Green }
+            if r.value < 15.0 {
+                Color::Red
+            } else if r.value < 25.0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            }
         });
         make_value_line("Tank", &format!("{:.1}%", r.value), color)
     } else {
@@ -604,19 +792,39 @@ pub(crate) fn render_full_fuel_system(
     }
 
     // Fuel trims
-    let trim_line = make_trim_line("STFT B1", &state.domain.vehicle.short_fuel_trim_b1, 0x06, state);
+    let trim_line = make_trim_line(
+        "STFT B1",
+        &state.domain.vehicle.short_fuel_trim_b1,
+        0x06,
+        state,
+    );
     lines.push(maybe_highlight(trim_line, selected_item, item_idx));
     item_idx += 1;
 
-    let trim_line = make_trim_line("LTFT B1", &state.domain.vehicle.long_fuel_trim_b1, 0x07, state);
+    let trim_line = make_trim_line(
+        "LTFT B1",
+        &state.domain.vehicle.long_fuel_trim_b1,
+        0x07,
+        state,
+    );
     lines.push(maybe_highlight(trim_line, selected_item, item_idx));
     item_idx += 1;
 
-    let trim_line = make_trim_line("STFT B2", &state.domain.vehicle.short_fuel_trim_b2, 0x08, state);
+    let trim_line = make_trim_line(
+        "STFT B2",
+        &state.domain.vehicle.short_fuel_trim_b2,
+        0x08,
+        state,
+    );
     lines.push(maybe_highlight(trim_line, selected_item, item_idx));
     item_idx += 1;
 
-    let trim_line = make_trim_line("LTFT B2", &state.domain.vehicle.long_fuel_trim_b2, 0x09, state);
+    let trim_line = make_trim_line(
+        "LTFT B2",
+        &state.domain.vehicle.long_fuel_trim_b2,
+        0x09,
+        state,
+    );
     lines.push(maybe_highlight(trim_line, selected_item, item_idx));
     let _ = item_idx;
 
@@ -727,14 +935,9 @@ pub(crate) fn render_full_dtcs(
             let line = Line::from(vec![
                 Span::styled(
                     format!(" {:<6}", dtc.code),
-                    Style::default()
-                        .fg(color)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(
-                    dtc.description.to_string(),
-                    Style::default().fg(color),
-                ),
+                Span::styled(dtc.description.to_string(), Style::default().fg(color)),
             ]);
             lines.push(maybe_highlight(line, selected_item, i));
         }
@@ -764,26 +967,23 @@ pub(crate) fn render_full_fuel_economy(
     render_advanced_side(frame, cols[1], state, selected_item);
 }
 
-fn render_gold_side(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-    selected_item: Option<usize>,
-) {
+fn render_gold_side(frame: &mut Frame, area: Rect, state: &AppState, selected_item: Option<usize>) {
     let fe = &state.domain.fuel_economy;
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4), // Data lines
-            Constraint::Min(2),   // Sparkline
+            Constraint::Min(2),    // Sparkline
         ])
         .split(area);
 
     // Data lines
     let mut lines = Vec::new();
 
-    let source_label = fe.gold.as_ref()
+    let source_label = fe
+        .gold
+        .as_ref()
         .map(|g| g.source.label())
         .unwrap_or("Waiting...");
     let source_line = Line::from(vec![
@@ -798,7 +998,9 @@ fn render_gold_side(
         Span::styled(" Instant: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{:.1} MPG", instant_mpg),
-            Style::default().fg(instant_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(instant_color)
+                .add_modifier(Modifier::BOLD),
         ),
     ]);
     lines.push(maybe_highlight(instant_line, selected_item, 1));
@@ -816,7 +1018,10 @@ fn render_gold_side(
     let rate = fe.gold.as_ref().map(|g| g.fuel_rate_lph).unwrap_or(0.0);
     let rate_line = Line::from(vec![
         Span::styled(" Rate:    ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("{:.1} L/h", rate), Style::default().fg(Color::White)),
+        Span::styled(
+            format!("{:.1} L/h", rate),
+            Style::default().fg(Color::White),
+        ),
     ]);
     lines.push(maybe_highlight(rate_line, selected_item, 3));
 
@@ -831,8 +1036,11 @@ fn render_gold_side(
     // Sparkline
     let hist: Vec<u64> = fe.gold_mpg_history.iter().copied().collect();
     let sparkline = Sparkline::default()
-        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)))
+        .block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .data(&hist)
         .max(600) // 60 MPG × 10
         .style(Style::default().fg(Color::Yellow));
@@ -851,7 +1059,7 @@ fn render_advanced_side(
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4), // Data lines
-            Constraint::Min(2),   // Sparkline + corrections
+            Constraint::Min(2),    // Sparkline + corrections
         ])
         .split(area);
 
@@ -870,7 +1078,9 @@ fn render_advanced_side(
         Span::styled(" Instant: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{:.1} MPG", instant_mpg),
-            Style::default().fg(instant_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(instant_color)
+                .add_modifier(Modifier::BOLD),
         ),
     ]);
     lines.push(maybe_highlight(instant_line, selected_item, 5));
@@ -885,12 +1095,26 @@ fn render_advanced_side(
     ]);
     lines.push(maybe_highlight(avg_line, selected_item, 6));
 
-    let rate = fe.advanced.as_ref().map(|a| a.corrected_fuel_rate_lph).unwrap_or(0.0);
-    let base_rate = fe.advanced.as_ref().map(|a| a.base_fuel_rate_lph).unwrap_or(0.0);
+    let rate = fe
+        .advanced
+        .as_ref()
+        .map(|a| a.corrected_fuel_rate_lph)
+        .unwrap_or(0.0);
+    let base_rate = fe
+        .advanced
+        .as_ref()
+        .map(|a| a.base_fuel_rate_lph)
+        .unwrap_or(0.0);
     let rate_line = Line::from(vec![
         Span::styled(" Rate:    ", Style::default().fg(Color::DarkGray)),
-        Span::styled(format!("{:.1} L/h", rate), Style::default().fg(Color::White)),
-        Span::styled(format!(" (base {:.1})", base_rate), Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            format!("{:.1} L/h", rate),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            format!(" (base {:.1})", base_rate),
+            Style::default().fg(Color::DarkGray),
+        ),
     ]);
     lines.push(maybe_highlight(rate_line, selected_item, 7));
 
@@ -911,8 +1135,11 @@ fn render_advanced_side(
     // Sparkline
     let hist: Vec<u64> = fe.advanced_mpg_history.iter().copied().collect();
     let sparkline = Sparkline::default()
-        .block(Block::default().borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
-            .border_style(Style::default().fg(Color::DarkGray)))
+        .block(
+            Block::default()
+                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .data(&hist)
         .max(600)
         .style(Style::default().fg(Color::Cyan));
@@ -953,7 +1180,9 @@ fn render_advanced_side(
         Span::raw("  "),
         Span::styled(
             format!("TOT {:.2}", total),
-            Style::default().fg(correction_color(total)).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(correction_color(total))
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
 
@@ -1031,7 +1260,11 @@ fn render_edit_overlay(frame: &mut Frame, edit: &crate::widget::edit_mode::EditM
 
             let mut lines = vec![
                 Line::from(Span::styled(
-                    format!(" Widget {} of {}", edit.cursor + 1, edit.working_config.widget_count()),
+                    format!(
+                        " Widget {} of {}",
+                        edit.cursor + 1,
+                        edit.working_config.widget_count()
+                    ),
                     Style::default().fg(Color::White),
                 )),
                 Line::from(""),
@@ -1047,7 +1280,9 @@ fn render_edit_overlay(frame: &mut Frame, edit: &crate::widget::edit_mode::EditM
                 for slot in &row.widgets {
                     let marker = if flat == edit.cursor { "> " } else { "  " };
                     let style = if flat == edit.cursor {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -1082,7 +1317,9 @@ fn render_edit_overlay(frame: &mut Frame, edit: &crate::widget::edit_mode::EditM
                 .map(|(i, (title, desc))| {
                     let marker = if i == *selected { "> " } else { "  " };
                     let style = if i == *selected {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -1117,7 +1354,9 @@ fn render_edit_overlay(frame: &mut Frame, edit: &crate::widget::edit_mode::EditM
                 .map(|(i, (title, desc))| {
                     let marker = if i == *selected { "> " } else { "  " };
                     let style = if i == *selected {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -1145,14 +1384,19 @@ fn render_edit_overlay(frame: &mut Frame, edit: &crate::widget::edit_mode::EditM
                 .border_type(BorderType::Double)
                 .border_style(Style::default().fg(Color::Cyan));
 
-            let options = [("Half", "Takes roughly half the row width"), ("Full", "Takes the full row width")];
+            let options = [
+                ("Half", "Takes roughly half the row width"),
+                ("Full", "Takes the full row width"),
+            ];
             let lines: Vec<Line> = options
                 .iter()
                 .enumerate()
                 .map(|(i, (title, desc))| {
                     let marker = if i == *selected { "> " } else { "  " };
                     let style = if i == *selected {
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -1194,14 +1438,12 @@ fn render_session_picker(frame: &mut Frame, state: &AppState) {
     frame.render_widget(block, area);
 
     let mut lines = Vec::new();
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!(" {:<24}{:<20}{:<10}", "Date/Time", "Vehicle", "Duration"),
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        format!(" {:<24}{:<20}{:<10}", "Date/Time", "Vehicle", "Duration"),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )]));
     lines.push(Line::from(Span::styled(
         " ".to_string() + &"-".repeat(54),
         Style::default().fg(Color::DarkGray),
@@ -1230,11 +1472,12 @@ fn render_session_picker(frame: &mut Frame, state: &AppState) {
                 } else {
                     Style::default().fg(Color::White)
                 };
-                let vehicle = session
-                    .vehicle_name
-                    .as_deref()
-                    .unwrap_or("Unknown");
-                let time_str = session.start_time.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M:%S").to_string();
+                let vehicle = session.vehicle_name.as_deref().unwrap_or("Unknown");
+                let time_str = session
+                    .start_time
+                    .with_timezone(&chrono::Local)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string();
                 let dur = session.duration_display();
                 lines.push(Line::from(Span::styled(
                     format!("{}{:<24}{:<20}{}", marker, time_str, vehicle, dur),
@@ -1358,9 +1601,7 @@ fn render_popup(frame: &mut Frame, popup: &PopupState) {
         .border_type(BorderType::Double)
         .border_style(Style::default().fg(Color::Yellow));
 
-    let text: Vec<Line> = popup.body.iter()
-        .map(|s| Line::from(s.as_str()))
-        .collect();
+    let text: Vec<Line> = popup.body.iter().map(|s| Line::from(s.as_str())).collect();
 
     let paragraph = Paragraph::new(text).block(block);
     frame.render_widget(paragraph, area);
@@ -1390,7 +1631,8 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 
 fn render_rpm(frame: &mut Frame, area: Rect, state: &AppState) {
     let rpm_val = state
-        .domain.vehicle
+        .domain
+        .vehicle
         .rpm
         .as_ref()
         .map(|r| r.value)
@@ -1399,7 +1641,8 @@ fn render_rpm(frame: &mut Frame, area: Rect, state: &AppState) {
     let color = threshold_color_for_pid(state, 0x0C, rpm_val, || rpm_color_default(rpm_val));
 
     let max_rpm = state
-        .domain.thresholds_cache
+        .domain
+        .thresholds_cache
         .get(&0x0C)
         .and_then(|t| t.high_critical)
         .map(|c| c * 1.15)
@@ -1423,7 +1666,14 @@ fn render_rpm(frame: &mut Frame, area: Rect, state: &AppState) {
 
     frame.render_widget(gauge, chunks[0]);
 
-    let history: Vec<u64> = state.domain.vehicle.rpm_history.readings.iter().copied().collect();
+    let history: Vec<u64> = state
+        .domain
+        .vehicle
+        .rpm_history
+        .readings
+        .iter()
+        .copied()
+        .collect();
     let sparkline = Sparkline::default()
         .block(Block::default().borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM))
         .data(&history)
@@ -1457,7 +1707,8 @@ fn render_speed(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(gauge, chunks[0]);
 
     let history: Vec<u64> = state
-        .domain.vehicle
+        .domain
+        .vehicle
         .speed_history
         .readings
         .iter()
@@ -1476,21 +1727,19 @@ fn render_coolant(frame: &mut Frame, area: Rect, state: &AppState) {
     let (temp_val, temp_unit) = state.domain.display_temp().unwrap_or((0.0, "°C"));
 
     let raw_celsius = state
-        .domain.vehicle
+        .domain
+        .vehicle
         .coolant_temp
         .as_ref()
         .map(|r| r.value)
         .unwrap_or(0.0);
-    let color = threshold_color_for_pid(state, 0x05, raw_celsius, || {
-        temp_color_default(raw_celsius)
-    });
+    let color =
+        threshold_color_for_pid(state, 0x05, raw_celsius, || temp_color_default(raw_celsius));
 
     let text = format!("{:.0}{}", temp_val, temp_unit);
     let paragraph = Paragraph::new(Line::from(vec![Span::styled(
         text,
-        Style::default()
-            .fg(color)
-            .add_modifier(Modifier::BOLD),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
     )]))
     .alignment(Alignment::Center)
     .block(
@@ -1517,7 +1766,7 @@ fn render_compact_driving(frame: &mut Frame, area: Rect, state: &AppState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Smoothness gauge
-            Constraint::Min(2),   // Accel sparkline
+            Constraint::Min(2),    // Accel sparkline
             Constraint::Length(1), // Current accel value
             Constraint::Length(1), // Event counters
         ])
@@ -1568,7 +1817,9 @@ fn render_compact_driving(frame: &mut Frame, area: Rect, state: &AppState) {
         Span::styled(" Accel: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{}{:.1} m/s\u{00B2}", sign, accel),
-            Style::default().fg(accel_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(accel_color)
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
     frame.render_widget(accel_line, chunks[2]);
@@ -1578,12 +1829,20 @@ fn render_compact_driving(frame: &mut Frame, area: Rect, state: &AppState) {
         Span::styled(" Brakes: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{}", driving.hard_brake_count),
-            Style::default().fg(if driving.hard_brake_count > 0 { Color::Red } else { Color::Green }),
+            Style::default().fg(if driving.hard_brake_count > 0 {
+                Color::Red
+            } else {
+                Color::Green
+            }),
         ),
         Span::styled("  Jackrabbits: ", Style::default().fg(Color::DarkGray)),
         Span::styled(
             format!("{}", driving.jackrabbit_count),
-            Style::default().fg(if driving.jackrabbit_count > 0 { Color::Yellow } else { Color::Green }),
+            Style::default().fg(if driving.jackrabbit_count > 0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            }),
         ),
     ]));
     frame.render_widget(events_line, chunks[3]);
@@ -1595,11 +1854,18 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     // Replay progress bar
     if let RecordingState::Replaying(controller) = &state.domain.recording {
         let progress = controller.progress_text();
-        let pause_label = if controller.paused { "Space:resume" } else { "Space:pause" };
+        let pause_label = if controller.paused {
+            "Space:resume"
+        } else {
+            "Space:pause"
+        };
         let replay_line = Line::from(vec![
             Span::styled(" ", Style::default()),
             Span::styled(
-                format!("{} | [/]:seek | {}  | s:speed | Esc:stop", progress, pause_label),
+                format!(
+                    "{} | [/]:seek | {}  | s:speed | Esc:stop",
+                    progress, pause_label
+                ),
                 Style::default().fg(Color::Magenta),
             ),
         ]);
@@ -1618,7 +1884,10 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let help_text = if state.edit_mode.is_some() {
         "EDIT: a:add x:del s:save Esc:cancel \u{2190}\u{2191}\u{2192}\u{2193}:nav".to_string()
     } else if state.domain.recording.is_replaying() {
-        format!("Poll: {}ms{} | {}", state.domain.poll_interval_ms, paused, layout_toggle)
+        format!(
+            "Poll: {}ms{} | {}",
+            state.domain.poll_interval_ms, paused, layout_toggle
+        )
     } else {
         let rec_hint = if state.domain.recording.is_recording() {
             " | r:stop rec"
@@ -1679,10 +1948,19 @@ fn make_engine_line<'a>(
     maybe_highlight(line, selected_item, engine_item_start + engine_offset)
 }
 
-fn make_trim_line<'a>(label: &str, reading: &Option<PidReading>, pid_code: u8, state: &AppState) -> Line<'a> {
+fn make_trim_line<'a>(
+    label: &str,
+    reading: &Option<PidReading>,
+    pid_code: u8,
+    state: &AppState,
+) -> Line<'a> {
     if let Some(r) = reading {
         let color = threshold_color_for_pid(state, pid_code, r.value, || {
-            if r.value.abs() > 10.0 { Color::Yellow } else { Color::Green }
+            if r.value.abs() > 10.0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            }
         });
         let sign = if r.value >= 0.0 { "+" } else { "" };
         Line::from(vec![
@@ -1703,9 +1981,11 @@ fn make_trim_line<'a>(label: &str, reading: &Option<PidReading>, pid_code: u8, s
 /// Apply REVERSED modifier to a line if its index matches the selected item.
 fn maybe_highlight(line: Line<'_>, selected: Option<usize>, item_idx: usize) -> Line<'_> {
     if selected == Some(item_idx) {
-        let highlighted_spans: Vec<Span> = line.spans.into_iter().map(|span| {
-            Span::styled(span.content, span.style.add_modifier(Modifier::REVERSED))
-        }).collect();
+        let highlighted_spans: Vec<Span> = line
+            .spans
+            .into_iter()
+            .map(|span| Span::styled(span.content, span.style.add_modifier(Modifier::REVERSED)))
+            .collect();
         Line::from(highlighted_spans)
     } else {
         line

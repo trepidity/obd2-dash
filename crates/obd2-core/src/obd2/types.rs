@@ -236,6 +236,7 @@ pub struct PidReading {
     pub value: f64,
     pub unit: &'static str,
     pub timestamp: Instant,
+    pub raw_bytes: Option<Vec<u8>>,
 }
 
 impl PidReading {
@@ -244,6 +245,7 @@ impl PidReading {
             value,
             unit,
             timestamp: Instant::now(),
+            raw_bytes: None,
         }
     }
 }
@@ -251,7 +253,7 @@ impl PidReading {
 /// Ring-buffer history for sparkline display.
 const HISTORY_CAPACITY: usize = 120; // 30s at 4 Hz
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct PidHistory {
     pub readings: VecDeque<u64>,
 }
@@ -271,13 +273,7 @@ impl PidHistory {
     }
 }
 
-impl Default for PidHistory {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct VehicleData {
     // Original 4 PIDs
     pub rpm: Option<PidReading>,
@@ -353,60 +349,4 @@ pub struct VehicleData {
     pub speed_history: PidHistory,
     pub throttle_history: PidHistory,
     pub load_history: PidHistory,
-}
-
-impl Default for VehicleData {
-    fn default() -> Self {
-        Self {
-            rpm: None,
-            speed: None,
-            coolant_temp: None,
-            engine_load: None,
-            battery_voltage: None,
-            short_fuel_trim_b1: None,
-            long_fuel_trim_b1: None,
-            short_fuel_trim_b2: None,
-            long_fuel_trim_b2: None,
-            fuel_pressure: None,
-            intake_map: None,
-            intake_air_temp: None,
-            maf: None,
-            throttle_position: None,
-            fuel_tank_level: None,
-            engine_fuel_rate: None,
-            barometric_pressure: None,
-            control_module_voltage: None,
-            ambient_air_temp: None,
-            engine_oil_temp: None,
-            transmission_temp: None,
-            catalyst_temp_b1s1: None,
-            catalyst_temp_b2s1: None,
-            catalyst_temp_b1s2: None,
-            catalyst_temp_b2s2: None,
-            oil_pressure: None,
-            fuel_rail_gauge_pressure: None,
-            fuel_rail_abs_pressure: None,
-            timing_advance: None,
-            demanded_torque: None,
-            actual_torque: None,
-            reference_torque: None,
-            relative_throttle_pos: None,
-            abs_throttle_pos_b: None,
-            accel_pedal_pos_d: None,
-            accel_pedal_pos_e: None,
-            commanded_throttle_actuator: None,
-            commanded_egr: None,
-            commanded_evap_purge: None,
-            absolute_load: None,
-            commanded_equiv_ratio: None,
-            run_time: None,
-            distance_with_mil: None,
-            distance_since_dtc_clear: None,
-            boost_pressure: None,
-            rpm_history: PidHistory::new(),
-            speed_history: PidHistory::new(),
-            throttle_history: PidHistory::new(),
-            load_history: PidHistory::new(),
-        }
-    }
 }

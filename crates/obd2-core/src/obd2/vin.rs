@@ -1,6 +1,6 @@
-/// Lightweight VIN decoder for when no database match exists.
-///
-/// Decodes model year from position 10 and manufacturer from the WMI (positions 1-3).
+//! Lightweight VIN decoder for when no database match exists.
+//!
+//! Decodes model year from position 10 and manufacturer from the WMI (positions 1-3).
 
 /// Decoded VIN information.
 #[derive(Debug, Clone)]
@@ -122,9 +122,9 @@ mod tests {
     #[test]
     fn test_decode_year() {
         assert_eq!(decode_year("1G1ZD5ST2LF000000"), Some(2020)); // L = 2020
-        // WMWRE33546T — position 10 (1-indexed) = '6', which maps to 2036 in the
-        // 2010+ table. The 30-year VIN cycle means '6' also meant 2006, but our
-        // decoder only covers the current cycle.
+                                                                  // WMWRE33546T — position 10 (1-indexed) = '6', which maps to 2036 in the
+                                                                  // 2010+ table. The 30-year VIN cycle means '6' also meant 2006, but our
+                                                                  // decoder only covers the current cycle.
         assert_eq!(decode_year("WMWRE33546T000001"), Some(2036));
         assert_eq!(decode_year("SHORT"), None);
         assert_eq!(decode_year("123456789A1234567"), Some(2010)); // A = 2010
@@ -135,7 +135,10 @@ mod tests {
         assert_eq!(decode_manufacturer("1G1ZD5ST2LF000000"), Some("Chevrolet"));
         assert_eq!(decode_manufacturer("WMWRE33546T000001"), Some("MINI"));
         // Tesla (5YJ) is not in the specific WMI table, but '5' falls back to "US Manufacturer"
-        assert_eq!(decode_manufacturer("5YJSA1E26MF000001"), Some("US Manufacturer"));
+        assert_eq!(
+            decode_manufacturer("5YJSA1E26MF000001"),
+            Some("US Manufacturer")
+        );
         assert_eq!(decode_manufacturer("WBA12345678901234"), Some("BMW"));
         assert_eq!(decode_manufacturer("AB"), None); // Too short
     }

@@ -58,10 +58,7 @@ pub struct ReplayController {
 
 impl ReplayController {
     pub fn new(session: SessionEntry, frames: Vec<RecordingFrame>) -> Self {
-        let total_duration_ms = frames
-            .last()
-            .map(|f| f.offset_ms as u64)
-            .unwrap_or(0);
+        let total_duration_ms = frames.last().map(|f| f.offset_ms as u64).unwrap_or(0);
 
         Self {
             session,
@@ -147,9 +144,7 @@ impl ReplayController {
         self.start_instant = Instant::now();
 
         // Find the cursor position for this offset
-        self.cursor = self
-            .frames
-            .partition_point(|f| (f.offset_ms as u64) <= pos);
+        self.cursor = self.frames.partition_point(|f| (f.offset_ms as u64) <= pos);
     }
 
     /// Cycle to the next playback speed.
