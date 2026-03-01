@@ -15,7 +15,8 @@ use tokio::sync::mpsc;
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use app::{AppState, DashboardLayout, Message, ScanMode};
+use app::{AppState, DashboardLayout, Message, PopupState, ScanMode};
+use obd2_core::ai::{AiClient, AiConfig};
 use obd2_core::{
     ConnectionPrefs, ConnectionState, DeviceKind, MockObd2, MockVehicleProfile, Obd2Connection,
     Pid, PidReading, RecordingState, ScanEvent, SpeedUnit, StorageConfig, StorageManager,
@@ -319,6 +320,10 @@ async fn main() -> Result<()> {
     let config_path = PathBuf::from(&cli.config);
     let dashboard_config = DashboardConfig::load(&config_path);
 
+    // Load AI config (optional)
+    let ai_config_path = PathBuf::from("ai.json");
+    let ai_config = AiConfig::load(&ai_config_path);
+
     // Initialize storage manager
     let storage_config = StorageConfig {
         recordings_dir: PathBuf::from(&cli.recordings_dir),
@@ -354,6 +359,7 @@ async fn main() -> Result<()> {
             cli.ble_scan_secs,
             log_buffer,
             database,
+            ai_config,
         )
         .await
     }
@@ -376,6 +382,7 @@ async fn run_tui(
     ble_scan_secs: u64,
     log_buffer: debug_log::LogBuffer,
     database: obd2_db::Database,
+    ai_config: Option<AiConfig>,
 ) -> Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
@@ -399,6 +406,10 @@ async fn run_tui(
     state.dashboard_config = dashboard_config;
     state.config_path = Some(config_path);
     state.domain.storage_manager = Some(storage_manager);
+    state.ai_config = ai_config;
+
+    // Set global AI sender so background analysis tasks can send results
+    let _ = AI_TX.set(obd_tx.clone());
 
     // If we have an obd_handle, we're connecting/connected; otherwise disconnected
     if obd_handle.is_some() {
@@ -740,6 +751,12 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
         return;
     }
 
+    // ─── AI insights overlay ────────────────────────────────────────────────
+    if state.show_ai_insights {
+        handle_ai_insights_key(state, key);
+        return;
+    }
+
     // ─── Debug log viewer ─────────────────────────────────────────────────
     if state.show_debug_log {
         handle_debug_log_key(state, key);
@@ -848,6 +865,40 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
             if state.domain.recording.is_idle() {
                 state.show_session_picker = true;
                 state.session_picker_selected = 0;
+            }
+        }
+        KeyCode::Char('i') => {
+            if state.ai_insights.is_some() && !state.ai_analyzing {
+                // Toggle insights overlay
+                state.show_ai_insights = !state.show_ai_insights;
+                state.ai_scroll = 0;
+            } else if state.ai_config.is_some() && !state.ai_analyzing {
+                // Trigger new analysis
+                start_ai_analysis(state);
+            } else if state.ai_config.is_none() {
+                state.popup = Some(PopupState {
+                    title: "AI Analysis".to_string(),
+                    body: vec![
+                        "No AI provider configured.".to_string(),
+                        String::new(),
+                        "Create an ai.json file in the project root:".to_string(),
+                        String::new(),
+                        r#"  {"#.to_string(),
+                        r#"    "provider": "anthropic","#.to_string(),
+                        r#"    "api_key": "sk-ant-...","#.to_string(),
+                        r#"    "model": "claude-sonnet-4-20250514","#.to_string(),
+                        r#"    "max_tokens": 4096"#.to_string(),
+                        "  }".to_string(),
+                        String::new(),
+                        "Supported providers: anthropic, openai".to_string(),
+                    ],
+                });
+            }
+        }
+        KeyCode::Char('I') => {
+            // Force re-analyze (even if cached insights exist)
+            if state.ai_config.is_some() && !state.ai_analyzing {
+                start_ai_analysis(state);
             }
         }
         KeyCode::Char('l') => {
@@ -1151,6 +1202,97 @@ fn handle_debug_log_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
         _ => {}
     }
 }
+
+/// Handle keys in AI insights overlay.
+fn handle_ai_insights_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
+    use crossterm::event::KeyCode;
+
+    match key.code {
+        KeyCode::Up => {
+            state.ai_scroll = state.ai_scroll.saturating_add(1);
+        }
+        KeyCode::Down => {
+            state.ai_scroll = state.ai_scroll.saturating_sub(1);
+        }
+        KeyCode::PageUp => {
+            state.ai_scroll = state.ai_scroll.saturating_add(20);
+        }
+        KeyCode::PageDown => {
+            state.ai_scroll = state.ai_scroll.saturating_sub(20);
+        }
+        KeyCode::Home => {
+            state.ai_scroll = usize::MAX;
+        }
+        KeyCode::End => {
+            state.ai_scroll = 0;
+        }
+        KeyCode::Char('i') | KeyCode::Esc => {
+            state.show_ai_insights = false;
+        }
+        KeyCode::Char('I') => {
+            // Force re-analyze
+            if state.ai_config.is_some() && !state.ai_analyzing {
+                state.show_ai_insights = false;
+                start_ai_analysis(state);
+            }
+        }
+        KeyCode::Char('q') => {
+            state.update(Message::Quit);
+        }
+        _ => {}
+    }
+}
+
+/// Start an AI analysis in a background task.
+fn start_ai_analysis(state: &mut AppState) {
+    use obd2_core::ai::SessionSummary;
+
+    let config = match state.ai_config.clone() {
+        Some(c) => c,
+        None => return,
+    };
+
+    let summary = SessionSummary::from_live(&state.domain);
+    let session_id = state
+        .domain
+        .vehicle_info
+        .as_ref()
+        .map(|v| v.vin.clone())
+        .unwrap_or_else(|| "live".to_string());
+
+    state.ai_analyzing = true;
+    state.show_ai_insights = true;
+    state.ai_scroll = 0;
+
+    // We need to send the result back via the OBD message channel.
+    // Since we don't have direct access to obd_tx here, we store a pending flag
+    // and the analysis runs via a spawned task.
+    AI_ANALYSIS_PENDING.store(true, Ordering::SeqCst);
+
+    // Store config/summary in static for the spawned task to pick up
+    // Actually, we use a different approach: store the task join handle
+    // We'll use the approach of spawning from handle_key context by
+    // storing what we need and processing in the event loop
+    let _ = AI_TX.get().map(|tx| {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            let client = AiClient::new();
+            match client.analyze(&config, &summary, &session_id).await {
+                Ok(insights) => {
+                    let _ = tx.send(Message::AiAnalysisComplete(insights));
+                }
+                Err(e) => {
+                    let _ = tx.send(Message::AiAnalysisError(format!("{}", e)));
+                }
+            }
+        });
+    });
+}
+
+/// Global sender for AI analysis results (set once in run_tui).
+static AI_TX: std::sync::OnceLock<mpsc::UnboundedSender<Message>> = std::sync::OnceLock::new();
+static AI_ANALYSIS_PENDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// Toggle recording on/off.
 fn handle_toggle_recording(state: &mut AppState) {
