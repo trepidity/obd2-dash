@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 obd2-db = { path = "../obd2-db" }
-obd2-core = { path = "../obd2-core" }
+obd2-core = { path = "../obd2-core", features = ["ai"] }
 tokio = { workspace = true }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }

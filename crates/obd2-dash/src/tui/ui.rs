@@ -23,6 +23,12 @@ pub fn render(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer) {
         return;
     }
 
+    // Full-screen AI insights takeover
+    if state.show_ai_insights {
+        render_ai_insights(frame, state);
+        return;
+    }
+
     match state.layout {
         DashboardLayout::Compact => render_compact(frame, state),
         DashboardLayout::Full => render_full(frame, state),
@@ -127,6 +133,151 @@ fn render_debug_log(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer)
     // Footer
     let footer = Paragraph::new(Line::from(vec![Span::styled(
         " Up/Down/PgUp/PgDn:scroll  Home:top  End:bottom  l/Esc:close  q:quit ",
+        Style::default().fg(Color::DarkGray),
+    )]));
+    frame.render_widget(footer, chunks[2]);
+}
+
+// ─── AI insights overlay ─────────────────────────────────────────────────────
+
+fn render_ai_insights(frame: &mut Frame, state: &AppState) {
+    use obd2_core::ai::Severity;
+
+    let area = frame.area();
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Header
+            Constraint::Min(1),    // Body
+            Constraint::Length(1), // Footer
+        ])
+        .split(area);
+
+    // Header
+    if state.ai_analyzing {
+        let header = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " AI VEHICLE ANALYSIS ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "  Analyzing... please wait",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+        frame.render_widget(header, chunks[0]);
+
+        // Spinner body
+        let spinner_text = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "  Sending vehicle data to AI for analysis...",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]);
+        frame.render_widget(spinner_text, chunks[1]);
+    } else if let Some(ref insights) = state.ai_insights {
+        // Header with provider/model info
+        let header = Paragraph::new(Line::from(vec![
+            Span::styled(
+                " AI VEHICLE ANALYSIS ",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {} / {}", insights.provider, insights.model),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("  {}", insights.timestamp.format("%Y-%m-%d %H:%M")),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                if state.ai_scroll > 0 {
+                    format!("  [scroll: +{}]", state.ai_scroll)
+                } else {
+                    "  [bottom]".to_string()
+                },
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        frame.render_widget(header, chunks[0]);
+
+        // Body: render sections with severity coloring
+        let body_height = chunks[1].height as usize;
+        let mut all_lines: Vec<Line> = Vec::new();
+
+        if insights.sections.is_empty() {
+            // Fall back to raw markdown
+            for line in insights.raw_markdown.lines() {
+                all_lines.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::White),
+                )));
+            }
+        } else {
+            for section in &insights.sections {
+                let (severity_color, severity_label) = match section.severity {
+                    Severity::Critical => (Color::Red, "[CRITICAL]"),
+                    Severity::Warning => (Color::Yellow, "[WARNING]"),
+                    Severity::Info => (Color::Cyan, "[INFO]"),
+                };
+
+                // Section header
+                all_lines.push(Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", severity_label),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(severity_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(
+                        format!(" {}", section.title),
+                        Style::default()
+                            .fg(severity_color)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]));
+
+                // Section body
+                for line in section.body.lines() {
+                    let style = if line.starts_with("- ") || line.starts_with("* ") {
+                        Style::default().fg(Color::White)
+                    } else if line.starts_with("  ") {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+                    all_lines.push(Line::from(Span::styled(format!("  {}", line), style)));
+                }
+
+                // Blank line between sections
+                all_lines.push(Line::from(""));
+            }
+        }
+
+        let total = all_lines.len();
+        let scroll = state.ai_scroll.min(total.saturating_sub(body_height));
+        let end = total.saturating_sub(scroll);
+        let start = end.saturating_sub(body_height);
+
+        let visible_lines: Vec<Line> = all_lines[start..end].to_vec();
+        let body_para = Paragraph::new(visible_lines);
+        frame.render_widget(body_para, chunks[1]);
+    }
+
+    // Footer
+    let footer = Paragraph::new(Line::from(vec![Span::styled(
+        " i/Esc:close  I:re-analyze  Up/Down/PgUp/PgDn:scroll  Home:top  End:bottom  q:quit ",
         Style::default().fg(Color::DarkGray),
     )]));
     frame.render_widget(footer, chunks[2]);

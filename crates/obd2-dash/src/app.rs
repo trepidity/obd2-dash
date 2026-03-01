@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
+use obd2_core::ai::{AiConfig, AiInsights};
 use obd2_core::{
     AdapterInfo, ConnectionState, DeviceKind, DiscoveredDevice, DomainMessage, DomainState, Dtc,
     Pid, PidReading, ScanEvent,
@@ -25,6 +26,9 @@ pub enum Message {
     StartConnect(DeviceKind),
     Tick,
     Quit,
+    // AI analysis
+    AiAnalysisComplete(AiInsights),
+    AiAnalysisError(String),
 }
 
 impl Message {
@@ -84,6 +88,12 @@ pub struct AppState {
     // Debug log viewer
     pub show_debug_log: bool,
     pub debug_log_scroll: usize,
+    // AI analysis
+    pub ai_config: Option<AiConfig>,
+    pub ai_insights: Option<AiInsights>,
+    pub ai_analyzing: bool,
+    pub ai_scroll: usize,
+    pub show_ai_insights: bool,
 }
 
 impl AppState {
@@ -110,6 +120,11 @@ impl AppState {
             scan_requested: false,
             show_debug_log: false,
             debug_log_scroll: 0,
+            ai_config: None,
+            ai_insights: None,
+            ai_analyzing: false,
+            ai_scroll: 0,
+            show_ai_insights: false,
         }
     }
 
@@ -165,6 +180,19 @@ impl AppState {
             }
             Message::Quit => {
                 self.running = false;
+            }
+            Message::AiAnalysisComplete(insights) => {
+                self.ai_analyzing = false;
+                self.ai_insights = Some(insights);
+                self.ai_scroll = 0;
+                self.show_ai_insights = true;
+            }
+            Message::AiAnalysisError(err) => {
+                self.ai_analyzing = false;
+                self.popup = Some(PopupState {
+                    title: "AI Analysis Error".to_string(),
+                    body: vec![err],
+                });
             }
         }
     }
