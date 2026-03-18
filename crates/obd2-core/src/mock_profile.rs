@@ -44,6 +44,21 @@ impl MockVehicleProfile {
         }
     }
 
+    pub fn honda_2001() -> Self {
+        Self {
+            name: "2001 Honda Accord Coupe".to_string(),
+            vin: "1HGCG32501A000001".to_string(),
+            idle_rpm_warm: 750.0,
+            idle_rpm_cold: 1200.0,
+            max_rpm: 6100.0,
+            rpm_responsiveness: 0.12,
+            speed_per_rpm: 1.0 / 38.0,
+            warmup_rate: 0.30,
+            normal_coolant_temp: 90.0,
+            voltage: 12.6,
+        }
+    }
+
     pub fn chevy_2004() -> Self {
         Self {
             name: "2004 Chevy 2500HD Duramax".to_string(),

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -476,5 +477,14 @@ impl Obd2Connection for MockObd2 {
     fn adapter_info(&self) -> Option<&AdapterInfo> {
         // Return a static-like mock adapter info
         None
+    }
+
+    fn supported_pids(&self) -> &HashSet<u8> {
+        // Mock supports all PIDs — use a leaked static set so we can return a reference.
+        // This is fine for mock/testing; the set is created once.
+        static ALL_PIDS: std::sync::LazyLock<HashSet<u8>> = std::sync::LazyLock::new(|| {
+            Pid::all_known_codes().into_iter().collect()
+        });
+        &ALL_PIDS
     }
 }

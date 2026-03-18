@@ -1,53 +1,71 @@
 //! Lightweight VIN decoder for when no database match exists.
 //!
 //! Decodes model year from position 10 and manufacturer from the WMI (positions 1-3).
+//! Handles both the current (2010–2039) and previous (1980–2009) 30-year VIN year cycles.
 
 /// Decoded VIN information.
 #[derive(Debug, Clone)]
 pub struct DecodedVin {
+    /// Model year from the current cycle (2010–2039).
     pub year: Option<i32>,
+    /// Model year from the previous cycle (1980–2009), if the code is ambiguous.
+    pub year_alt: Option<i32>,
     pub manufacturer: Option<String>,
 }
 
 /// Decode model year from VIN position 10 (1-indexed).
 ///
-/// Covers 2010–2039 per the standard VIN year encoding:
-/// A=2010 .. H=2017, J=2018 .. N=2022, P=2023, R=2024 .. T=2026,
-/// V=2027 .. Y=2030, 1=2031 .. 9=2039
+/// Returns the current-cycle (2010–2039) year. For pre-2010 vehicles, use
+/// `decode_year_candidates()` which returns both possible years.
 pub fn decode_year(vin: &str) -> Option<i32> {
-    let ch = vin.as_bytes().get(9)?; // position 10, 0-indexed = 9
+    decode_year_candidates(vin).0
+}
+
+/// Decode model year returning both 30-year cycle candidates.
+///
+/// Returns `(current_cycle, previous_cycle)` where:
+/// - current_cycle = 2010–2039
+/// - previous_cycle = 1980–2009
+///
+/// Letters A–Y map to 1980–2000 / 2010–2030 (skipping I, O, Q, U, Z).
+/// Digits 1–9 map to 2001–2009 / 2031–2039.
+pub fn decode_year_candidates(vin: &str) -> (Option<i32>, Option<i32>) {
+    let ch = match vin.as_bytes().get(9) {
+        Some(c) => c,
+        None => return (None, None),
+    };
     match ch {
-        b'A' => Some(2010),
-        b'B' => Some(2011),
-        b'C' => Some(2012),
-        b'D' => Some(2013),
-        b'E' => Some(2014),
-        b'F' => Some(2015),
-        b'G' => Some(2016),
-        b'H' => Some(2017),
-        b'J' => Some(2018),
-        b'K' => Some(2019),
-        b'L' => Some(2020),
-        b'M' => Some(2021),
-        b'N' => Some(2022),
-        b'P' => Some(2023),
-        b'R' => Some(2024),
-        b'S' => Some(2025),
-        b'T' => Some(2026),
-        b'V' => Some(2027),
-        b'W' => Some(2028),
-        b'X' => Some(2029),
-        b'Y' => Some(2030),
-        b'1' => Some(2031),
-        b'2' => Some(2032),
-        b'3' => Some(2033),
-        b'4' => Some(2034),
-        b'5' => Some(2035),
-        b'6' => Some(2036),
-        b'7' => Some(2037),
-        b'8' => Some(2038),
-        b'9' => Some(2039),
-        _ => None,
+        b'A' => (Some(2010), Some(1980)),
+        b'B' => (Some(2011), Some(1981)),
+        b'C' => (Some(2012), Some(1982)),
+        b'D' => (Some(2013), Some(1983)),
+        b'E' => (Some(2014), Some(1984)),
+        b'F' => (Some(2015), Some(1985)),
+        b'G' => (Some(2016), Some(1986)),
+        b'H' => (Some(2017), Some(1987)),
+        b'J' => (Some(2018), Some(1988)),
+        b'K' => (Some(2019), Some(1989)),
+        b'L' => (Some(2020), Some(1990)),
+        b'M' => (Some(2021), Some(1991)),
+        b'N' => (Some(2022), Some(1992)),
+        b'P' => (Some(2023), Some(1993)),
+        b'R' => (Some(2024), Some(1994)),
+        b'S' => (Some(2025), Some(1995)),
+        b'T' => (Some(2026), Some(1996)),
+        b'V' => (Some(2027), Some(1997)),
+        b'W' => (Some(2028), Some(1998)),
+        b'X' => (Some(2029), Some(1999)),
+        b'Y' => (Some(2030), Some(2000)),
+        b'1' => (Some(2031), Some(2001)),
+        b'2' => (Some(2032), Some(2002)),
+        b'3' => (Some(2033), Some(2003)),
+        b'4' => (Some(2034), Some(2004)),
+        b'5' => (Some(2035), Some(2005)),
+        b'6' => (Some(2036), Some(2006)),
+        b'7' => (Some(2037), Some(2007)),
+        b'8' => (Some(2038), Some(2008)),
+        b'9' => (Some(2039), Some(2009)),
+        _ => (None, None),
     }
 }
 
@@ -72,7 +90,8 @@ pub fn decode_manufacturer(vin: &str) -> Option<&'static str> {
         "1C4" | "1J4" | "1J8" => Some("Jeep"),
         // Toyota
         "1NX" | "2T1" | "4T1" | "5TD" | "JTD" | "JTE" | "JTN" => Some("Toyota"),
-        "5J6" | "5J8" | "JHM" => Some("Honda"),
+        // Honda
+        "1HG" | "2HG" | "5J6" | "5J8" | "JHG" | "JHM" | "SHH" => Some("Honda"),
         "JN1" | "JN8" | "1N4" | "1N6" | "5N1" => Some("Nissan"),
         "4S3" | "4S4" | "JF1" | "JF2" => Some("Subaru"),
         "JM1" | "JM3" => Some("Mazda"),
@@ -109,8 +128,10 @@ pub fn decode_manufacturer(vin: &str) -> Option<&'static str> {
 
 /// Decode a VIN into year and manufacturer.
 pub fn decode(vin: &str) -> DecodedVin {
+    let (year, year_alt) = decode_year_candidates(vin);
     DecodedVin {
-        year: decode_year(vin),
+        year,
+        year_alt,
         manufacturer: decode_manufacturer(vin).map(String::from),
     }
 }
@@ -122,19 +143,41 @@ mod tests {
     #[test]
     fn test_decode_year() {
         assert_eq!(decode_year("1G1ZD5ST2LF000000"), Some(2020)); // L = 2020
-                                                                  // WMWRE33546T — position 10 (1-indexed) = '6', which maps to 2036 in the
-                                                                  // 2010+ table. The 30-year VIN cycle means '6' also meant 2006, but our
-                                                                  // decoder only covers the current cycle.
-        assert_eq!(decode_year("WMWRE33546T000001"), Some(2036));
+        assert_eq!(decode_year("WMWRE33546T000001"), Some(2036)); // 6 = 2036 (current cycle)
         assert_eq!(decode_year("SHORT"), None);
         assert_eq!(decode_year("123456789A1234567"), Some(2010)); // A = 2010
+    }
+
+    #[test]
+    fn test_decode_year_candidates() {
+        // '6' → 2036 (current) or 2006 (previous) — the MINI is actually 2006
+        let (current, prev) = decode_year_candidates("WMWRE33546T000001");
+        assert_eq!(current, Some(2036));
+        assert_eq!(prev, Some(2006));
+
+        // '1' → 2031 (current) or 2001 (previous) — the Accord is 2001
+        let (current, prev) = decode_year_candidates("1HGCG32501A000001");
+        assert_eq!(current, Some(2031));
+        assert_eq!(prev, Some(2001));
+
+        // 'L' → 2020 (current) or 1990 (previous)
+        let (current, prev) = decode_year_candidates("1G1ZD5ST2LF000000");
+        assert_eq!(current, Some(2020));
+        assert_eq!(prev, Some(1990));
+
+        // Short VIN
+        assert_eq!(decode_year_candidates("SHORT"), (None, None));
     }
 
     #[test]
     fn test_decode_manufacturer() {
         assert_eq!(decode_manufacturer("1G1ZD5ST2LF000000"), Some("Chevrolet"));
         assert_eq!(decode_manufacturer("WMWRE33546T000001"), Some("MINI"));
-        // Tesla (5YJ) is not in the specific WMI table, but '5' falls back to "US Manufacturer"
+        // Honda — US-built Accord (1HG WMI)
+        assert_eq!(decode_manufacturer("1HGCG32501A000001"), Some("Honda"));
+        // Honda — Alabama plant
+        assert_eq!(decode_manufacturer("5J6YH2H73PL000001"), Some("Honda"));
+        // Tesla (5YJ) falls back to "US Manufacturer"
         assert_eq!(
             decode_manufacturer("5YJSA1E26MF000001"),
             Some("US Manufacturer")
@@ -147,6 +190,13 @@ mod tests {
     fn test_decode_full() {
         let decoded = decode("1G1ZD5ST2LF000000");
         assert_eq!(decoded.year, Some(2020));
+        assert_eq!(decoded.year_alt, Some(1990));
         assert_eq!(decoded.manufacturer.as_deref(), Some("Chevrolet"));
+
+        // Honda Accord 2001
+        let decoded = decode("1HGCG32501A000001");
+        assert_eq!(decoded.year, Some(2031));
+        assert_eq!(decoded.year_alt, Some(2001));
+        assert_eq!(decoded.manufacturer.as_deref(), Some("Honda"));
     }
 }

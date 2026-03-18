@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 
 use super::dtc::Dtc;
@@ -10,6 +12,7 @@ use super::Obd2Connection;
 pub struct Elm327 {
     transport: Box<dyn Transport>,
     adapter_info: Option<AdapterInfo>,
+    supported_pids: HashSet<u8>,
 }
 
 impl Elm327 {
@@ -17,7 +20,42 @@ impl Elm327 {
         Self {
             transport,
             adapter_info: None,
+            supported_pids: HashSet::new(),
         }
+    }
+
+    /// Parse a 4-byte PID support bitmap into a list of supported PID codes.
+    /// `base_pid` is the PID that was queried (0x00, 0x20, or 0x40).
+    /// Bit 31 (MSB of first byte) = base_pid + 1, bit 0 (LSB of last byte) = base_pid + 0x20.
+    pub fn parse_supported_pids(data: &[u8], base_pid: u8) -> Vec<u8> {
+        let mut pids = Vec::new();
+        for (byte_idx, &byte) in data.iter().take(4).enumerate() {
+            for bit in 0..8u8 {
+                if byte & (0x80 >> bit) != 0 {
+                    let pid = base_pid + (byte_idx as u8 * 8) + bit + 1;
+                    pids.push(pid);
+                }
+            }
+        }
+        pids
+    }
+
+    /// Extract the 4 data bytes from a PID support response line.
+    /// Looks for a line matching "41 XX" (where XX is the queried PID) and returns bytes [2..6].
+    fn extract_pid_support_data(resp: &[String], expected_pid: u8) -> Option<[u8; 4]> {
+        let prefix = format!("41 {:02X}", expected_pid);
+        for line in resp {
+            let upper = line.to_uppercase();
+            if upper.starts_with(&prefix) {
+                if let Ok(bytes) = Self::parse_hex_response(&upper) {
+                    // bytes[0]=0x41, bytes[1]=PID, bytes[2..6]=bitmap
+                    if bytes.len() >= 6 {
+                        return Some([bytes[2], bytes[3], bytes[4], bytes[5]]);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Send an AT/OBD command and read response lines until the '>' prompt.
@@ -144,6 +182,39 @@ impl Obd2Connection for Elm327 {
             }
         }
 
+        // Parse PID support bitmaps from the 0100 response
+        if let Some(data) = Self::extract_pid_support_data(&resp, 0x00) {
+            let mut pids: Vec<u8> = Self::parse_supported_pids(&data, 0x00);
+
+            // If PID 0x20 is supported, query the next range
+            if pids.contains(&0x20) {
+                if let Ok(resp_20) = self.send_command("0120").await {
+                    if let Some(data_20) = Self::extract_pid_support_data(&resp_20, 0x20) {
+                        pids.extend(Self::parse_supported_pids(&data_20, 0x20));
+
+                        // If PID 0x40 is supported, query the next range
+                        if pids.contains(&0x40) {
+                            if let Ok(resp_40) = self.send_command("0140").await {
+                                if let Some(data_40) =
+                                    Self::extract_pid_support_data(&resp_40, 0x40)
+                                {
+                                    pids.extend(Self::parse_supported_pids(&data_40, 0x40));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            tracing::info!(
+                target: "obd2::elm327",
+                "Vehicle supports {} PIDs: {:02X?}",
+                pids.len(),
+                pids
+            );
+            self.supported_pids = pids.into_iter().collect();
+        }
+
         tracing::info!(target: "obd2::elm327", "ELM327 initialized successfully");
         Ok(())
     }
@@ -195,6 +266,10 @@ impl Obd2Connection for Elm327 {
 
     fn adapter_info(&self) -> Option<&AdapterInfo> {
         self.adapter_info.as_ref()
+    }
+
+    fn supported_pids(&self) -> &HashSet<u8> {
+        &self.supported_pids
     }
 
     async fn read_vin(&mut self) -> Result<String, Obd2Error> {
@@ -342,5 +417,61 @@ mod tests {
     #[test]
     fn test_parse_hex_response_invalid() {
         assert!(Elm327::parse_hex_response("41 ZZ").is_err());
+    }
+
+    #[test]
+    fn test_parse_supported_pids_typical_precan() {
+        // Typical pre-CAN Honda bitmap: supports PIDs 01,03,04,05,06,07,0C,0D,0E,0F,10,11,13,15,1C,20
+        let pids = Elm327::parse_supported_pids(&[0xBE, 0x1F, 0xA8, 0x13], 0x00);
+        assert!(pids.contains(&0x01)); // bit 31
+        assert!(pids.contains(&0x04)); // Engine Load
+        assert!(pids.contains(&0x05)); // Coolant Temp
+        assert!(pids.contains(&0x0C)); // RPM
+        assert!(pids.contains(&0x0D)); // Speed
+        assert!(pids.contains(&0x11)); // Throttle
+        assert!(pids.contains(&0x20)); // Next range supported
+        assert!(!pids.contains(&0x02)); // not set
+    }
+
+    #[test]
+    fn test_parse_supported_pids_all_set() {
+        let pids = Elm327::parse_supported_pids(&[0xFF, 0xFF, 0xFF, 0xFF], 0x00);
+        assert_eq!(pids.len(), 32);
+        assert!(pids.contains(&0x01));
+        assert!(pids.contains(&0x20));
+    }
+
+    #[test]
+    fn test_parse_supported_pids_none_set() {
+        let pids = Elm327::parse_supported_pids(&[0x00, 0x00, 0x00, 0x00], 0x00);
+        assert!(pids.is_empty());
+    }
+
+    #[test]
+    fn test_parse_supported_pids_range_21_40() {
+        // base_pid = 0x20 means PIDs 0x21 through 0x40
+        let pids = Elm327::parse_supported_pids(&[0x80, 0x00, 0x00, 0x01], 0x20);
+        assert_eq!(pids, vec![0x21, 0x40]);
+    }
+
+    #[test]
+    fn test_extract_pid_support_data() {
+        let resp = vec!["41 00 BE 1F A8 13".to_string()];
+        let data = Elm327::extract_pid_support_data(&resp, 0x00);
+        assert_eq!(data, Some([0xBE, 0x1F, 0xA8, 0x13]));
+    }
+
+    #[test]
+    fn test_extract_pid_support_data_no_match() {
+        let resp = vec!["41 20 BE 1F A8 13".to_string()];
+        let data = Elm327::extract_pid_support_data(&resp, 0x00);
+        assert_eq!(data, None);
+    }
+
+    #[test]
+    fn test_extract_pid_support_data_too_short() {
+        let resp = vec!["41 00 BE 1F".to_string()];
+        let data = Elm327::extract_pid_support_data(&resp, 0x00);
+        assert_eq!(data, None);
     }
 }

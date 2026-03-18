@@ -16,6 +16,8 @@ pub use dtc::Dtc;
 pub use pid::Pid;
 pub use types::{AdapterInfo, Obd2Error, PidReading, VehicleData};
 
+use std::collections::HashSet;
+
 use async_trait::async_trait;
 
 /// Trait abstracting OBD2 communication — real ELM327 or mock.
@@ -38,4 +40,8 @@ pub trait Obd2Connection: Send {
 
     /// Return adapter chipset and capability info, if detected during init.
     fn adapter_info(&self) -> Option<&AdapterInfo>;
+
+    /// PIDs the vehicle reported as supported (via Mode 01 PID 00/20/40 bitmaps).
+    /// Empty set means the bitmap was not read — callers should try all PIDs.
+    fn supported_pids(&self) -> &HashSet<u8>;
 }

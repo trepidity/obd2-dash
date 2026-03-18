@@ -85,6 +85,42 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         max_torque_nm: Some(353.0), // 260 lb-ft
     })?;
 
+    // Honda F23A1 — 2.3L SOHC VTEC I4 (Accord)
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Honda".to_string(),
+        family_code: "F23A1".to_string(),
+        displacement_l: 2.3,
+        cylinders: 4,
+        layout: "I4".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(9.3),
+        redline_rpm: Some(6100),
+        idle_rpm_cold: Some(1200),
+        idle_rpm_warm: Some(750),
+        max_power_kw: Some(112.0),  // 150 hp
+        max_torque_nm: Some(207.0), // 152 lb-ft
+    })?;
+
+    // Honda J30A1 — 3.0L SOHC VTEC V6 (Accord V6)
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Honda".to_string(),
+        family_code: "J30A1".to_string(),
+        displacement_l: 3.0,
+        cylinders: 6,
+        layout: "V6".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(9.4),
+        redline_rpm: Some(6200),
+        idle_rpm_cold: Some(1200),
+        idle_rpm_warm: Some(700),
+        max_power_kw: Some(149.0),  // 200 hp
+        max_torque_nm: Some(268.0), // 197 lb-ft
+    })?;
+
     Ok(())
 }
 
@@ -102,6 +138,9 @@ fn seed_vehicles(db: &Database) -> Result<()> {
     let lsy_id = db
         .get_engine_family_code_id("LSY")?
         .expect("LSY should be seeded");
+    let f23a1_id = db
+        .get_engine_family_code_id("F23A1")?
+        .expect("F23A1 should be seeded");
 
     // 2006 MINI Cooper S
     db.upsert_vehicle(&VehicleInfo {
@@ -164,6 +203,22 @@ fn seed_vehicles(db: &Database) -> Result<()> {
         drive_type: Some("FWD".to_string()),
         fuel_type: Some("Gasoline".to_string()),
         displacement_l: Some(2.0),
+        cylinders: Some(4),
+    })?;
+
+    // 2001 Honda Accord Coupe (2.3L I4 F23A1)
+    db.upsert_vehicle(&VehicleInfo {
+        vin: "1HGCG32501A000001".to_string(),
+        year: Some(2001),
+        make: Some("Honda".to_string()),
+        model: Some("Accord".to_string()),
+        trim: Some("EX Coupe".to_string()),
+        engine_family_id: Some(f23a1_id),
+        engine_family_code: Some("F23A1".to_string()),
+        transmission_type: Some("Automatic 4-speed".to_string()),
+        drive_type: Some("FWD".to_string()),
+        fuel_type: Some("Gasoline".to_string()),
+        displacement_l: Some(2.3),
         cylinders: Some(4),
     })?;
 
@@ -667,11 +722,40 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
         },
     ];
 
+    // F23A1 (Honda Accord 2.3L) — naturally aspirated, moderate redline
+    let f23a1_overrides = [
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "F23A1".to_string(),
+            pid_code: 0x0C, // RPM
+            min_value: None,
+            max_value: None,
+            low_warning: Some(500.0),
+            high_warning: Some(5500.0),
+            low_critical: Some(350.0),
+            high_critical: Some(6100.0),
+            notes: Some("F23A1 redline 6100 RPM".to_string()),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "F23A1".to_string(),
+            pid_code: 0x05, // Coolant temp
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(102.0),
+            low_critical: Some(-20.0),
+            high_critical: Some(112.0),
+            notes: Some("F23A1 NA coolant range".to_string()),
+        },
+    ];
+
     for t in w11_overrides
         .iter()
         .chain(lly_overrides.iter())
         .chain(lfv_overrides.iter())
         .chain(lsy_overrides.iter())
+        .chain(f23a1_overrides.iter())
     {
         db.upsert_pid_threshold(t)?;
     }

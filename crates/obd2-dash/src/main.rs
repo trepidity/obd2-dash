@@ -44,7 +44,7 @@ struct Cli {
     #[arg(long)]
     mock: bool,
 
-    /// Mock vehicle profile: mini, chevy, or generic (default)
+    /// Mock vehicle profile: mini, chevy, honda, or generic (default)
     #[arg(long, default_value = "generic")]
     mock_vehicle: String,
 
@@ -121,6 +121,7 @@ async fn main() -> Result<()> {
     let mock_profile = match cli.mock_vehicle.to_lowercase().as_str() {
         "mini" => MockVehicleProfile::mini_2006(),
         "chevy" | "duramax" => MockVehicleProfile::chevy_2004(),
+        "honda" | "accord" => MockVehicleProfile::honda_2001(),
         _ => MockVehicleProfile::generic(),
     };
 
@@ -244,12 +245,16 @@ async fn main() -> Result<()> {
                         }
                     }
 
-                    // Poll loop
+                    // Poll loop — only query PIDs the vehicle supports
+                    let supported = conn.supported_pids().clone();
                     let mut interval = tokio::time::interval(Duration::from_millis(poll_ms));
                     let mut voltage_counter = 0u32;
                     loop {
                         interval.tick().await;
                         for &pid in Pid::all() {
+                            if !supported.is_empty() && !supported.contains(&pid.code()) {
+                                continue;
+                            }
                             match conn.query_pid(pid).await {
                                 Ok(reading) => {
                                     if tx.send(Message::PidUpdate(pid, reading)).is_err() {
@@ -660,14 +665,22 @@ fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Data
     // 3. Try basic VIN decode (year + manufacturer from VIN characters)
     let decoded = obd2_core::vin::decode(vin);
     if decoded.year.is_some() || decoded.manufacturer.is_some() {
+        // VIN year codes repeat on a 30-year cycle. If the current-cycle year
+        // is in the future, prefer the previous-cycle year (e.g. '1' → 2001
+        // not 2031). Otherwise keep the current-cycle year (e.g. 'L' → 2020).
+        let best_year = match (decoded.year, decoded.year_alt) {
+            (Some(new), Some(old)) if new > 2026 => Some(old),
+            (y, _) => y,
+        };
         tracing::info!(
-            "VIN decoded: year={:?}, manufacturer={:?}",
-            decoded.year,
+            "VIN decoded: year={:?} (alt={:?}), manufacturer={:?}",
+            best_year,
+            decoded.year_alt,
             decoded.manufacturer
         );
         let info = obd2_db::models::VehicleInfo {
             vin: vin.to_string(),
-            year: decoded.year,
+            year: best_year,
             make: decoded.manufacturer,
             model: None,
             trim: None,
@@ -1492,7 +1505,8 @@ fn spawn_obd2_poll(
             }
         }
 
-        // Poll loop
+        // Poll loop — only query PIDs the vehicle supports
+        let supported = conn.supported_pids().clone();
         let mut interval = tokio::time::interval(Duration::from_millis(poll_ms));
         let mut voltage_counter = 0u32;
 
@@ -1500,6 +1514,9 @@ fn spawn_obd2_poll(
             interval.tick().await;
 
             for &pid in Pid::all() {
+                if !supported.is_empty() && !supported.contains(&pid.code()) {
+                    continue;
+                }
                 match conn.query_pid(pid).await {
                     Ok(reading) => {
                         if tx.send(Message::PidUpdate(pid, reading)).is_err() {
@@ -1694,7 +1711,8 @@ fn spawn_connect_and_poll(
             }
         }
 
-        // Poll loop
+        // Poll loop — only query PIDs the vehicle supports
+        let supported = conn.supported_pids().clone();
         let mut interval = tokio::time::interval(Duration::from_millis(poll_ms));
         let mut voltage_counter = 0u32;
 
@@ -1702,6 +1720,9 @@ fn spawn_connect_and_poll(
             interval.tick().await;
 
             for &pid in Pid::all() {
+                if !supported.is_empty() && !supported.contains(&pid.code()) {
+                    continue;
+                }
                 match conn.query_pid(pid).await {
                     Ok(reading) => {
                         if tx.send(Message::PidUpdate(pid, reading)).is_err() {
