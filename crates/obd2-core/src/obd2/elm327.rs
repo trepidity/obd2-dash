@@ -60,11 +60,11 @@ impl Elm327 {
 
     /// Send an AT/OBD command and read response lines until the '>' prompt.
     async fn send_command(&mut self, cmd: &str) -> Result<Vec<String>, Obd2Error> {
-        tracing::debug!(target: "obd2::elm327", "TX cmd: {}", cmd);
+        tracing::trace!(target: "obd2::elm327", "TX cmd: {}", cmd);
         self.transport.send(format!("{}\r", cmd).as_bytes()).await?;
 
         let lines = self.read_until_prompt().await?;
-        tracing::debug!(target: "obd2::elm327", "RX {} lines: {:?}", lines.len(), lines);
+        tracing::trace!(target: "obd2::elm327", "RX {} lines: {:?}", lines.len(), lines);
         Ok(lines)
     }
 
@@ -220,7 +220,7 @@ impl Obd2Connection for Elm327 {
     }
 
     async fn query_pid(&mut self, pid: Pid) -> Result<PidReading, Obd2Error> {
-        tracing::debug!(target: "obd2::elm327", "Query PID {:?} (0x{:02X})", pid, pid.code());
+        tracing::trace!(target: "obd2::elm327", "Query PID {:?} (0x{:02X})", pid, pid.code());
         let resp = self.send_command(&pid.command()).await?;
 
         // Find the response line starting with the expected service+PID bytes
@@ -229,7 +229,7 @@ impl Obd2Connection for Elm327 {
         for line in &resp {
             let upper = line.to_uppercase();
             if upper.contains("NO DATA") {
-                tracing::debug!(target: "obd2::elm327", "PID {:?}: NO DATA", pid);
+                tracing::trace!(target: "obd2::elm327", "PID {:?}: NO DATA", pid);
                 return Err(Obd2Error::NoData);
             }
             if upper.starts_with(&expected_prefix) {
@@ -240,7 +240,7 @@ impl Obd2Connection for Elm327 {
                 }
                 let mut reading = pid.parse_value(&bytes[2..])?;
                 reading.raw_bytes = Some(bytes[2..].to_vec());
-                tracing::debug!(target: "obd2::elm327", "PID {:?} = {:.2} {}", pid, reading.value, reading.unit);
+                tracing::trace!(target: "obd2::elm327", "PID {:?} = {:.2} {}", pid, reading.value, reading.unit);
                 return Ok(reading);
             }
         }
@@ -257,7 +257,7 @@ impl Obd2Connection for Elm327 {
             // Response is like "12.4V" or "12.4"
             let cleaned = line.replace(['V', 'v'], "");
             if let Ok(v) = cleaned.trim().parse::<f64>() {
-                tracing::debug!(target: "obd2::elm327", "Voltage: {:.1}V", v);
+                tracing::trace!(target: "obd2::elm327", "Voltage: {:.1}V", v);
                 return Ok(v);
             }
         }
@@ -297,7 +297,7 @@ impl Obd2Connection for Elm327 {
         for line in &resp {
             let upper = line.to_uppercase();
             if upper.contains("NO DATA") || upper.contains("ERROR") {
-                tracing::debug!(target: "obd2::elm327", "VIN: NO DATA");
+                tracing::warn!(target: "obd2::elm327", "VIN: NO DATA");
                 return Err(Obd2Error::NoData);
             }
 

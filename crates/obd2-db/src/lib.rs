@@ -90,14 +90,17 @@ pub struct Database {
 impl Database {
     /// Open (or create) a SQLite database at the given path and run migrations.
     pub fn open(path: &Path) -> Result<Self> {
+        tracing::info!(target: "obd2::db", "Opening database at {}", path.display());
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
+        tracing::debug!(target: "obd2::db", "Database schema initialized");
         Ok(Self { conn })
     }
 
     /// Open an in-memory database (for testing).
     pub fn open_in_memory() -> Result<Self> {
+        tracing::debug!(target: "obd2::db", "Opening in-memory database");
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA)?;
@@ -107,6 +110,7 @@ impl Database {
     /// Insert or update an engine family. Returns the row id.
     /// Uses ON CONFLICT to preserve the id (avoiding FK violations from vehicles).
     pub fn upsert_engine_family(&self, ef: &EngineFamily) -> Result<i64> {
+        tracing::debug!(target: "obd2::db", "Upsert engine family: {} ({}L {})", ef.family_code, ef.displacement_l, ef.fuel_type);
         self.conn.execute(
             "INSERT INTO engine_families \
              (manufacturer, family_code, displacement_l, cylinders, layout, aspiration, \
@@ -147,6 +151,7 @@ impl Database {
 
     /// Insert or replace a vehicle record.
     pub fn upsert_vehicle(&self, v: &VehicleInfo) -> Result<()> {
+        tracing::debug!(target: "obd2::db", "Upsert vehicle: VIN={} {}", v.vin, v.display_name());
         self.conn.execute(
             "INSERT OR REPLACE INTO vehicles \
              (vin, year, make, model, trim, engine_family_id, \
@@ -354,12 +359,20 @@ impl Database {
         engine_family_code: Option<&str>,
         pid_codes: &[u8],
     ) -> Result<HashMap<u8, ResolvedThreshold>> {
+        tracing::debug!(
+            target: "obd2::db",
+            "Resolving thresholds for {} PIDs (vin={:?}, engine_family={:?})",
+            pid_codes.len(),
+            vin,
+            engine_family_code,
+        );
         let mut map = HashMap::new();
         for &code in pid_codes {
             if let Some(t) = self.resolve_threshold(code, vin, engine_family_code)? {
                 map.insert(code, t);
             }
         }
+        tracing::info!(target: "obd2::db", "Resolved {} thresholds", map.len());
         Ok(map)
     }
 

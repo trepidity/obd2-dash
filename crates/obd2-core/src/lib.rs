@@ -17,7 +17,9 @@ pub use obd2::dtc::DTC_SCENARIO_COUNT;
 pub use obd2::mock::MockObd2;
 pub use obd2::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
 pub use obd2::vin;
-pub use obd2::{AdapterInfo, Dtc, Obd2Connection, Obd2Error, Pid, PidReading, VehicleData};
+pub use obd2::{
+    dtc_description, AdapterInfo, Dtc, Obd2Connection, Obd2Error, Pid, PidReading, VehicleData,
+};
 pub use recording::storage::{StorageConfig, StorageManager};
 pub use recording::RecordingState;
 pub use state::{ConnectionState, DomainMessage, DomainState, SpeedUnit, TemperatureUnit};

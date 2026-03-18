@@ -12,7 +12,7 @@ pub mod transport;
 pub mod types;
 pub mod vin;
 
-pub use dtc::Dtc;
+pub use dtc::{dtc_description, Dtc};
 pub use pid::Pid;
 pub use types::{AdapterInfo, Obd2Error, PidReading, VehicleData};
 

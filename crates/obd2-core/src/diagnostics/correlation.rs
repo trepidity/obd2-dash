@@ -518,7 +518,12 @@ static DTC_CORRELATIONS: &[DtcCorrelation] = &[
 
 /// Look up correlated PIDs for a DTC code.
 /// Tries exact match first, then longest prefix match.
-fn get_correlated_pids(dtc_code: &str) -> &'static [Pid] {
+/// Look up PIDs correlated with a DTC code.
+///
+/// Returns the PIDs that are most relevant for diagnosing the given trouble code.
+/// Matches exact codes first, then falls back to prefix matching (e.g., "P04" matches
+/// all catalyst-related codes).
+pub fn get_correlated_pids(dtc_code: &str) -> &'static [Pid] {
     // Exact match
     for entry in DTC_CORRELATIONS {
         if entry.pattern == dtc_code {

@@ -422,22 +422,12 @@ fn seed_engine_families(db: &Database) -> Result<()> {
 }
 
 fn seed_vehicles(db: &Database) -> Result<()> {
-    // Look up engine family IDs
-    let w11_id = db
-        .get_engine_family_code_id("W11B16")?
-        .expect("W11B16 should be seeded");
-    let lly_id = db
-        .get_engine_family_code_id("LLY")?
-        .expect("LLY should be seeded");
-    let lfv_id = db
-        .get_engine_family_code_id("LFV")?
-        .expect("LFV should be seeded");
-    let lsy_id = db
-        .get_engine_family_code_id("LSY")?
-        .expect("LSY should be seeded");
-    let f23a1_id = db
-        .get_engine_family_code_id("F23A1")?
-        .expect("F23A1 should be seeded");
+    // Look up engine family IDs — return error instead of panicking if missing
+    let w11_id = require_engine_family(db, "W11B16")?;
+    let lly_id = require_engine_family(db, "LLY")?;
+    let lfv_id = require_engine_family(db, "LFV")?;
+    let lsy_id = require_engine_family(db, "LSY")?;
+    let f23a1_id = require_engine_family(db, "F23A1")?;
 
     // 2006 MINI Cooper S
     db.upsert_vehicle(&VehicleInfo {
@@ -1220,6 +1210,12 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
         db.upsert_pid_threshold(t)?;
     }
     Ok(())
+}
+
+/// Look up an engine family ID by code, returning a descriptive error instead of panicking.
+fn require_engine_family(db: &Database, code: &str) -> Result<i64> {
+    db.get_engine_family_code_id(code)?
+        .ok_or_else(|| anyhow::anyhow!("engine family '{code}' not found — was seed_engine_families() called first?"))
 }
 
 /// Generate RPM + coolant threshold overrides for an engine family.

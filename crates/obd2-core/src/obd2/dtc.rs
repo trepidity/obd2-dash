@@ -86,6 +86,9 @@ impl Dtc {
 }
 
 /// Look up a human-readable description for a DTC code.
+///
+/// Returns a generic description if the specific code is not in the database.
+/// Covers ~180 common OBD-II codes (powertrain, chassis, body, network).
 pub fn dtc_description(code: &str) -> &'static str {
     match code {
         // VVT / camshaft

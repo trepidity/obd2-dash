@@ -1,3 +1,4 @@
+use std::fmt;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -10,12 +11,24 @@ pub enum AiProvider {
     OpenAI,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AiConfig {
     pub provider: AiProvider,
     pub api_key: String,
     pub model: Option<String>,
     pub max_tokens: Option<u32>,
+}
+
+// Custom Debug impl that redacts the API key
+impl fmt::Debug for AiConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AiConfig")
+            .field("provider", &self.provider)
+            .field("api_key", &"[REDACTED]")
+            .field("model", &self.model)
+            .field("max_tokens", &self.max_tokens)
+            .finish()
+    }
 }
 
 impl AiConfig {

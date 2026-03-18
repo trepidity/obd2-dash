@@ -107,33 +107,56 @@ impl NhtsaVehicle {
 /// and `Err` on network/parse failures.
 pub async fn decode_vin(vin: &str) -> Result<Option<NhtsaVehicle>, String> {
     let url = format!("{}/{}?format=json", API_BASE, vin);
+    tracing::debug!(target: "obd2::nhtsa", "Requesting VIN decode: {}", vin);
 
     let client = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
+        .map_err(|e| {
+            tracing::error!(target: "obd2::nhtsa", "Failed to build HTTP client: {}", e);
+            format!("HTTP client error: {e}")
+        })?;
 
     let resp = client
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("NHTSA request failed: {e}"))?;
+        .map_err(|e| {
+            tracing::warn!(target: "obd2::nhtsa", "NHTSA request failed for {}: {}", vin, e);
+            format!("NHTSA request failed: {e}")
+        })?;
 
     if !resp.status().is_success() {
+        tracing::warn!(target: "obd2::nhtsa", "NHTSA returned status {} for VIN {}", resp.status(), vin);
         return Err(format!("NHTSA returned status {}", resp.status()));
     }
 
     let body: NhtsaResponse = resp
         .json()
         .await
-        .map_err(|e| format!("NHTSA parse error: {e}"))?;
+        .map_err(|e| {
+            tracing::warn!(target: "obd2::nhtsa", "Failed to parse NHTSA response for {}: {}", vin, e);
+            format!("NHTSA parse error: {e}")
+        })?;
 
     let vehicle = parse_nhtsa_results(&body.results);
 
     // Only return if we got at least make + model
     if vehicle.make.is_some() && vehicle.model.is_some() {
+        tracing::info!(
+            target: "obd2::nhtsa",
+            "Decoded VIN {}: {} {} {} ({:?}, {:?}L, {}cyl)",
+            vin,
+            vehicle.year.unwrap_or(0),
+            vehicle.make.as_deref().unwrap_or("?"),
+            vehicle.model.as_deref().unwrap_or("?"),
+            vehicle.fuel_type.as_deref().unwrap_or("?"),
+            vehicle.displacement_l.unwrap_or(0.0),
+            vehicle.cylinders.unwrap_or(0),
+        );
         Ok(Some(vehicle))
     } else {
+        tracing::info!(target: "obd2::nhtsa", "NHTSA returned no useful data for VIN {}", vin);
         Ok(None)
     }
 }
