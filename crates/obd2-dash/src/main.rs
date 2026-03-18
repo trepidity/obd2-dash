@@ -341,6 +341,7 @@ async fn main() -> Result<()> {
         run_headless(
             cli.poll_ms,
             &mut obd_rx,
+            obd_tx.clone(),
             obd_handle.expect("headless mode requires --mock, --port, or --ble"),
             vehicle_info,
             thresholds,
@@ -449,7 +450,10 @@ async fn run_tui(
             msg = obd_rx.recv(), if !state.domain.recording.is_replaying() => {
                 match msg {
                     Some(Message::VinDetected(vin)) => {
-                        handle_vin_detected(&mut state, &vin, &database);
+                        handle_vin_detected(&mut state, &vin, &database, &obd_tx);
+                    }
+                    Some(Message::NhtsaResult(vin, nhtsa)) => {
+                        handle_nhtsa_result(&mut state, &vin, nhtsa, &database);
                     }
                     Some(m) => state.update(m),
                     None => break,
@@ -546,6 +550,7 @@ async fn run_tui(
 async fn run_headless(
     poll_ms: u64,
     obd_rx: &mut mpsc::UnboundedReceiver<Message>,
+    obd_tx: mpsc::UnboundedSender<Message>,
     obd_handle: tokio::task::JoinHandle<()>,
     vehicle_info: Option<obd2_db::models::VehicleInfo>,
     thresholds: std::collections::HashMap<u8, obd2_db::models::ResolvedThreshold>,
@@ -572,7 +577,10 @@ async fn run_headless(
             msg = obd_rx.recv() => {
                 match msg {
                     Some(Message::VinDetected(vin)) => {
-                        handle_vin_detected(&mut state, &vin, &database);
+                        handle_vin_detected(&mut state, &vin, &database, &obd_tx);
+                    }
+                    Some(Message::NhtsaResult(vin, nhtsa)) => {
+                        handle_nhtsa_result(&mut state, &vin, nhtsa, &database);
                     }
                     Some(m) => state.update(m),
                     None => break,
@@ -625,7 +633,12 @@ async fn run_headless(
 }
 
 /// Handle a VIN detected from the OBD2 connection — look up vehicle in database.
-fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Database) {
+fn handle_vin_detected(
+    state: &mut AppState,
+    vin: &str,
+    database: &obd2_db::Database,
+    tx: &mpsc::UnboundedSender<Message>,
+) {
     tracing::info!("VIN detected: {}", vin);
 
     // 1. Try exact VIN match
@@ -662,43 +675,34 @@ fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Data
         }
     }
 
-    // 3. Try NHTSA VIN decoder API (async — run in blocking context since
-    //    handle_vin_detected is called from sync code, but we can use a oneshot)
-    tracing::info!("Attempting NHTSA VIN lookup for {}", vin);
+    // 3. Spawn async NHTSA VIN lookup — result arrives later via NhtsaResult message.
+    //    Apply offline fallback immediately so the UI has something while we wait.
+    tracing::info!("Spawning NHTSA VIN lookup for {}", vin);
     let vin_owned = vin.to_string();
-    let nhtsa_result = std::thread::spawn(move || {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .ok()
-            .and_then(|rt| rt.block_on(obd2_core::nhtsa::decode_vin(&vin_owned)).ok())
-            .flatten()
-    })
-    .join()
-    .ok()
-    .flatten();
-
-    if let Some(nhtsa) = nhtsa_result {
-        tracing::info!(
-            "NHTSA lookup: {} {} {} ({:?} {:?}L {}cyl, category={})",
-            nhtsa.year.unwrap_or(0),
-            nhtsa.make.as_deref().unwrap_or("?"),
-            nhtsa.model.as_deref().unwrap_or("?"),
-            nhtsa.fuel_type,
-            nhtsa.displacement_l,
-            nhtsa.cylinders.unwrap_or(0),
-            nhtsa.threshold_category(),
-        );
-        let info = nhtsa.to_vehicle_info(vin);
-
-        // Cache in DB so we never need to look this VIN up again
-        if let Err(e) = database.upsert_vehicle(&info) {
-            tracing::warn!("Failed to cache NHTSA vehicle: {}", e);
+    let tx_clone = tx.clone();
+    tokio::spawn(async move {
+        match obd2_core::nhtsa::decode_vin(&vin_owned).await {
+            Ok(Some(nhtsa)) => {
+                tracing::info!(
+                    "NHTSA lookup: {} {} {} ({:?} {:?}L {}cyl, category={})",
+                    nhtsa.year.unwrap_or(0),
+                    nhtsa.make.as_deref().unwrap_or("?"),
+                    nhtsa.model.as_deref().unwrap_or("?"),
+                    nhtsa.fuel_type,
+                    nhtsa.displacement_l,
+                    nhtsa.cylinders.unwrap_or(0),
+                    nhtsa.threshold_category(),
+                );
+                let _ = tx_clone.send(Message::NhtsaResult(vin_owned, nhtsa));
+            }
+            Ok(None) => {
+                tracing::info!("NHTSA returned no data for VIN {}", vin_owned);
+            }
+            Err(e) => {
+                tracing::info!("NHTSA lookup failed for {}: {}", vin_owned, e);
+            }
         }
-        apply_vehicle_info(state, info, database);
-        return;
-    }
-    tracing::info!("NHTSA lookup unavailable, falling back to offline VIN decode");
+    });
 
     // 4. Offline fallback — basic VIN decode (year + manufacturer from characters)
     //    Do NOT cache this since it has limited info that would mask a future NHTSA lookup.
@@ -758,6 +762,24 @@ fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Data
 }
 
 /// Apply a fully-identified vehicle: resolve thresholds, configure fuel economy, set state.
+/// Handle a successful NHTSA VIN decode — cache the result and apply full vehicle info.
+fn handle_nhtsa_result(
+    state: &mut AppState,
+    vin: &str,
+    nhtsa: obd2_core::nhtsa::NhtsaVehicle,
+    database: &obd2_db::Database,
+) {
+    let info = nhtsa.to_vehicle_info(vin);
+
+    // Cache in DB so we never need to look this VIN up again
+    if let Err(e) = database.upsert_vehicle(&info) {
+        tracing::warn!("Failed to cache NHTSA vehicle: {}", e);
+    }
+
+    tracing::info!("Applying NHTSA vehicle info: {}", info.display_name());
+    apply_vehicle_info(state, info, database);
+}
+
 fn apply_vehicle_info(
     state: &mut AppState,
     info: obd2_db::models::VehicleInfo,

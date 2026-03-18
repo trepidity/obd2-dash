@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
 use obd2_core::ai::{AiConfig, AiInsights};
+use obd2_core::nhtsa::NhtsaVehicle;
 use obd2_core::{
     AdapterInfo, ConnectionState, DeviceKind, DiscoveredDevice, DomainMessage, DomainState, Dtc,
     Pid, PidReading, ScanEvent,
@@ -26,6 +27,8 @@ pub enum Message {
     StartConnect(DeviceKind),
     Tick,
     Quit,
+    // Vehicle identification
+    NhtsaResult(String, NhtsaVehicle),
     // AI analysis
     AiAnalysisComplete(AiInsights),
     AiAnalysisError(String),
@@ -151,8 +154,8 @@ impl AppState {
                 self.domain.update(DomainMessage::Error(e));
             }
             // UI-only messages handled here
-            Message::VinDetected(_) => {
-                // Handled in the main event loop (triggers database lookup)
+            Message::VinDetected(_) | Message::NhtsaResult(..) => {
+                // Handled in the main event loop (triggers database / NHTSA lookup)
             }
             Message::DeviceFound(dev) => {
                 // Deduplicate by kind
