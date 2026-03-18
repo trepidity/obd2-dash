@@ -121,6 +121,303 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         max_torque_nm: Some(268.0), // 197 lb-ft
     })?;
 
+    // ── Ford Super Duty engines ─────────────────────────────────────────
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Ford".to_string(),
+        family_code: "Triton-5.4".to_string(),
+        displacement_l: 5.4,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(9.8),
+        redline_rpm: Some(5500),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(224.0),  // 300 hp
+        max_torque_nm: Some(488.0), // 360 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Ford".to_string(),
+        family_code: "Triton-V10".to_string(),
+        displacement_l: 6.8,
+        cylinders: 10,
+        layout: "V10".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(9.2),
+        redline_rpm: Some(5200),
+        idle_rpm_cold: Some(850),
+        idle_rpm_warm: Some(625),
+        max_power_kw: Some(270.0),  // 362 hp
+        max_torque_nm: Some(620.0), // 457 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Ford".to_string(),
+        family_code: "Boss-6.2".to_string(),
+        displacement_l: 6.2,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(9.8),
+        redline_rpm: Some(5500),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(287.0),  // 385 hp
+        max_torque_nm: Some(549.0), // 405 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Ford".to_string(),
+        family_code: "Godzilla-7.3".to_string(),
+        displacement_l: 7.3,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(10.5),
+        redline_rpm: Some(5500),
+        idle_rpm_cold: Some(850),
+        idle_rpm_warm: Some(625),
+        max_power_kw: Some(321.0),  // 430 hp
+        max_torque_nm: Some(644.0), // 475 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Ford".to_string(),
+        family_code: "PS-6.0".to_string(),
+        displacement_l: 6.0,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(18.0),
+        redline_rpm: Some(3300),
+        idle_rpm_cold: Some(850),
+        idle_rpm_warm: Some(625),
+        max_power_kw: Some(242.0),  // 325 hp
+        max_torque_nm: Some(813.0), // 600 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Ford".to_string(),
+        family_code: "PS-6.4".to_string(),
+        displacement_l: 6.4,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(17.5),
+        redline_rpm: Some(3300),
+        idle_rpm_cold: Some(850),
+        idle_rpm_warm: Some(625),
+        max_power_kw: Some(261.0),  // 350 hp
+        max_torque_nm: Some(881.0), // 650 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Ford".to_string(),
+        family_code: "PS-6.7".to_string(),
+        displacement_l: 6.7,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(16.2),
+        redline_rpm: Some(3400),
+        idle_rpm_cold: Some(800),
+        idle_rpm_warm: Some(600),
+        max_power_kw: Some(354.0),  // 475 hp (2024+)
+        max_torque_nm: Some(1424.0), // 1050 lb-ft
+    })?;
+
+    // ── Chevy/GMC HD engines ────────────────────────────────────────────
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM".to_string(),
+        family_code: "Vortec-6.0".to_string(),
+        displacement_l: 6.0,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(9.4),
+        redline_rpm: Some(5600),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(268.0),  // 360 hp
+        max_torque_nm: Some(515.0), // 380 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM".to_string(),
+        family_code: "L8T".to_string(),
+        displacement_l: 6.6,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(10.8),
+        redline_rpm: Some(5600),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(299.0),  // 401 hp
+        max_torque_nm: Some(623.0), // 464 lb-ft
+    })?;
+
+    // LLY is already seeded above — add the other Duramax generations:
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM/Isuzu".to_string(),
+        family_code: "LBZ".to_string(),
+        displacement_l: 6.6,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(17.5),
+        redline_rpm: Some(3200),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(268.0),  // 360 hp
+        max_torque_nm: Some(881.0), // 650 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM/Isuzu".to_string(),
+        family_code: "LMM".to_string(),
+        displacement_l: 6.6,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(17.5),
+        redline_rpm: Some(3200),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(272.0),  // 365 hp
+        max_torque_nm: Some(895.0), // 660 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM".to_string(),
+        family_code: "LML".to_string(),
+        displacement_l: 6.6,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(16.0),
+        redline_rpm: Some(3200),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(296.0),  // 397 hp
+        max_torque_nm: Some(1037.0), // 765 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "GM".to_string(),
+        family_code: "L5P".to_string(),
+        displacement_l: 6.6,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(16.0),
+        redline_rpm: Some(3200),
+        idle_rpm_cold: Some(850),
+        idle_rpm_warm: Some(625),
+        max_power_kw: Some(350.0),  // 470 hp (2024+)
+        max_torque_nm: Some(1234.0), // 910 lb-ft
+    })?;
+
+    // ── RAM HD engines ──────────────────────────────────────────────────
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Chrysler".to_string(),
+        family_code: "Hemi-5.7".to_string(),
+        displacement_l: 5.7,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(10.5),
+        redline_rpm: Some(5600),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(680),
+        max_power_kw: Some(286.0),  // 383 hp
+        max_torque_nm: Some(529.0), // 390 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Chrysler".to_string(),
+        family_code: "Hemi-6.4".to_string(),
+        displacement_l: 6.4,
+        cylinders: 8,
+        layout: "V8".to_string(),
+        aspiration: "Natural".to_string(),
+        fuel_type: "Gasoline".to_string(),
+        compression_ratio: Some(10.9),
+        redline_rpm: Some(5600),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(680),
+        max_power_kw: Some(306.0),  // 410 hp
+        max_torque_nm: Some(582.0), // 429 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Cummins".to_string(),
+        family_code: "ISB-5.9".to_string(),
+        displacement_l: 5.9,
+        cylinders: 6,
+        layout: "I6".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(17.2),
+        redline_rpm: Some(3200),
+        idle_rpm_cold: Some(900),
+        idle_rpm_warm: Some(650),
+        max_power_kw: Some(242.0),  // 325 hp
+        max_torque_nm: Some(813.0), // 600 lb-ft
+    })?;
+
+    db.upsert_engine_family(&EngineFamily {
+        id: None,
+        manufacturer: "Cummins".to_string(),
+        family_code: "ISB-6.7".to_string(),
+        displacement_l: 6.7,
+        cylinders: 6,
+        layout: "I6".to_string(),
+        aspiration: "Turbocharged".to_string(),
+        fuel_type: "Diesel".to_string(),
+        compression_ratio: Some(16.2),
+        redline_rpm: Some(3200),
+        idle_rpm_cold: Some(850),
+        idle_rpm_warm: Some(625),
+        max_power_kw: Some(313.0),  // 420 hp (2024+)
+        max_torque_nm: Some(1356.0), // 1000 lb-ft
+    })?;
+
     Ok(())
 }
 
@@ -750,16 +1047,215 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
         },
     ];
 
+    // ── Per-engine overrides (generated via helper) ──────────────────────
+
+    // Ford gas
+    let triton54 = rpm_coolant_overrides("Triton-5.4", 5000, 5500, 105, 115);
+    let triton_v10 = rpm_coolant_overrides("Triton-V10", 4500, 5200, 105, 115);
+    let boss62 = rpm_coolant_overrides("Boss-6.2", 5000, 5500, 105, 115);
+    let godzilla73 = rpm_coolant_overrides("Godzilla-7.3", 5000, 5500, 105, 115);
+    // Ford diesel
+    let ps60 = rpm_coolant_overrides("PS-6.0", 2800, 3300, 100, 110);
+    let ps64 = rpm_coolant_overrides("PS-6.4", 2800, 3300, 100, 110);
+    let ps67 = rpm_coolant_overrides("PS-6.7", 2900, 3400, 100, 110);
+    // Chevy/GMC gas
+    let vortec60 = rpm_coolant_overrides("Vortec-6.0", 5000, 5600, 105, 115);
+    let l8t = rpm_coolant_overrides("L8T", 5000, 5600, 105, 115);
+    // Chevy/GMC diesel (LLY already has overrides above)
+    let lbz = rpm_coolant_overrides("LBZ", 2800, 3200, 98, 108);
+    let lmm = rpm_coolant_overrides("LMM", 2800, 3200, 98, 108);
+    let lml = rpm_coolant_overrides("LML", 2800, 3200, 98, 108);
+    let l5p = rpm_coolant_overrides("L5P", 2800, 3200, 98, 108);
+    // RAM gas
+    let hemi57 = rpm_coolant_overrides("Hemi-5.7", 5000, 5600, 105, 115);
+    let hemi64 = rpm_coolant_overrides("Hemi-6.4", 5000, 5600, 105, 115);
+    // RAM diesel
+    let isb59 = rpm_coolant_overrides("ISB-5.9", 2800, 3200, 100, 110);
+    let isb67 = rpm_coolant_overrides("ISB-6.7", 2800, 3200, 100, 110);
+
+    // ── Category-based profiles (auto-assigned by NHTSA decoder) ──────────
+
+    // Diesel trucks: Duramax, Power Stroke, Cummins — low redline, high torque
+    let diesel_truck_overrides = [
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "diesel-truck".to_string(),
+            pid_code: 0x0C, // RPM
+            min_value: None,
+            max_value: None,
+            low_warning: Some(400.0),
+            high_warning: Some(3000.0),
+            low_critical: Some(250.0),
+            high_critical: Some(3600.0),
+            notes: Some("Diesel truck: low redline (~3200-3600 RPM)".to_string()),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "diesel-truck".to_string(),
+            pid_code: 0x05, // Coolant temp
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(100.0),
+            low_critical: Some(-20.0),
+            high_critical: Some(110.0),
+            notes: Some("Diesel truck coolant range".to_string()),
+        },
+    ];
+
+    // Gas V8 trucks: Vortec/L8T, Triton/Godzilla, Hemi — moderate redline
+    let gas_v8_overrides = [
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "gas-truck-v8".to_string(),
+            pid_code: 0x0C, // RPM
+            min_value: None,
+            max_value: None,
+            low_warning: Some(450.0),
+            high_warning: Some(5000.0),
+            low_critical: Some(300.0),
+            high_critical: Some(5800.0),
+            notes: Some("Gas truck V8: redline ~5500-6000 RPM".to_string()),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "gas-truck-v8".to_string(),
+            pid_code: 0x05, // Coolant temp
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(105.0),
+            low_critical: Some(-20.0),
+            high_critical: Some(115.0),
+            notes: Some("Gas truck V8 coolant range".to_string()),
+        },
+    ];
+
+    // Gas V10 trucks: Ford 6.8L Triton V10
+    let gas_v10_overrides = [
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "gas-truck-v10".to_string(),
+            pid_code: 0x0C, // RPM
+            min_value: None,
+            max_value: None,
+            low_warning: Some(450.0),
+            high_warning: Some(4500.0),
+            low_critical: Some(300.0),
+            high_critical: Some(5200.0),
+            notes: Some("Gas truck V10: redline ~5200 RPM".to_string()),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "gas-truck-v10".to_string(),
+            pid_code: 0x05, // Coolant temp
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(105.0),
+            low_critical: Some(-20.0),
+            high_critical: Some(115.0),
+            notes: Some("Gas truck V10 coolant range".to_string()),
+        },
+    ];
+
+    // Gas V6 trucks
+    let gas_v6_overrides = [
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "gas-truck-v6".to_string(),
+            pid_code: 0x0C, // RPM
+            min_value: None,
+            max_value: None,
+            low_warning: Some(500.0),
+            high_warning: Some(5500.0),
+            low_critical: Some(350.0),
+            high_critical: Some(6200.0),
+            notes: Some("Gas truck V6: redline ~6000-6200 RPM".to_string()),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: "gas-truck-v6".to_string(),
+            pid_code: 0x05, // Coolant temp
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(105.0),
+            low_critical: Some(-20.0),
+            high_critical: Some(115.0),
+            notes: Some("Gas truck V6 coolant range".to_string()),
+        },
+    ];
+
     for t in w11_overrides
         .iter()
         .chain(lly_overrides.iter())
         .chain(lfv_overrides.iter())
         .chain(lsy_overrides.iter())
         .chain(f23a1_overrides.iter())
+        // Per-engine truck overrides
+        .chain(triton54.iter())
+        .chain(triton_v10.iter())
+        .chain(boss62.iter())
+        .chain(godzilla73.iter())
+        .chain(ps60.iter())
+        .chain(ps64.iter())
+        .chain(ps67.iter())
+        .chain(vortec60.iter())
+        .chain(l8t.iter())
+        .chain(lbz.iter())
+        .chain(lmm.iter())
+        .chain(lml.iter())
+        .chain(l5p.iter())
+        .chain(hemi57.iter())
+        .chain(hemi64.iter())
+        .chain(isb59.iter())
+        .chain(isb67.iter())
+        // Category-based profiles (NHTSA auto-classification)
+        .chain(diesel_truck_overrides.iter())
+        .chain(gas_v8_overrides.iter())
+        .chain(gas_v10_overrides.iter())
+        .chain(gas_v6_overrides.iter())
     {
         db.upsert_pid_threshold(t)?;
     }
     Ok(())
+}
+
+/// Generate RPM + coolant threshold overrides for an engine family.
+fn rpm_coolant_overrides(
+    family_code: &str,
+    rpm_warn: i32,
+    rpm_crit: i32,
+    coolant_warn: i32,
+    coolant_crit: i32,
+) -> [PidThreshold; 2] {
+    [
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: family_code.to_string(),
+            pid_code: 0x0C,
+            min_value: None,
+            max_value: None,
+            low_warning: Some((rpm_warn as f64 * 0.15).round()),
+            high_warning: Some(rpm_warn as f64),
+            low_critical: Some(250.0),
+            high_critical: Some(rpm_crit as f64),
+            notes: Some(format!("{family_code} redline {rpm_crit} RPM")),
+        },
+        PidThreshold {
+            scope_type: "engine_family".to_string(),
+            scope_id: family_code.to_string(),
+            pid_code: 0x05,
+            min_value: None,
+            max_value: None,
+            low_warning: Some(-5.0),
+            high_warning: Some(coolant_warn as f64),
+            low_critical: Some(-20.0),
+            high_critical: Some(coolant_crit as f64),
+            notes: Some(format!("{family_code} coolant range")),
+        },
+    ]
 }
 
 impl Database {

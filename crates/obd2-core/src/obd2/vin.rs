@@ -77,17 +77,18 @@ pub fn decode_manufacturer(vin: &str) -> Option<&'static str> {
     let wmi = &vin[..3];
     // Match on full 3-char WMI first, then fall back to first character
     match wmi {
-        // GM
-        "1G1" | "1G2" | "1GC" | "1GK" | "2G1" | "3G1" => Some("Chevrolet"),
+        // GM — Chevrolet / GMC trucks
+        "1G1" | "1G2" | "1GC" | "1GK" | "2G1" | "3G1" | "3GC" => Some("Chevrolet"),
         "1GM" | "1GY" => Some("Cadillac"),
-        "1GT" => Some("GMC"),
+        "1GT" | "3GT" => Some("GMC"),
         "1G3" | "1G4" => Some("Buick"),
-        // Ford
-        "1FA" | "1FB" | "1FC" | "1FD" | "1FM" | "1FT" | "3FA" => Some("Ford"),
+        // Ford — includes Super Duty trucks (1FT = F-Series truck)
+        "1FA" | "1FB" | "1FC" | "1FD" | "1FM" | "1FT" | "3FA" | "3FT" => Some("Ford"),
         "1LN" | "3LN" => Some("Lincoln"),
-        // Chrysler / Stellantis
+        // Chrysler / Stellantis / RAM
         "1C3" | "1C6" | "2C3" | "2C4" => Some("Chrysler/Dodge"),
         "1C4" | "1J4" | "1J8" => Some("Jeep"),
+        "3C6" | "3C7" | "3D6" | "3D7" => Some("RAM"),
         // Toyota
         "1NX" | "2T1" | "4T1" | "5TD" | "JTD" | "JTE" | "JTN" => Some("Toyota"),
         // Honda
@@ -123,6 +124,37 @@ pub fn decode_manufacturer(vin: &str) -> Option<&'static str> {
                 _ => None,
             }
         }
+    }
+}
+
+/// Detect if a VIN belongs to a heavy-duty truck based on WMI patterns.
+/// Returns a threshold category code (e.g. "diesel-truck", "gas-truck-v8")
+/// that can be used as `engine_family_code` for threshold resolution.
+///
+/// This provides reasonable offline thresholds for trucks even without NHTSA.
+/// Uses conservative diesel thresholds when fuel type is ambiguous, since
+/// gas thresholds on a diesel would miss real over-rev warnings.
+pub fn detect_truck_class(vin: &str) -> Option<&'static str> {
+    if vin.len() < 5 {
+        return None;
+    }
+    let wmi = &vin[..3];
+    let pos4 = vin.as_bytes().get(3).copied().unwrap_or(0);
+
+    match wmi {
+        // Ford trucks: 1FT/3FT — position 4 indicates series
+        // F = F-Series, E = E-Series (van, not a heavy truck)
+        "1FT" | "3FT" if pos4 == b'F' || pos4 == b'S' || pos4 == b'E' => {
+            // Could be gas or diesel — use diesel (conservative: lower RPM thresholds)
+            Some("diesel-truck")
+        }
+        // Chevy HD trucks: 1GC/3GC
+        "1GC" | "3GC" => Some("diesel-truck"),
+        // GMC HD trucks: 1GT/3GT
+        "1GT" | "3GT" => Some("diesel-truck"),
+        // RAM trucks: 3C6/3C7/3D6/3D7
+        "3C6" | "3C7" | "3D6" | "3D7" => Some("diesel-truck"),
+        _ => None,
     }
 }
 
@@ -198,5 +230,52 @@ mod tests {
         assert_eq!(decoded.year, Some(2031));
         assert_eq!(decoded.year_alt, Some(2001));
         assert_eq!(decoded.manufacturer.as_deref(), Some("Honda"));
+    }
+
+    #[test]
+    fn test_decode_manufacturer_trucks() {
+        // Ford Super Duty (1FT WMI)
+        assert_eq!(decode_manufacturer("1FTFW1E53MFA00001"), Some("Ford"));
+        // Ford Super Duty (Mexico, 3FT)
+        assert_eq!(decode_manufacturer("3FTFW1E53MFA00001"), Some("Ford"));
+        // Chevy HD truck (1GC)
+        assert_eq!(decode_manufacturer("1GCHK23164F000001"), Some("Chevrolet"));
+        // GMC HD truck (1GT)
+        assert_eq!(decode_manufacturer("1GTHK23K57F000001"), Some("GMC"));
+        // GMC Mexico (3GT)
+        assert_eq!(decode_manufacturer("3GTHK23K57F000001"), Some("GMC"));
+        // RAM truck (3C6)
+        assert_eq!(decode_manufacturer("3C63R3HL0KG000001"), Some("RAM"));
+        // RAM truck (3D7)
+        assert_eq!(decode_manufacturer("3D7MX48A47G000001"), Some("RAM"));
+    }
+
+    #[test]
+    fn test_detect_truck_class() {
+        // Ford Super Duty → diesel-truck (conservative)
+        assert_eq!(
+            detect_truck_class("1FTFW1E53MFA00001"),
+            Some("diesel-truck")
+        );
+        // Chevy HD
+        assert_eq!(
+            detect_truck_class("1GCHK23164F000001"),
+            Some("diesel-truck")
+        );
+        // RAM HD
+        assert_eq!(
+            detect_truck_class("3C63R3HL0KG000001"),
+            Some("diesel-truck")
+        );
+        // GMC HD
+        assert_eq!(
+            detect_truck_class("1GTHK23K57F000001"),
+            Some("diesel-truck")
+        );
+        // Non-truck VIN → None
+        assert_eq!(detect_truck_class("1HGCG32501A000001"), None);
+        assert_eq!(detect_truck_class("WMWRE33546T000001"), None);
+        // Short VIN
+        assert_eq!(detect_truck_class("ABC"), None);
     }
 }

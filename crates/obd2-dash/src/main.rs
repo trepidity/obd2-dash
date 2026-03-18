@@ -662,21 +662,59 @@ fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Data
         }
     }
 
-    // 3. Try basic VIN decode (year + manufacturer from VIN characters)
+    // 3. Try NHTSA VIN decoder API (async — run in blocking context since
+    //    handle_vin_detected is called from sync code, but we can use a oneshot)
+    tracing::info!("Attempting NHTSA VIN lookup for {}", vin);
+    let vin_owned = vin.to_string();
+    let nhtsa_result = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .ok()
+            .and_then(|rt| rt.block_on(obd2_core::nhtsa::decode_vin(&vin_owned)).ok())
+            .flatten()
+    })
+    .join()
+    .ok()
+    .flatten();
+
+    if let Some(nhtsa) = nhtsa_result {
+        tracing::info!(
+            "NHTSA lookup: {} {} {} ({:?} {:?}L {}cyl, category={})",
+            nhtsa.year.unwrap_or(0),
+            nhtsa.make.as_deref().unwrap_or("?"),
+            nhtsa.model.as_deref().unwrap_or("?"),
+            nhtsa.fuel_type,
+            nhtsa.displacement_l,
+            nhtsa.cylinders.unwrap_or(0),
+            nhtsa.threshold_category(),
+        );
+        let info = nhtsa.to_vehicle_info(vin);
+
+        // Cache in DB so we never need to look this VIN up again
+        if let Err(e) = database.upsert_vehicle(&info) {
+            tracing::warn!("Failed to cache NHTSA vehicle: {}", e);
+        }
+        apply_vehicle_info(state, info, database);
+        return;
+    }
+    tracing::info!("NHTSA lookup unavailable, falling back to offline VIN decode");
+
+    // 4. Offline fallback — basic VIN decode (year + manufacturer from characters)
+    //    Do NOT cache this since it has limited info that would mask a future NHTSA lookup.
     let decoded = obd2_core::vin::decode(vin);
     if decoded.year.is_some() || decoded.manufacturer.is_some() {
-        // VIN year codes repeat on a 30-year cycle. If the current-cycle year
-        // is in the future, prefer the previous-cycle year (e.g. '1' → 2001
-        // not 2031). Otherwise keep the current-cycle year (e.g. 'L' → 2020).
         let best_year = match (decoded.year, decoded.year_alt) {
             (Some(new), Some(old)) if new > 2026 => Some(old),
             (y, _) => y,
         };
+        // Try WMI-based truck detection for better thresholds offline
+        let truck_class = obd2_core::vin::detect_truck_class(vin);
         tracing::info!(
-            "VIN decoded: year={:?} (alt={:?}), manufacturer={:?}",
+            "VIN decoded (offline): year={:?}, manufacturer={:?}, truck_class={:?}",
             best_year,
-            decoded.year_alt,
-            decoded.manufacturer
+            decoded.manufacturer,
+            truck_class,
         );
         let info = obd2_db::models::VehicleInfo {
             vin: vin.to_string(),
@@ -685,22 +723,23 @@ fn handle_vin_detected(state: &mut AppState, vin: &str, database: &obd2_db::Data
             model: None,
             trim: None,
             engine_family_id: None,
-            engine_family_code: None,
+            engine_family_code: truck_class.map(String::from),
             transmission_type: None,
             drive_type: None,
             fuel_type: None,
             displacement_l: None,
             cylinders: None,
         };
-        // Save to DB so future connections get an exact match
-        if let Err(e) = database.upsert_vehicle(&info) {
-            tracing::warn!("Failed to save decoded vehicle: {}", e);
+        // Truck class gives us useful thresholds — apply them
+        if truck_class.is_some() {
+            apply_vehicle_info(state, info, database);
+        } else {
+            state.domain.vehicle_info = Some(info);
         }
-        state.domain.vehicle_info = Some(info);
         return;
     }
 
-    // 4. Bare VIN fallback — no info could be determined
+    // 5. Bare VIN fallback — no info could be determined
     tracing::info!("VIN {} not recognized, creating minimal entry", vin);
     state.domain.vehicle_info = Some(obd2_db::models::VehicleInfo {
         vin: vin.to_string(),

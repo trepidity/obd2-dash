@@ -1,5 +1,6 @@
 pub mod ai;
 pub mod diagnostics;
+pub mod nhtsa;
 pub mod driving;
 pub mod fuel_economy;
 pub mod mock_profile;
