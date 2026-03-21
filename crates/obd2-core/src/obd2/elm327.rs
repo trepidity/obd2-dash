@@ -346,11 +346,13 @@ impl Obd2Connection for Elm327 {
             return Err(Obd2Error::ParseError("no VIN data in response".into()));
         }
 
-        // Convert to ASCII, taking up to 17 characters
+        // Filter non-printable bytes (null padding) BEFORE taking 17 chars.
+        // ISO 9141 multi-line responses include null padding at the start that
+        // must be skipped before extracting the 17-character VIN.
         let vin: String = data_bytes
             .iter()
-            .take(17)
             .filter(|&&b| (0x20..=0x7E).contains(&b))
+            .take(17)
             .map(|&b| b as char)
             .collect();
 
