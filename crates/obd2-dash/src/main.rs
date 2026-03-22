@@ -28,7 +28,7 @@ use app::{AppState, DashboardLayout, Message, PopupState, ScanMode};
 use ai::{AiClient, AiConfig};
 use connection_prefs::ConnectionPrefs;
 use domain::{ConnectionState, SpeedUnit, TemperatureUnit};
-use mock_profile::MockVehicleProfile;
+use mock_profile::mock_vin;
 use recording::RecordingState;
 use recording::storage::{StorageConfig, StorageManager};
 use scanner::{DeviceKind, ScanEvent};
@@ -157,16 +157,11 @@ async fn main() -> Result<()> {
     obd2_db::seed::seed_all(&database)?;
     tracing::info!("Database initialized at {}", db_path.display());
 
-    // Resolve mock vehicle profile
-    let mock_profile = match cli.mock_vehicle.to_lowercase().as_str() {
-        "mini" => MockVehicleProfile::mini_2006(),
-        "chevy" | "duramax" => MockVehicleProfile::chevy_2004(),
-        "honda" | "accord" => MockVehicleProfile::honda_2001(),
-        _ => MockVehicleProfile::generic(),
-    };
+    // Resolve mock VIN from CLI profile name
+    let mock_vehicle_vin = mock_vin(&cli.mock_vehicle);
 
     // Look up vehicle info if using a known profile
-    let vehicle_info = database.get_vehicle(&mock_profile.vin)?;
+    let vehicle_info = database.get_vehicle(mock_vehicle_vin)?;
     let engine_family_code = vehicle_info
         .as_ref()
         .and_then(|v| v.engine_family_code.clone());
@@ -198,7 +193,7 @@ async fn main() -> Result<()> {
     let poll_ms = cli.poll_ms;
     let obd_handle: Option<tokio::task::JoinHandle<()>> = if cli.mock {
         let _tx_clone = obd_tx.clone();
-        let handle = spawn_mock_poll(mock_profile, Arc::clone(&dtc_scenario), poll_ms, obd_tx.clone());
+        let handle = spawn_mock_poll(mock_vehicle_vin, Arc::clone(&dtc_scenario), poll_ms, obd_tx.clone());
         Some(handle)
     } else if cli.ble {
         let name = cli.ble_name.clone().unwrap_or_default();
@@ -427,19 +422,14 @@ async fn run_session_poll_loop<A: Adapter>(
 }
 
 /// Spawn mock adapter polling task.
-///
-/// Note: obd2-core's MockAdapter returns static PID values (no warmup
-/// cycles or RPM variation). The profile's VIN is used for spec matching
-/// and NHTSA lookup; other profile fields (idle RPM, temps, voltage) are
-/// reserved for a future rich-simulation adapter.
 fn spawn_mock_poll(
-    profile: MockVehicleProfile,
+    vin: &'static str,
     _dtc_scenario: Arc<AtomicU8>,
     poll_ms: u64,
     tx: mpsc::UnboundedSender<Message>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let adapter = MockAdapter::with_vin(&profile.vin);
+        let adapter = MockAdapter::with_vin(vin);
         let info = adapter.info().clone();
         let mut session = Session::new(adapter);
 
