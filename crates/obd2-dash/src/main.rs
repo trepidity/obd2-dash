@@ -271,6 +271,20 @@ async fn main() -> Result<()> {
             prefs_path.clone(),
             cli.ble_scan_secs,
         ))
+    } else if let Ok(port) = auto_detect_port() {
+        tracing::info!("Auto-detected serial port: {}", port);
+        let device = DeviceKind::Serial {
+            port_path: port,
+            baud: cli.baud,
+        };
+        Some(spawn_connect_and_poll(
+            device,
+            cli.baud,
+            poll_ms,
+            obd_tx.clone(),
+            prefs_path.clone(),
+            cli.ble_scan_secs,
+        ))
     } else {
         tracing::info!("No device specified, starting disconnected (press 's' to scan)");
         None
@@ -413,21 +427,30 @@ async fn run_session_poll_loop<A: Adapter>(
 }
 
 /// Spawn mock adapter polling task.
+///
+/// Note: obd2-core's MockAdapter returns static PID values (no warmup
+/// cycles or RPM variation). The profile's VIN is used for spec matching
+/// and NHTSA lookup; other profile fields (idle RPM, temps, voltage) are
+/// reserved for a future rich-simulation adapter.
 fn spawn_mock_poll(
-    _profile: MockVehicleProfile,
+    profile: MockVehicleProfile,
     _dtc_scenario: Arc<AtomicU8>,
     poll_ms: u64,
     tx: mpsc::UnboundedSender<Message>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let adapter = MockAdapter::new();
+        let adapter = MockAdapter::with_vin(&profile.vin);
         let info = adapter.info().clone();
         let mut session = Session::new(adapter);
 
         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
         let _ = tx.send(Message::AdapterDetected(info));
 
-        // Mock poll loop using session
+        // Send VIN so the UI can display the mock vehicle identity
+        if let Ok(vin) = session.read_vin().await {
+            let _ = tx.send(Message::VinDetected(vin));
+        }
+
         run_session_poll_loop(&mut session, poll_ms, &tx).await;
     })
 }
@@ -1589,7 +1612,6 @@ fn widget_kind_build_popup(
     }
 }
 
-#[allow(dead_code)]
 fn auto_detect_port() -> Result<String> {
     let ports = serialport::available_ports()
         .map_err(|e| anyhow::anyhow!("failed to enumerate serial ports: {e}"))?;

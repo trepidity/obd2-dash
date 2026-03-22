@@ -1,4 +1,8 @@
 /// Parameters for vehicle-specific mock simulation.
+///
+/// Currently only `vin` is used by obd2-core's MockAdapter.
+/// Other fields (RPM, temps, voltage) are reserved for a future
+/// rich-simulation adapter that supports warmup cycles and dynamic values.
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MockVehicleProfile {

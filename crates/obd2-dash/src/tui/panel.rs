@@ -152,6 +152,8 @@ pub enum PanelItemDetail {
         code: String,
         description: String,
         category: String,
+        severity: Option<String>,
+        notes: Option<String>,
     },
     VehicleField {
         field_name: &'static str,
@@ -403,6 +405,8 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                         code: dtc.code.clone(),
                         description: dtc.description.as_deref().unwrap_or("").to_string(),
                         category: cat,
+                        severity: dtc.severity.as_ref().map(|s| format!("{:?}", s)),
+                        notes: dtc.notes.clone(),
                     },
                 }
             })
@@ -593,17 +597,22 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
             code,
             description,
             category,
+            severity,
+            notes,
         } => {
-            let lines = vec![
+            let mut lines = vec![
                 format!("Code: {}", code),
                 format!("Category: {}", category),
-                String::new(),
-                description.clone(),
             ];
-
-            // TODO: Diagnostic correlation was in old obd2-core diagnostics module.
-            // Will be re-implemented or migrated in a future phase.
-
+            if let Some(sev) = severity {
+                lines.push(format!("Severity: {}", sev));
+            }
+            lines.push(String::new());
+            lines.push(description.clone());
+            if let Some(n) = notes {
+                lines.push(String::new());
+                lines.push(format!("Notes: {}", n));
+            }
             (code.clone(), lines)
         }
         PanelItemDetail::VehicleField { field_name, value } => {
