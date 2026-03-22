@@ -13,6 +13,18 @@
 #   - "bytes" = expected data byte count in the positive response
 #   - "range" = normal operating envelope for a healthy LLY
 #   - Headers shown are J1850 VPW 3-byte format: Priority | Target | Source
+#
+# Data Confidence:
+#   Each section is tagged with a confidence level and source references.
+#   See spec_sources.yaml for full source details.
+#     verified    = confirmed against manufacturer documentation or standards
+#     community   = multiple independent confirmations from diagnostic community
+#     inferred    = extrapolated from related platform data, needs on-vehicle verification
+#     unverified  = provisional data, MUST be verified before relying on it
+#
+# IMPORTANT: Enhanced Mode 22 PIDs (sections 8-9) are manufacturer-specific
+# and vary by ECM calibration. PIDs marked "inferred" or "unverified" MUST
+# be tested on an actual vehicle before trusting the addresses or formulas.
 # ==============================================================================
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -74,6 +86,8 @@ system_identity:
 # ──────────────────────────────────────────────────────────────────────────────
 
 communication_protocol:
+  confidence: verified
+  sources: [SAE-J1850, SAE-J1962, LLY-PROTOCOL-DIESELPLACE, NXP-AN1731]
   interface: "SAE J1850 VPW (Variable Pulse Width)"
   standard: "GM Class 2 Serial Data"
   bus_speed: "10.4 kbps"
@@ -103,6 +117,9 @@ communication_protocol:
 # ──────────────────────────────────────────────────────────────────────────────
 
 module_addresses:
+  confidence: community
+  sources: [GM-ACDELCO-TDS, DMAX-BALANCE-RATES-TORQUEBHP, ALLISON-TCM-GMTNATION]
+  source_note: "ECM (0x10), TCM (0x18), and functional (0x6A) addresses are well-established. Other module addresses (BCM, IPC, SIR, HVAC) are typical GM Class 2 assignments but may vary by configuration."
   # Node address is the second byte in the 3-byte J1850 header
   ecm:
     node: "0x10"
@@ -184,6 +201,9 @@ elm327_init:
 # ──────────────────────────────────────────────────────────────────────────────
 
 diagnostic_services:
+  confidence: verified
+  sources: [SAE-J1979, SAE-J2190, SAE-J2012, ISO-14229]
+  source_note: "Standard services (Mode 01-0A) defined by SAE J1979. Enhanced services (Mode 10/14/19/22/27/2F/3E) defined by SAE J2190. NRC codes from ISO 14229."
   # --- Standard OBD-II Services ---
   mode_01:
     service_id: "0x01"
@@ -417,13 +437,16 @@ standard_pids_mode_01:
   request_prefix: "01"
   response_prefix: "41"
   description: "Standard OBD-II PIDs. These are universally defined by SAE J1979."
+  confidence: verified
+  sources: [SAE-J1979, SAE-J1979-DA, CSS-ELECTRONICS]
 
   supported_pid_bitmaps:
-    - { pid: "0x00", name: "Supported PIDs [01-20]",  bytes: 4, type: "bitmap" }
-    - { pid: "0x20", name: "Supported PIDs [21-40]",  bytes: 4, type: "bitmap" }
-    - { pid: "0x40", name: "Supported PIDs [41-60]",  bytes: 4, type: "bitmap" }
-    - { pid: "0x60", name: "Supported PIDs [61-80]",  bytes: 4, type: "bitmap" }
     note: "Query these first. The ECM bitmap tells you exactly which PIDs it supports."
+    pids:
+      - { pid: "0x00", name: "Supported PIDs [01-20]",  bytes: 4, type: "bitmap" }
+      - { pid: "0x20", name: "Supported PIDs [21-40]",  bytes: 4, type: "bitmap" }
+      - { pid: "0x40", name: "Supported PIDs [41-60]",  bytes: 4, type: "bitmap" }
+      - { pid: "0x60", name: "Supported PIDs [61-80]",  bytes: 4, type: "bitmap" }
 
   # --- Status & Readiness ---
   status_pids:
@@ -681,9 +704,17 @@ enhanced_ecu_pids_mode_22:
   request_prefix: "22"
   response_prefix: "62"
   description: "Manufacturer-specific PIDs for Bosch E60 ECM. Physical addressing required."
+  confidence_note: |
+    Enhanced PID addresses are GM-proprietary and not publicly standardized.
+    Confidence levels vary per subsection. PIDs marked 'inferred' are derived
+    from training data and MUST be verified on-vehicle before trusting.
+    The definitive source is GM-ACDELCO-TDS (ACDelco TDS subscription).
 
   # --- Fuel System (High-Pressure Common Rail) ---
   fuel_system:
+    confidence: inferred
+    sources: [GM-ACDELCO-TDS, DIABLOSPORT-TRINITY]
+    source_note: "Fuel system PID addresses need verification against Tech2 or EFI Live. Formulas are typical Bosch common-rail scaling but addresses may differ by ECM calibration."
     pids:
       - pid: "11 70"
         name: "Fuel Rail Pressure Actual"
@@ -776,26 +807,42 @@ enhanced_ecu_pids_mode_22:
 
   # --- Injector Diagnostics ---
   injector_diagnostics:
+    confidence: community
+    sources:
+      - DMAX-BALANCE-RATES-TORQUEBHP
+      - DMAX-BALANCE-RATES-DIESELPLACE-1
+      - DMAX-BALANCE-RATES-DIESELPLACE-2
+      - DMAX-BALANCE-RATES-DURAMAXFORUM
+      - DMAX-TORQUE-PRO-BALANCE-RATES
+      - DMAX-BALANCE-RATES-PISTONTWISTIN
+      - DMAX-BALANCE-RATES-INJECTORSDIRECT
     description: "Balance rates indicate per-cylinder fuel trim corrections. Values far from 0 indicate injector wear or failure."
-    scaling_formula: "signed_int(A,B) / 100"
+    scaling_formula: "((A * 256 + B) - 32768) / 64"
     unit: "mm3"
     range:
-      normal: "-2.0 to 2.0"
-      marginal: "-4.0 to 4.0"
-      failing: "> ±4.0"
-    note: "Balance rates must be read at idle, warm engine, no accessories on."
+      healthy: "+/- 2.0"
+      normal_park_neutral: "+/- 4.0"
+      normal_in_gear_idle: "+/- 6.0"
+      replacement_indicator: "> +/- 4.0 to 5.0 (in P/N)"
+    note: |
+      Balance rates must be read at idle, warm engine (coolant > 80°C), no accessories on.
+      ELM327 command requires trailing 01 data rate byte (e.g. '22 16 2F 01').
+      PIDs verified against GM Tech2 by multiple independent sources.
     pids:
-      - { pid: "19 86", name: "Balance Rate Cyl 1" }
-      - { pid: "19 87", name: "Balance Rate Cyl 2" }
-      - { pid: "19 88", name: "Balance Rate Cyl 3" }
-      - { pid: "19 89", name: "Balance Rate Cyl 4" }
-      - { pid: "19 8A", name: "Balance Rate Cyl 5" }
-      - { pid: "19 8B", name: "Balance Rate Cyl 6" }
-      - { pid: "19 8C", name: "Balance Rate Cyl 7" }
-      - { pid: "19 8D", name: "Balance Rate Cyl 8" }
+      - { pid: "16 2F", name: "Balance Rate Cyl 1", bytes: 2 }
+      - { pid: "16 30", name: "Balance Rate Cyl 2", bytes: 2 }
+      - { pid: "16 31", name: "Balance Rate Cyl 3", bytes: 2 }
+      - { pid: "16 32", name: "Balance Rate Cyl 4", bytes: 2 }
+      - { pid: "16 33", name: "Balance Rate Cyl 5", bytes: 2 }
+      - { pid: "16 34", name: "Balance Rate Cyl 6", bytes: 2 }
+      - { pid: "16 35", name: "Balance Rate Cyl 7", bytes: 2 }
+      - { pid: "16 36", name: "Balance Rate Cyl 8", bytes: 2 }
 
   # --- VGT Turbocharger ---
   vgt_turbo:
+    confidence: inferred
+    sources: [GM-ACDELCO-TDS, DIABLOSPORT-TRINITY]
+    source_note: "VGT vane position PIDs are widely referenced in aftermarket tuning but specific addresses need Tech2 verification."
     description: "Garrett GT3788VA Variable Geometry Turbo. Vane position controls boost."
     pids:
       - pid: "11 9B"
@@ -866,6 +913,8 @@ enhanced_ecu_pids_mode_22:
 
   # --- EGR System ---
   egr_system:
+    confidence: inferred
+    sources: [GM-ACDELCO-TDS]
     description: "Exhaust Gas Recirculation — reduces NOx. Electric stepper motor on LLY."
     pids:
       - pid: "11 96"
@@ -903,6 +952,8 @@ enhanced_ecu_pids_mode_22:
 
   # --- Glow Plugs & Intake Heater ---
   glow_plugs:
+    confidence: inferred
+    sources: [GM-ACDELCO-TDS]
     description: "8 individual glow plugs + intake air heater grid"
     pids:
       - pid: "11 4E"
@@ -939,6 +990,8 @@ enhanced_ecu_pids_mode_22:
 
   # --- Engine Mechanical ---
   engine_mechanical:
+    confidence: inferred
+    sources: [GM-ACDELCO-TDS]
     pids:
       - pid: "11 44"
         name: "Engine Fan Speed"
@@ -1015,6 +1068,9 @@ enhanced_ecu_pids_mode_22:
 
   # --- Sensor Voltages (Raw) ---
   sensor_voltages:
+    confidence: unverified
+    sources: [GM-ACDELCO-TDS]
+    source_note: "Sensor voltage PID addresses are UNVERIFIED. These are typical GM patterns but specific addresses MUST be confirmed via Tech2 or ACDelco TDS before use."
     description: "Raw sensor voltages for signal-level diagnostics"
     pids:
       - { pid: "11 A0", name: "APP Sensor 1 Voltage",        bytes: 2, formula: "((A * 256) + B) / 1000", unit: "V", range: { idle: "0.5-0.9", wot: "3.5-4.5" } }
@@ -1029,6 +1085,8 @@ enhanced_ecu_pids_mode_22:
 
   # --- Torque & Performance ---
   torque_performance:
+    confidence: inferred
+    sources: [GM-ACDELCO-TDS]
     pids:
       - pid: "11 B0"
         name: "Engine Torque Actual"
@@ -1066,6 +1124,8 @@ enhanced_ecu_pids_mode_22:
 
   # --- Electrical System ---
   electrical:
+    confidence: inferred
+    sources: [GM-ACDELCO-TDS]
     pids:
       - pid: "11 C0"
         name: "Battery Voltage (Enhanced)"
@@ -1091,6 +1151,9 @@ enhanced_ecu_pids_mode_22:
 
   # --- System Status Flags ---
   system_status:
+    confidence: unverified
+    sources: [GM-ACDELCO-TDS]
+    source_note: "Status flag PID addresses are UNVERIFIED. Typical GM patterns but need on-vehicle confirmation."
     pids:
       - pid: "11 D0"
         name: "A/C Compressor Clutch Status"
@@ -1155,6 +1218,8 @@ enhanced_ecu_pids_mode_22:
 
   # --- Exhaust ---
   exhaust:
+    confidence: unverified
+    sources: [GM-ACDELCO-TDS]
     pids:
       - pid: "11 E0"
         name: "Exhaust Back Pressure"
@@ -1181,9 +1246,16 @@ enhanced_tcm_pids_allison:
   request_prefix: "22"
   response_prefix: "62"
   description: "Allison 1000 5-Speed Automatic — Gen 3/4 TCM enhanced data"
+  confidence_note: |
+    TCM PIDs are proprietary Allison data. PID 19 40 (TFT) is community-verified.
+    Other core PIDs (19 41-45, 19 62) are widely referenced in aftermarket tools.
+    Gear data, adaptive trims, and pressure PIDs need on-vehicle verification.
+    Definitive source is Allison DOC software.
 
   # --- Core Transmission Data ---
   core_data:
+    confidence: community
+    sources: [ALLISON-DOC, ALLISON-TS3977EN, ALLISON-TCM-GMTNATION, DIABLOSPORT-TRINITY]
     pids:
       - pid: "19 40"
         name: "Transmission Fluid Temperature (TFT)"
@@ -1230,6 +1302,8 @@ enhanced_tcm_pids_allison:
 
   # --- Gear & Ratio ---
   gear_data:
+    confidence: inferred
+    sources: [ALLISON-DOC, ALLISON-TS3977EN]
     pids:
       - pid: "19 48"
         name: "Current Gear"
@@ -1338,6 +1412,8 @@ enhanced_tcm_pids_allison:
 
   # --- Solenoid States ---
   solenoid_states:
+    confidence: inferred
+    sources: [ALLISON-DOC, ALLISON-TS3977EN]
     pids:
       - pid: "19 91"
         name: "Solenoid Logic State (Commanded)"
@@ -1404,6 +1480,8 @@ enhanced_tcm_pids_allison:
 
   # --- Clutch Volume Indices (Adaptive Learning) ---
   clutch_data:
+    confidence: inferred
+    sources: [ALLISON-DOC, ALLISON-TS3977EN]
     description: "Clutch volume indices track adaptive fill time for each clutch pack. Rising values indicate wear."
     pids:
       - { pid: "19 46", name: "C1 Clutch Volume Index", bytes: 1, formula: "A", unit: "index", range: { new: "0-30", worn: "30-60", failing: ">60" } }
@@ -1415,6 +1493,9 @@ enhanced_tcm_pids_allison:
 
   # --- Adaptive Trim Values ---
   adaptive_trims:
+    confidence: unverified
+    sources: [ALLISON-DOC]
+    source_note: "Adaptive trim PID addresses are UNVERIFIED. Need Allison DOC confirmation."
     description: "Per-gear shift timing adaptations. TCM learns corrections for smooth shifts."
     pids:
       - { pid: "19 70", name: "1-2 Shift Adaptive Offset",  bytes: 2, formula: "signed_int(A,B)", unit: "ms" }
@@ -1428,6 +1509,8 @@ enhanced_tcm_pids_allison:
 
   # --- Torque Management ---
   torque_management:
+    confidence: unverified
+    sources: [ALLISON-DOC, SAE-J1939]
     pids:
       - pid: "19 80"
         name: "Engine Torque Input (from ECM via J1939)"
@@ -1452,6 +1535,8 @@ enhanced_tcm_pids_allison:
 
   # --- Transfer Case (4WD models only) ---
   transfer_case:
+    confidence: unverified
+    sources: [GM-ACDELCO-TDS]
     note: "Only present on K-series (4WD). C-series (2WD) will return 7F (not supported)."
     pids:
       - pid: "19 A0"
@@ -1481,6 +1566,8 @@ ficm_diagnostics:
   node: "0x11"
   header: "6C 11 F1"
   description: "The FICM (EDU) converts 12V battery to 48V for injector firing. It is a common failure point on LLY."
+  confidence: community
+  sources: [GM-ACDELCO-TDS, GM-TSB-LLY, BOSCH-E60-SMC, OFI-DMAX-DIAG]
 
   obd_pids:
     note: "FICM OBD queryability varies by hardware revision. Some respond to Mode 22, others only to bench test."
@@ -1529,6 +1616,9 @@ bcm_pids:
   request_prefix: "22"
   response_prefix: "62"
   description: "Body Control Module — accessible via J1850 VPW. Controls lighting, security, windows."
+  confidence: unverified
+  sources: [GM-ACDELCO-TDS]
+  source_note: "BCM PID addresses are UNVERIFIED and the LEAST reliable section of this spec. BCM PIDs vary significantly by trim level, options, and production date. MUST be verified against ACDelco TDS or Tech2 before use."
   note: "BCM PID support varies by trim level and options."
 
   pids:
@@ -1625,6 +1715,9 @@ abs_ebcm_pids:
   request_prefix: "22"
   response_prefix: "62"
   description: "ABS / traction control / stability system module"
+  confidence: unverified
+  sources: [GM-ACDELCO-TDS]
+  source_note: "ABS/EBCM PID addresses are UNVERIFIED. Based on typical GM EBCM patterns. Need Tech2 confirmation."
 
   pids:
     - pid: "12 00"
@@ -1704,6 +1797,9 @@ ipc_pids:
   request_prefix: "22"
   response_prefix: "62"
   description: "Instrument cluster — gauges, warning lamps, trip data"
+  confidence: unverified
+  sources: [GM-ACDELCO-TDS]
+  source_note: "IPC PID addresses are UNVERIFIED. Need Tech2 confirmation."
 
   pids:
     - pid: "14 00"
@@ -1763,6 +1859,9 @@ ipc_pids:
 ecm_dtc_library:
   node: "0x10"
   description: "ECM DTCs for Bosch E60 / Duramax LLY. Retrieved via Mode 03, 07, 0A, or Mode 19."
+  confidence: verified
+  sources: [SAE-J2012, GM-ACDELCO-TDS, GM-TSB-LLY, OFI-DMAX-DIAG]
+  source_note: "Generic P0xxx codes are defined by SAE J2012. GM-specific codes (P1xxx, upper P2xxx) from ACDelco TDS. Severity ratings and diagnostic notes from community experience."
 
   fuel_system:
     - { id: "P0087", meaning: "Fuel Rail/System Pressure Too Low", severity: "critical", note: "CP3 pump failure, fuel filter, air in lines, injector return leak" }
@@ -1778,23 +1877,24 @@ ecm_dtc_library:
     - { id: "P1094", meaning: "Fuel Rail Pressure Low During Idle", severity: "high" }
 
   injector_circuits:
-    - { id: "P0201", meaning: "Injector Circuit Cyl 1 (Open/Short)", severity: "high" }
-    - { id: "P0202", meaning: "Injector Circuit Cyl 2 (Open/Short)", severity: "high" }
-    - { id: "P0203", meaning: "Injector Circuit Cyl 3 (Open/Short)", severity: "high" }
-    - { id: "P0204", meaning: "Injector Circuit Cyl 4 (Open/Short)", severity: "high" }
-    - { id: "P0205", meaning: "Injector Circuit Cyl 5 (Open/Short)", severity: "high" }
-    - { id: "P0206", meaning: "Injector Circuit Cyl 6 (Open/Short)", severity: "high" }
-    - { id: "P0207", meaning: "Injector Circuit Cyl 7 (Open/Short)", severity: "high" }
-    - { id: "P0208", meaning: "Injector Circuit Cyl 8 (Open/Short)", severity: "high" }
-    - { id: "P0263", meaning: "Cyl 1 Contribution/Balance", severity: "medium" }
-    - { id: "P0266", meaning: "Cyl 2 Contribution/Balance", severity: "medium" }
-    - { id: "P0269", meaning: "Cyl 3 Contribution/Balance", severity: "medium" }
-    - { id: "P0272", meaning: "Cyl 4 Contribution/Balance", severity: "medium" }
-    - { id: "P0275", meaning: "Cyl 5 Contribution/Balance", severity: "medium" }
-    - { id: "P0278", meaning: "Cyl 6 Contribution/Balance", severity: "medium" }
-    - { id: "P0281", meaning: "Cyl 7 Contribution/Balance", severity: "medium" }
-    - { id: "P0284", meaning: "Cyl 8 Contribution/Balance", severity: "medium" }
     note: "CHECK FICM 48V OUTPUT FIRST before replacing injectors. 90% of injector circuit codes are FICM failures, not injectors."
+    codes:
+      - { id: "P0201", meaning: "Injector Circuit Cyl 1 (Open/Short)", severity: "high" }
+      - { id: "P0202", meaning: "Injector Circuit Cyl 2 (Open/Short)", severity: "high" }
+      - { id: "P0203", meaning: "Injector Circuit Cyl 3 (Open/Short)", severity: "high" }
+      - { id: "P0204", meaning: "Injector Circuit Cyl 4 (Open/Short)", severity: "high" }
+      - { id: "P0205", meaning: "Injector Circuit Cyl 5 (Open/Short)", severity: "high" }
+      - { id: "P0206", meaning: "Injector Circuit Cyl 6 (Open/Short)", severity: "high" }
+      - { id: "P0207", meaning: "Injector Circuit Cyl 7 (Open/Short)", severity: "high" }
+      - { id: "P0208", meaning: "Injector Circuit Cyl 8 (Open/Short)", severity: "high" }
+      - { id: "P0263", meaning: "Cyl 1 Contribution/Balance", severity: "medium" }
+      - { id: "P0266", meaning: "Cyl 2 Contribution/Balance", severity: "medium" }
+      - { id: "P0269", meaning: "Cyl 3 Contribution/Balance", severity: "medium" }
+      - { id: "P0272", meaning: "Cyl 4 Contribution/Balance", severity: "medium" }
+      - { id: "P0275", meaning: "Cyl 5 Contribution/Balance", severity: "medium" }
+      - { id: "P0278", meaning: "Cyl 6 Contribution/Balance", severity: "medium" }
+      - { id: "P0281", meaning: "Cyl 7 Contribution/Balance", severity: "medium" }
+      - { id: "P0284", meaning: "Cyl 8 Contribution/Balance", severity: "medium" }
 
   ficm_codes:
     - { id: "P0611", meaning: "Fuel Injection Control Module Performance", severity: "critical", note: "FICM internal failure — 48V circuit degraded" }
@@ -1879,9 +1979,10 @@ ecm_dtc_library:
     - { id: "P0615", meaning: "Starter Relay Circuit", severity: "medium" }
 
   intake_air_shutoff:
-    - { id: "P1111", meaning: "Intake Air System Control — Off Performance", severity: "medium" }
-    - { id: "P1112", meaning: "Intake Air System Control — On Performance", severity: "medium" }
     note: "LLY uses an intake air shutoff valve (not a traditional throttle body). These codes indicate the valve is sticking."
+    codes:
+      - { id: "P1111", meaning: "Intake Air System Control — Off Performance", severity: "medium" }
+      - { id: "P1112", meaning: "Intake Air System Control — On Performance", severity: "medium" }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 15. TCM DTC LIBRARY (Allison 1000 Specific)
@@ -1890,6 +1991,8 @@ ecm_dtc_library:
 tcm_dtc_library:
   node: "0x18"
   description: "Transmission DTCs for Allison 1000 (Gen 3/4). Query TCM directly with AT SH 6C 18 F1 → 03"
+  confidence: verified
+  sources: [SAE-J2012, ALLISON-TS3977EN, ALLISON-DTC-LIST, GM-ACDELCO-TDS]
   p0700_note: "P0700 appears in the ECM but is only a flag that the TCM has a code. Always query TCM node 0x18 for the real DTC."
 
   temperature_sensors:
@@ -1985,6 +2088,8 @@ tcm_dtc_library:
 
 network_dtc_library:
   description: "Communication fault codes — indicate lost messages between modules on J1850 VPW bus"
+  confidence: verified
+  sources: [SAE-J2012, GM-ACDELCO-TDS]
   codes:
     - { id: "U0001", meaning: "High Speed CAN Communication Bus", severity: "critical", note: "CAN bus fault (internal powertrain bus, not OBD-II DLC)" }
     - { id: "U0073", meaning: "Control Module Communication Bus Off", severity: "critical", note: "J1850 bus failure — module isolated from network" }
@@ -2141,6 +2246,8 @@ polling_groups:
 
 known_issues:
   description: "Common LLY failure modes and diagnostic shortcuts"
+  confidence: community
+  sources: [GM-TSB-LLY, OFI-DMAX-DIAG, DMAX-BALANCE-RATES-PISTONTWISTIN, DMAX-BALANCE-RATES-INJECTORSDIRECT]
 
   turbo_vane_sticking:
     rank: 1
@@ -2191,6 +2298,9 @@ known_issues:
 
 thresholds:
   description: "Engine-family-specific operating ranges for the LLY Duramax"
+  confidence: community
+  sources: [GM-ACDELCO-TDS, DMAX-BALANCE-RATES-PISTONTWISTIN, OFI-DMAX-DIAG]
+  source_note: "Threshold values derived from GM service specs where available, community experience otherwise. Verify critical thresholds against ACDelco TDS."
   engine_family: "LLY"
 
   engine:
