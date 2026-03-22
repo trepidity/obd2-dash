@@ -11,10 +11,10 @@ use crate::debug_log::LogBuffer;
 use crate::widget::config::RowHeight;
 use crate::widget::edit_mode::EditPhase;
 use crate::widget::renderers;
-use obd2_core::obd2::dtc::DtcCategory;
-use obd2_core::ConnectionState;
-use obd2_core::PidReading;
-use obd2_core::RecordingState;
+use obd2_core::protocol::dtc::DtcCategory;
+use crate::domain::ConnectionState;
+
+use crate::recording::RecordingState;
 
 pub fn render(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer) {
     // Full-screen debug log takeover
@@ -141,7 +141,7 @@ fn render_debug_log(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer)
 // ─── AI insights overlay ─────────────────────────────────────────────────────
 
 fn render_ai_insights(frame: &mut Frame, state: &AppState) {
-    use obd2_core::ai::Severity;
+    use crate::ai::Severity;
 
     let area = frame.area();
 
@@ -336,7 +336,7 @@ fn render_compact_header(frame: &mut Frame, area: Rect, state: &AppState) {
     if let Some(ref info) = state.domain.adapter_info {
         spans.push(Span::raw("    "));
         spans.push(Span::styled(
-            format!("{}", info.chipset),
+            format!("{:?}", info.chipset),
             Style::default().fg(Color::White),
         ));
     }
@@ -534,7 +534,7 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
     if let Some(ref info) = state.domain.adapter_info {
         spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
         spans.push(Span::styled(
-            format!("{}", info.chipset),
+            format!("{:?}", info.chipset),
             Style::default().fg(Color::White),
         ));
     }
@@ -577,8 +577,7 @@ pub(crate) fn render_full_gauges_and_engine(
         .domain
         .vehicle
         .rpm
-        .as_ref()
-        .map(|r| r.value)
+        
         .unwrap_or(0.0);
     let rpm_color = threshold_color_for_pid(state, 0x0C, rpm_val, || rpm_color_default(rpm_val));
     let max_rpm = state
@@ -668,8 +667,7 @@ pub(crate) fn render_full_gauges_and_engine(
         .domain
         .vehicle
         .engine_load
-        .as_ref()
-        .map(|r| r.value)
+        
         .unwrap_or(0.0);
     let load_color = threshold_color_for_pid(state, 0x04, load_val, || Color::Magenta);
     lines.push(make_engine_line(
@@ -686,8 +684,7 @@ pub(crate) fn render_full_gauges_and_engine(
         .domain
         .vehicle
         .throttle_position
-        .as_ref()
-        .map(|r| r.value)
+        
         .unwrap_or(0.0);
     let throttle_color = threshold_color_for_pid(state, 0x11, throttle_val, || Color::Cyan);
     lines.push(make_engine_line(
@@ -703,11 +700,11 @@ pub(crate) fn render_full_gauges_and_engine(
     let mut engine_idx = 2usize;
 
     // MAP
-    if let Some(r) = &state.domain.vehicle.intake_map {
-        let color = threshold_color_for_pid(state, 0x0B, r.value, || Color::White);
+    if let Some(r) = state.domain.vehicle.intake_map {
+        let color = threshold_color_for_pid(state, 0x0B, r, || Color::White);
         lines.push(make_engine_line(
             "MAP",
-            &format!("{:.0} kPa", r.value),
+            &format!("{:.0} kPa", r),
             color,
             selected_item,
             engine_item_start,
@@ -717,11 +714,11 @@ pub(crate) fn render_full_gauges_and_engine(
     }
 
     // MAF
-    if let Some(r) = &state.domain.vehicle.maf {
-        let color = threshold_color_for_pid(state, 0x10, r.value, || Color::White);
+    if let Some(r) = state.domain.vehicle.maf {
+        let color = threshold_color_for_pid(state, 0x10, r, || Color::White);
         lines.push(make_engine_line(
             "MAF",
-            &format!("{:.1} g/s", r.value),
+            &format!("{:.1} g/s", r),
             color,
             selected_item,
             engine_item_start,
@@ -731,11 +728,11 @@ pub(crate) fn render_full_gauges_and_engine(
     }
 
     // Fuel pressure
-    if let Some(r) = &state.domain.vehicle.fuel_pressure {
-        let color = threshold_color_for_pid(state, 0x0A, r.value, || Color::White);
+    if let Some(r) = state.domain.vehicle.fuel_pressure {
+        let color = threshold_color_for_pid(state, 0x0A, r, || Color::White);
         lines.push(make_engine_line(
             "Fuel P",
-            &format!("{:.0} kPa", r.value),
+            &format!("{:.0} kPa", r),
             color,
             selected_item,
             engine_item_start,
@@ -763,11 +760,11 @@ pub(crate) fn render_full_gauges_and_engine(
     }
 
     // Oil pressure
-    if let Some(r) = &state.domain.vehicle.oil_pressure {
-        let color = threshold_color_for_pid(state, 0xFD, r.value, || {
-            if r.value < 100.0 {
+    if let Some(r) = state.domain.vehicle.oil_pressure {
+        let color = threshold_color_for_pid(state, 0xFD, r, || {
+            if r < 100.0 {
                 Color::Red
-            } else if r.value < 150.0 {
+            } else if r < 150.0 {
                 Color::Yellow
             } else {
                 Color::Green
@@ -775,7 +772,7 @@ pub(crate) fn render_full_gauges_and_engine(
         });
         lines.push(make_engine_line(
             "Oil P",
-            &format!("{:.0} kPa", r.value),
+            &format!("{:.0} kPa", r),
             color,
             selected_item,
             engine_item_start,
@@ -804,15 +801,15 @@ pub(crate) fn render_full_temperatures(
 
     let add_temp = |lines: &mut Vec<Line>,
                     label: &str,
-                    reading: &Option<PidReading>,
+                    reading: &Option<f64>,
                     pid_code: u8,
                     state: &AppState,
                     idx: usize,
                     sel: Option<usize>| {
-        let line = if let Some(r) = reading {
-            let (val, unit) = state.domain.display_temp_value(r);
+        let line = if let Some(v) = reading {
+            let (val, unit) = state.domain.display_temp_value(*v);
             let color =
-                threshold_color_for_pid(state, pid_code, r.value, || temp_color_default(r.value));
+                threshold_color_for_pid(state, pid_code, *v, || temp_color_default(*v));
             make_value_line(label, &format!("{:.1}{}", val, unit), color)
         } else {
             make_value_line(label, "--", Color::DarkGray)
@@ -917,17 +914,17 @@ pub(crate) fn render_full_fuel_system(
     let mut item_idx = 0usize;
 
     // Fuel tank level — always item 0
-    let tank_line = if let Some(r) = &state.domain.vehicle.fuel_tank_level {
-        let color = threshold_color_for_pid(state, 0x2F, r.value, || {
-            if r.value < 15.0 {
+    let tank_line = if let Some(r) = state.domain.vehicle.fuel_tank_level {
+        let color = threshold_color_for_pid(state, 0x2F, r, || {
+            if r < 15.0 {
                 Color::Red
-            } else if r.value < 25.0 {
+            } else if r < 25.0 {
                 Color::Yellow
             } else {
                 Color::Green
             }
         });
-        make_value_line("Tank", &format!("{:.1}%", r.value), color)
+        make_value_line("Tank", &format!("{:.1}%", r), color)
     } else {
         make_value_line("Tank", "--", Color::DarkGray)
     };
@@ -935,9 +932,9 @@ pub(crate) fn render_full_fuel_system(
     item_idx += 1;
 
     // Fuel rate — conditional
-    if let Some(r) = &state.domain.vehicle.engine_fuel_rate {
-        let color = threshold_color_for_pid(state, 0x5E, r.value, || Color::White);
-        let line = make_value_line("Rate", &format!("{:.1} L/h", r.value), color);
+    if let Some(r) = state.domain.vehicle.engine_fuel_rate {
+        let color = threshold_color_for_pid(state, 0x5E, r, || Color::White);
+        let line = make_value_line("Rate", &format!("{:.1} L/h", r), color);
         lines.push(maybe_highlight(line, selected_item, item_idx));
         item_idx += 1;
     }
@@ -1001,17 +998,17 @@ pub(crate) fn render_full_system_info(
     }
 
     // Control module voltage
-    if let Some(r) = &state.domain.vehicle.control_module_voltage {
-        let color = threshold_color_for_pid(state, 0x42, r.value, || Color::Yellow);
-        let line = make_value_line("Module Volt", &format!("{:.1}V", r.value), color);
+    if let Some(r) = state.domain.vehicle.control_module_voltage {
+        let color = threshold_color_for_pid(state, 0x42, r, || Color::Yellow);
+        let line = make_value_line("Module Volt", &format!("{:.1}V", r), color);
         lines.push(maybe_highlight(line, selected_item, item_idx));
         item_idx += 1;
     }
 
     // Barometric
-    if let Some(r) = &state.domain.vehicle.barometric_pressure {
-        let color = threshold_color_for_pid(state, 0x33, r.value, || Color::White);
-        let line = make_value_line("Barometric", &format!("{:.1} kPa", r.value), color);
+    if let Some(r) = state.domain.vehicle.barometric_pressure {
+        let color = threshold_color_for_pid(state, 0x33, r, || Color::White);
+        let line = make_value_line("Barometric", &format!("{:.1} kPa", r), color);
         lines.push(maybe_highlight(line, selected_item, item_idx));
         item_idx += 1;
     }
@@ -1088,7 +1085,7 @@ pub(crate) fn render_full_dtcs(
                     format!(" {:<6}", dtc.code),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(dtc.description.to_string(), Style::default().fg(color)),
+                Span::styled(dtc.description.as_deref().unwrap_or("").to_string(), Style::default().fg(color)),
             ]);
             lines.push(maybe_highlight(line, selected_item, i));
         }
@@ -1378,7 +1375,7 @@ fn mpg_color(mpg: f64) -> Color {
 }
 
 /// Choose a color for a DTC based on its code pattern.
-fn dtc_color(dtc: &obd2_core::Dtc) -> Color {
+fn dtc_color(dtc: &obd2_core::protocol::dtc::Dtc) -> Color {
     match dtc.category {
         DtcCategory::Powertrain => {
             // P03xx misfire = red, P07xx transmission = red, others = yellow
@@ -1713,8 +1710,8 @@ fn render_device_picker(frame: &mut Frame, state: &AppState) {
         for (i, dev) in state.scan_devices.iter().enumerate() {
             let marker = if i == state.scan_selected { ">" } else { " " };
             let type_label = match &dev.kind {
-                obd2_core::obd2::scanner::DeviceKind::Serial { .. } => "Serial",
-                obd2_core::obd2::scanner::DeviceKind::Ble { .. } => "BLE",
+                crate::scanner::DeviceKind::Serial { .. } => "Serial",
+                crate::scanner::DeviceKind::Ble { .. } => "BLE",
             };
             let style = if i == state.scan_selected {
                 Style::default()
@@ -1785,8 +1782,7 @@ fn render_rpm(frame: &mut Frame, area: Rect, state: &AppState) {
         .domain
         .vehicle
         .rpm
-        .as_ref()
-        .map(|r| r.value)
+        
         .unwrap_or(0.0);
 
     let color = threshold_color_for_pid(state, 0x0C, rpm_val, || rpm_color_default(rpm_val));
@@ -1881,8 +1877,7 @@ fn render_coolant(frame: &mut Frame, area: Rect, state: &AppState) {
         .domain
         .vehicle
         .coolant_temp
-        .as_ref()
-        .map(|r| r.value)
+        
         .unwrap_or(0.0);
     let color =
         threshold_color_for_pid(state, 0x05, raw_celsius, || temp_color_default(raw_celsius));
@@ -2101,26 +2096,26 @@ fn make_engine_line<'a>(
 
 fn make_trim_line<'a>(
     label: &str,
-    reading: &Option<PidReading>,
+    reading: &Option<f64>,
     pid_code: u8,
     state: &AppState,
 ) -> Line<'a> {
     if let Some(r) = reading {
-        let color = threshold_color_for_pid(state, pid_code, r.value, || {
-            if r.value.abs() > 10.0 {
+        let color = threshold_color_for_pid(state, pid_code, *r, || {
+            if r.abs() > 10.0 {
                 Color::Yellow
             } else {
                 Color::Green
             }
         });
-        let sign = if r.value >= 0.0 { "+" } else { "" };
+        let sign = if *r >= 0.0 { "+" } else { "" };
         Line::from(vec![
             Span::styled(
                 format!(" {:<12}", label),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(
-                format!("{}{:.1}%", sign, r.value),
+                format!("{}{:.1}%", sign, r),
                 Style::default().fg(color),
             ),
         ])

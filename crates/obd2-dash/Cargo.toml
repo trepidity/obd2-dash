@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 obd2-db = { path = "../obd2-db" }
-obd2-core = { path = "../obd2-core", features = ["ai"] }
+obd2-core = { path = "/Users/jared/Projects/obd2-core/crates/obd2-core", features = ["serial", "embedded-specs"] }
 tokio = { workspace = true }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
@@ -20,5 +20,9 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
-tokio-serial = "5.4"
 serialport = "4.7"
+reqwest = { version = "0.12", features = ["json"] }
+btleplug = { version = "0.11", features = ["serde"] }
+flate2 = "1"
+rand = "0.8"
+sys-locale = "0.3.2"

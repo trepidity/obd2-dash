@@ -53,7 +53,7 @@ pub fn render_widget(
             state,
             block,
             "MAP",
-            state.domain.vehicle.intake_map.as_ref().map(|r| r.value),
+            state.domain.vehicle.intake_map,
             "kPa",
             0x0B,
         ),
@@ -63,7 +63,7 @@ pub fn render_widget(
             state,
             block,
             "MAF",
-            state.domain.vehicle.maf.as_ref().map(|r| r.value),
+            state.domain.vehicle.maf,
             "g/s",
             0x10,
         ),
@@ -73,7 +73,7 @@ pub fn render_widget(
             state,
             block,
             "Fuel P",
-            state.domain.vehicle.fuel_pressure.as_ref().map(|r| r.value),
+            state.domain.vehicle.fuel_pressure,
             "kPa",
             0x0A,
         ),
@@ -90,8 +90,7 @@ pub fn render_widget(
                 .domain
                 .vehicle
                 .engine_fuel_rate
-                .as_ref()
-                .map(|r| r.value),
+                .map(|r| r),
             "L/h",
             0x5E,
         ),
@@ -242,8 +241,7 @@ fn render_single_rpm(frame: &mut Frame, area: Rect, state: &AppState, block: Blo
         .domain
         .vehicle
         .rpm
-        .as_ref()
-        .map(|r| r.value)
+        .map(|r| r)
         .unwrap_or(0.0);
     let color =
         ui::threshold_color_for_pid(state, 0x0C, rpm_val, || ui::rpm_color_default(rpm_val));
@@ -334,8 +332,7 @@ fn render_single_load(frame: &mut Frame, area: Rect, state: &AppState, block: Bl
         .domain
         .vehicle
         .engine_load
-        .as_ref()
-        .map(|r| r.value)
+        .map(|r| r)
         .unwrap_or(0.0);
     let has_data = state.domain.vehicle.engine_load.is_some();
 
@@ -430,8 +427,7 @@ fn render_single_throttle(frame: &mut Frame, area: Rect, state: &AppState, block
         .domain
         .vehicle
         .throttle_position
-        .as_ref()
-        .map(|r| r.value)
+        .map(|r| r)
         .unwrap_or(0.0);
     let color = ui::threshold_color_for_pid(state, 0x11, val, || Color::Cyan);
 
@@ -517,7 +513,7 @@ fn render_single_boost(frame: &mut Frame, area: Rect, state: &AppState, block: B
 }
 
 fn render_single_oil_pressure(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
-    let val = state.domain.vehicle.oil_pressure.as_ref().map(|r| r.value);
+    let val = state.domain.vehicle.oil_pressure;
     let color = match val {
         Some(v) => ui::threshold_color_for_pid(state, 0xFD, v, || {
             if v < 100.0 {
@@ -553,8 +549,7 @@ fn render_single_fuel_tank(frame: &mut Frame, area: Rect, state: &AppState, bloc
         .domain
         .vehicle
         .fuel_tank_level
-        .as_ref()
-        .map(|r| r.value)
+        .map(|r| r)
         .unwrap_or(0.0);
     let has_data = state.domain.vehicle.fuel_tank_level.is_some();
 
@@ -734,26 +729,26 @@ fn render_single_fuel_trims(
 
 fn make_trim_display<'a>(
     label: &str,
-    reading: &Option<obd2_core::PidReading>,
+    reading: &Option<f64>,
     pid_code: u8,
     state: &AppState,
 ) -> Line<'a> {
     if let Some(r) = reading {
-        let color = ui::threshold_color_for_pid(state, pid_code, r.value, || {
-            if r.value.abs() > 10.0 {
+        let color = ui::threshold_color_for_pid(state, pid_code, *r, || {
+            if (*r).abs() > 10.0 {
                 Color::Yellow
             } else {
                 Color::Green
             }
         });
-        let sign = if r.value >= 0.0 { "+" } else { "" };
+        let sign = if *r >= 0.0 { "+" } else { "" };
         Line::from(vec![
             Span::styled(
                 format!(" {:<6}", label),
                 Style::default().fg(Color::DarkGray),
             ),
             Span::styled(
-                format!("{}{:.1}%", sign, r.value),
+                format!("{}{:.1}%", sign, r),
                 Style::default().fg(color),
             ),
         ])
@@ -774,13 +769,13 @@ fn render_single_temp(
     state: &AppState,
     block: Block,
     _label: &str,
-    reading: &Option<obd2_core::PidReading>,
+    reading: &Option<f64>,
     pid_code: u8,
 ) {
     let (text, color) = if let Some(r) = reading {
-        let (val, unit) = state.domain.display_temp_value(r);
-        let c = ui::threshold_color_for_pid(state, pid_code, r.value, || {
-            ui::temp_color_default(r.value)
+        let (val, unit) = state.domain.display_temp_value(*r);
+        let c = ui::threshold_color_for_pid(state, pid_code, *r, || {
+            ui::temp_color_default(*r)
         });
         (format!("{:.1}{}", val, unit), c)
     } else {
@@ -812,9 +807,9 @@ fn render_single_catalyst_temps(frame: &mut Frame, area: Rect, state: &AppState,
         .iter()
         .map(|(label, reading, pid_code)| {
             if let Some(r) = reading {
-                let (val, unit) = state.domain.display_temp_value(r);
-                let color = ui::threshold_color_for_pid(state, *pid_code, r.value, || {
-                    ui::temp_color_default(r.value)
+                let (val, unit) = state.domain.display_temp_value(*r);
+                let color = ui::threshold_color_for_pid(state, *pid_code, *r, || {
+                    ui::temp_color_default(*r)
                 });
                 Line::from(vec![
                     Span::styled(
@@ -938,7 +933,7 @@ fn render_recording_status(frame: &mut Frame, area: Rect, state: &AppState, bloc
     let mut lines = Vec::new();
 
     match &state.domain.recording {
-        obd2_core::RecordingState::Idle => {
+        crate::recording::RecordingState::Idle => {
             lines.push(Line::from(Span::styled(
                 " Idle",
                 Style::default().fg(Color::DarkGray),
@@ -948,7 +943,7 @@ fn render_recording_status(frame: &mut Frame, area: Rect, state: &AppState, bloc
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        obd2_core::RecordingState::Recording { start_instant, .. } => {
+        crate::recording::RecordingState::Recording { start_instant, .. } => {
             let elapsed = start_instant.elapsed();
             let secs = elapsed.as_secs();
             let mins = secs / 60;
@@ -971,7 +966,7 @@ fn render_recording_status(frame: &mut Frame, area: Rect, state: &AppState, bloc
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        obd2_core::RecordingState::Replaying(controller) => {
+        crate::recording::RecordingState::Replaying(controller) => {
             let speed_label = controller.speed_label();
             lines.push(Line::from(vec![Span::styled(
                 format!(" REPLAY {} ", speed_label),

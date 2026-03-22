@@ -3,9 +3,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::obd2::pid::Pid;
+use obd2_core::protocol::pid::Pid;
+use crate::domain::DomainState;
 use crate::recording::format::FRAME_PID;
-use crate::state::DomainState;
 
 /// Per-PID statistical summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,13 +56,13 @@ impl SessionSummary {
         // Helper: add a single PID stat from the current reading (point-in-time snapshot).
         macro_rules! add_pid {
             ($reading:expr, $name:expr, $unit:expr) => {
-                if let Some(ref r) = $reading {
+                if let Some(val) = $reading {
                     pid_stats.push(PidStats {
                         name: $name.to_string(),
                         unit: $unit.to_string(),
-                        min: r.value,
-                        max: r.value,
-                        avg: r.value,
+                        min: val,
+                        max: val,
+                        avg: val,
                         stddev: 0.0,
                         samples: 1,
                     });
@@ -73,11 +73,11 @@ impl SessionSummary {
         let v = &domain.vehicle;
         add_pid!(v.rpm, "Engine RPM", "rpm");
         add_pid!(v.speed, "Vehicle Speed", "km/h");
-        add_pid!(v.coolant_temp, "Coolant Temp", "°C");
+        add_pid!(v.coolant_temp, "Coolant Temp", "\u{00B0}C");
         add_pid!(v.engine_load, "Engine Load", "%");
         add_pid!(v.throttle_position, "Throttle Position", "%");
         add_pid!(v.intake_map, "Intake MAP", "kPa");
-        add_pid!(v.intake_air_temp, "Intake Air Temp", "°C");
+        add_pid!(v.intake_air_temp, "Intake Air Temp", "\u{00B0}C");
         add_pid!(v.maf, "MAF", "g/s");
         add_pid!(v.fuel_tank_level, "Fuel Tank Level", "%");
         add_pid!(v.engine_fuel_rate, "Engine Fuel Rate", "L/h");
@@ -86,17 +86,17 @@ impl SessionSummary {
         add_pid!(v.short_fuel_trim_b2, "Short Fuel Trim B2", "%");
         add_pid!(v.long_fuel_trim_b2, "Long Fuel Trim B2", "%");
         add_pid!(v.barometric_pressure, "Barometric Pressure", "kPa");
-        add_pid!(v.ambient_air_temp, "Ambient Air Temp", "°C");
-        add_pid!(v.engine_oil_temp, "Engine Oil Temp", "°C");
-        add_pid!(v.transmission_temp, "Transmission Temp", "°C");
-        add_pid!(v.catalyst_temp_b1s1, "Catalyst Temp B1S1", "°C");
-        add_pid!(v.catalyst_temp_b2s1, "Catalyst Temp B2S1", "°C");
+        add_pid!(v.ambient_air_temp, "Ambient Air Temp", "\u{00B0}C");
+        add_pid!(v.engine_oil_temp, "Engine Oil Temp", "\u{00B0}C");
+        add_pid!(v.transmission_temp, "Transmission Temp", "\u{00B0}C");
+        add_pid!(v.catalyst_temp_b1s1, "Catalyst Temp B1S1", "\u{00B0}C");
+        add_pid!(v.catalyst_temp_b2s1, "Catalyst Temp B2S1", "\u{00B0}C");
         add_pid!(v.oil_pressure, "Oil Pressure", "kPa");
-        add_pid!(v.timing_advance, "Timing Advance", "°");
+        add_pid!(v.timing_advance, "Timing Advance", "\u{00B0}");
         add_pid!(v.fuel_pressure, "Fuel Pressure", "kPa");
         add_pid!(v.commanded_egr, "Commanded EGR", "%");
         add_pid!(v.commanded_evap_purge, "Commanded EVAP Purge", "%");
-        add_pid!(v.commanded_equiv_ratio, "Commanded Equiv Ratio", "λ");
+        add_pid!(v.commanded_equiv_ratio, "Commanded Equiv Ratio", "\u{03BB}");
         add_pid!(v.absolute_load, "Absolute Load", "%");
 
         if let Some(volts) = v.battery_voltage {
@@ -131,7 +131,7 @@ impl SessionSummary {
                 .as_ref()
                 .map(|a| a.corrected_fuel_rate_lph));
 
-        let duration_secs = v.run_time.as_ref().map(|r| r.value);
+        let duration_secs = v.run_time;
 
         let alert_history = domain.alert_history.iter().cloned().collect();
 
@@ -151,10 +151,10 @@ impl SessionSummary {
     }
 
     /// Build a summary by replaying a `.obd2rec` recording file.
+    #[allow(dead_code)]
     pub fn from_recording(path: &Path) -> anyhow::Result<Self> {
         let (header, frames) = crate::recording::reader::read_recording(path)?;
 
-        // Accumulate per-PID statistics.
         struct Accumulator {
             name: String,
             unit: String,
@@ -179,9 +179,9 @@ impl SessionSummary {
                 let value = frame.value;
 
                 let acc = accumulators.entry(pid_code).or_insert_with(|| {
-                    let (name, unit) = Pid::from_code(pid_code)
-                        .map(|p| (p.name().to_string(), p.unit().to_string()))
-                        .unwrap_or_else(|| (format!("PID 0x{:02X}", pid_code), "?".to_string()));
+                    let pid = Pid::from_code(pid_code);
+                    let name = pid.name().to_string();
+                    let unit = pid.unit().to_string();
                     Accumulator {
                         name,
                         unit,

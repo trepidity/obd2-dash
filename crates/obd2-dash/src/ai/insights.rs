@@ -9,6 +9,7 @@ pub enum Severity {
 }
 
 impl Severity {
+    #[allow(dead_code)]
     pub fn label(&self) -> &str {
         match self {
             Severity::Critical => "CRITICAL",
@@ -55,6 +56,7 @@ impl AiInsights {
     }
 
     /// Total line count for scroll calculations.
+    #[allow(dead_code)]
     pub fn line_count(&self) -> usize {
         // Header lines + blank line + all section lines
         let mut count = 3; // header, provider info, blank

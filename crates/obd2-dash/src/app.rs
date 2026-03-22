@@ -3,18 +3,21 @@ use std::path::PathBuf;
 
 use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
-use obd2_core::ai::{AiConfig, AiInsights};
-use obd2_core::nhtsa::NhtsaVehicle;
-use obd2_core::{
-    AdapterInfo, ConnectionState, DeviceKind, DiscoveredDevice, DomainMessage, DomainState, Dtc,
-    Pid, PidReading, ScanEvent,
-};
+use crate::ai::{AiConfig, AiInsights};
+use crate::nhtsa::NhtsaVehicle;
+use crate::domain::{ConnectionState, DomainMessage, DomainState};
+use crate::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
+
+use obd2_core::adapter::AdapterInfo;
+use obd2_core::protocol::dtc::Dtc;
+use obd2_core::protocol::enhanced::Reading;
+use obd2_core::protocol::pid::Pid;
 
 /// Messages flowing into the app state (TEA / Elm-style).
 #[derive(Debug)]
 pub enum Message {
     // Domain (forwarded to DomainState)
-    PidUpdate(Pid, PidReading),
+    PidUpdate(Pid, Reading),
     VoltageUpdate(f64),
     DtcUpdate(Vec<Dtc>),
     ConnectionStatus(ConnectionState),
@@ -100,16 +103,16 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(poll_interval_ms: u64) -> Self {
+    pub fn new(poll_ms: u64) -> Self {
         Self {
-            domain: DomainState::new(poll_interval_ms),
+            domain: DomainState::new(poll_ms),
             running: true,
             paused: false,
-            layout: DashboardLayout::Compact,
+            layout: DashboardLayout::Full,
             focused_panel: None,
             panel_selections: HashMap::new(),
             popup: None,
-            dashboard_config: DashboardConfig::default_layout(),
+            dashboard_config: DashboardConfig::default(),
             config_path: None,
             focused_widget: None,
             widget_selections: HashMap::new(),
@@ -131,9 +134,7 @@ impl AppState {
         }
     }
 
-    /// Process a message and update state.
     pub fn update(&mut self, msg: Message) {
-        // Try to convert to domain message and delegate
         match msg {
             Message::PidUpdate(pid, reading) => {
                 self.domain.update(DomainMessage::PidUpdate(pid, reading));
@@ -145,7 +146,8 @@ impl AppState {
                 self.domain.update(DomainMessage::DtcUpdate(dtcs));
             }
             Message::ConnectionStatus(state) => {
-                self.domain.update(DomainMessage::ConnectionStatus(state));
+                self.domain
+                    .update(DomainMessage::ConnectionStatus(state));
             }
             Message::AdapterDetected(info) => {
                 self.domain.update(DomainMessage::AdapterDetected(info));
@@ -153,49 +155,41 @@ impl AppState {
             Message::Error(e) => {
                 self.domain.update(DomainMessage::Error(e));
             }
-            // UI-only messages handled here
-            Message::VinDetected(_) | Message::NhtsaResult(..) => {
-                // Handled in the main event loop (triggers database / NHTSA lookup)
-            }
             Message::DeviceFound(dev) => {
-                // Deduplicate by kind
-                if !self.scan_devices.iter().any(|d| d.kind == dev.kind) {
-                    self.scan_devices.push(dev);
+                self.scan_devices.push(dev);
+                if self.scan_mode == ScanMode::Scanning {
+                    self.scan_mode = ScanMode::Picking;
                 }
             }
             Message::ScanComplete => {
                 if self.scan_mode == ScanMode::Scanning {
-                    if self.scan_devices.is_empty() {
-                        self.scan_mode = ScanMode::Idle;
-                        self.domain.last_error = Some("No devices found".into());
-                    } else {
-                        self.scan_mode = ScanMode::Picking;
-                    }
+                    self.scan_mode = ScanMode::Picking;
                 }
             }
             Message::StartConnect(kind) => {
                 self.pending_connect = Some(kind);
-                self.domain.connection = ConnectionState::Connecting;
                 self.scan_mode = ScanMode::Idle;
             }
+            Message::VinDetected(_) => {
+                // Handled in main loop
+            }
+            Message::NhtsaResult(_, _) => {
+                // Handled in main loop
+            }
+            Message::AiAnalysisComplete(insights) => {
+                self.ai_insights = Some(insights);
+                self.ai_analyzing = false;
+            }
+            Message::AiAnalysisError(e) => {
+                tracing::warn!("AI analysis error: {}", e);
+                self.ai_analyzing = false;
+                self.show_ai_insights = false;
+            }
             Message::Tick => {
-                // Tick is used to trigger redraws — no state change needed
+                // UI tick -- nothing to do here
             }
             Message::Quit => {
                 self.running = false;
-            }
-            Message::AiAnalysisComplete(insights) => {
-                self.ai_analyzing = false;
-                self.ai_insights = Some(insights);
-                self.ai_scroll = 0;
-                self.show_ai_insights = true;
-            }
-            Message::AiAnalysisError(err) => {
-                self.ai_analyzing = false;
-                self.popup = Some(PopupState {
-                    title: "AI Analysis Error".to_string(),
-                    body: vec![err],
-                });
             }
         }
     }

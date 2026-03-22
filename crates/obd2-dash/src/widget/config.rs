@@ -210,3 +210,9 @@ impl DashboardConfig {
         }
     }
 }
+
+impl Default for DashboardConfig {
+    fn default() -> Self {
+        Self::default_layout()
+    }
+}

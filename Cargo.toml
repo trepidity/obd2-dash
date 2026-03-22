@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/obd2-db",
-    "crates/obd2-core",
     "crates/obd2-dash",
 ]
 

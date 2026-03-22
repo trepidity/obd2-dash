@@ -17,6 +17,7 @@ pub enum DeviceKind {
 pub struct DiscoveredDevice {
     pub kind: DeviceKind,
     pub display_name: String,
+    #[allow(dead_code)]
     pub detail: Option<String>,
 }
 

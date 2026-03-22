@@ -1,4 +1,5 @@
 /// Parameters for vehicle-specific mock simulation.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct MockVehicleProfile {
     pub name: String,

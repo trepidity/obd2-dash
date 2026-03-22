@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::scanner::DeviceKind;
+use crate::scanner::DeviceKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConnectionPrefs {

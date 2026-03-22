@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use crate::obd2::types::VehicleData;
+use crate::vehicle_data::VehicleData;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -50,6 +50,7 @@ impl FuelType {
         }
     }
 
+    #[allow(dead_code)]
     pub fn name(&self) -> &'static str {
         match self {
             FuelType::Gasoline => "Gasoline",
@@ -77,6 +78,7 @@ impl FuelType {
 pub enum GoldSource {
     DirectFuelRate,
     MafDerived,
+    #[allow(dead_code)]
     Unavailable,
 }
 
@@ -139,6 +141,7 @@ impl Default for CorrectionFactors {
 
 #[derive(Debug, Clone)]
 pub struct AdvancedCalcResult {
+    #[allow(dead_code)]
     pub base_maf_gs: f64,
     pub base_fuel_rate_lph: f64,
     pub corrected_fuel_rate_lph: f64,
@@ -175,25 +178,25 @@ pub struct SensorSnapshot {
 impl SensorSnapshot {
     pub fn from_vehicle(v: &VehicleData) -> Self {
         Self {
-            rpm: v.rpm.as_ref().map(|r| r.value),
-            speed_kph: v.speed.as_ref().map(|r| r.value),
-            coolant_temp_c: v.coolant_temp.as_ref().map(|r| r.value),
-            engine_load_pct: v.engine_load.as_ref().map(|r| r.value),
-            intake_map_kpa: v.intake_map.as_ref().map(|r| r.value),
-            maf_gs: v.maf.as_ref().map(|r| r.value),
-            intake_air_temp_c: v.intake_air_temp.as_ref().map(|r| r.value),
-            ambient_air_temp_c: v.ambient_air_temp.as_ref().map(|r| r.value),
-            throttle_pct: v.throttle_position.as_ref().map(|r| r.value),
-            barometric_kpa: v.barometric_pressure.as_ref().map(|r| r.value),
-            engine_fuel_rate_lph: v.engine_fuel_rate.as_ref().map(|r| r.value),
-            stft_b1: v.short_fuel_trim_b1.as_ref().map(|r| r.value),
-            ltft_b1: v.long_fuel_trim_b1.as_ref().map(|r| r.value),
-            stft_b2: v.short_fuel_trim_b2.as_ref().map(|r| r.value),
-            ltft_b2: v.long_fuel_trim_b2.as_ref().map(|r| r.value),
-            catalyst_temp_b1s1: v.catalyst_temp_b1s1.as_ref().map(|r| r.value),
-            catalyst_temp_b2s1: v.catalyst_temp_b2s1.as_ref().map(|r| r.value),
-            catalyst_temp_b1s2: v.catalyst_temp_b1s2.as_ref().map(|r| r.value),
-            catalyst_temp_b2s2: v.catalyst_temp_b2s2.as_ref().map(|r| r.value),
+            rpm: v.rpm,
+            speed_kph: v.speed,
+            coolant_temp_c: v.coolant_temp,
+            engine_load_pct: v.engine_load,
+            intake_map_kpa: v.intake_map,
+            maf_gs: v.maf,
+            intake_air_temp_c: v.intake_air_temp,
+            ambient_air_temp_c: v.ambient_air_temp,
+            throttle_pct: v.throttle_position,
+            barometric_kpa: v.barometric_pressure,
+            engine_fuel_rate_lph: v.engine_fuel_rate,
+            stft_b1: v.short_fuel_trim_b1,
+            ltft_b1: v.long_fuel_trim_b1,
+            stft_b2: v.short_fuel_trim_b2,
+            ltft_b2: v.long_fuel_trim_b2,
+            catalyst_temp_b1s1: v.catalyst_temp_b1s1,
+            catalyst_temp_b2s1: v.catalyst_temp_b2s1,
+            catalyst_temp_b1s2: v.catalyst_temp_b1s2,
+            catalyst_temp_b2s2: v.catalyst_temp_b2s2,
         }
     }
 }
@@ -290,14 +293,9 @@ impl FuelEconomyState {
         speed_mph: Option<f64>,
         dt_secs: f64,
     ) -> Option<GoldStandardResult> {
-        // Tier 1: Direct fuel rate from PID 0x5E
         let (source, fuel_rate_lph) = if let Some(rate) = snap.engine_fuel_rate_lph {
             (GoldSource::DirectFuelRate, rate)
         } else if let Some(maf) = snap.maf_gs {
-            // Tier 2 fallback: MAF-derived
-            // fuel_rate (L/h) = MAF(g/s) / (AFR × density(kg/L)) × 3600 / 1000
-            // = MAF / (AFR × density × 1000) × 3600
-            // Simplify: MAF × 3.6 / (AFR × density)
             let rate = maf * 3.6 / (self.fuel_type.afr() * self.fuel_type.density());
             (GoldSource::MafDerived, rate)
         } else {
@@ -306,18 +304,15 @@ impl FuelEconomyState {
 
         let fuel_rate_gph = fuel_rate_lph / LITERS_PER_GALLON;
 
-        // Accumulate gallons
         if dt_secs > 0.0 && fuel_rate_gph > 0.001 {
             self.gold_total_gallons += fuel_rate_gph * (dt_secs / 3600.0);
         }
 
-        // Instant MPG = speed(mph) / fuel_rate(gal/h)
         let instant_mpg = match (speed_mph, fuel_rate_gph > 0.001) {
             (Some(mph), true) if mph > 0.5 => (mph / fuel_rate_gph).clamp(0.0, 199.9),
             _ => 0.0,
         };
 
-        // Trip average
         let avg_mpg = if self.gold_total_gallons > 0.001 {
             (self.gold_total_miles / self.gold_total_gallons).clamp(0.0, 199.9)
         } else {
@@ -338,7 +333,6 @@ impl FuelEconomyState {
         speed_mph: Option<f64>,
         dt_secs: f64,
     ) -> Option<AdvancedCalcResult> {
-        // Need RPM and MAP at minimum for speed-density
         let rpm = snap.rpm?;
         let map_kpa = snap.intake_map_kpa?;
 
@@ -346,30 +340,23 @@ impl FuelEconomyState {
             return None;
         }
 
-        // IAT: prefer intake_air_temp, fallback to ambient, fallback 25°C
         let iat_c = snap
             .intake_air_temp_c
             .or(snap.ambient_air_temp_c)
             .unwrap_or(25.0);
         let iat_k = iat_c + 273.15;
 
-        // Base MAF via ideal gas law:
-        // MAF(g/s) = (MAP × VE × displacement_m³ × RPM) / (2 × 60 × R_AIR × IAT_K) × 1000
         let displacement_m3 = self.displacement_l / 1000.0;
         let base_maf_gs = (map_kpa * self.volumetric_efficiency * displacement_m3 * rpm)
             / (2.0 * 60.0 * R_AIR * iat_k)
             * 1000.0;
 
-        // Base fuel rate: MAF / (AFR × density) × 3.6
         let base_fuel_rate_lph =
             base_maf_gs * 3.6 / (self.fuel_type.afr() * self.fuel_type.density());
 
-        // ── Correction Factors ──────────────────────────────────────────
-
-        // 1. Cold engine: linear -40°C → +20%, 80°C → +0%
         let cold_engine = if let Some(coolant) = snap.coolant_temp_c {
             if coolant < 80.0 {
-                let frac = ((80.0 - coolant) / 120.0).clamp(0.0, 1.0); // -40→80 = 120° range
+                let frac = ((80.0 - coolant) / 120.0).clamp(0.0, 1.0);
                 1.0 + frac * 0.20
             } else {
                 1.0
@@ -378,31 +365,24 @@ impl FuelEconomyState {
             1.0
         };
 
-        // 2. Altitude: baro / std_baro
         let altitude = snap
             .barometric_kpa
             .map(|b| (b / STD_BARO).clamp(0.7, 1.3))
             .unwrap_or(1.0);
 
-        // 3. Air density: 293.15K / actual_K
         let air_density_temp = snap
             .ambient_air_temp_c
             .or(snap.intake_air_temp_c)
             .unwrap_or(20.0);
         let air_density = (STD_TEMP_K / (air_density_temp + 273.15)).clamp(0.8, 1.2);
 
-        // 4. Fuel trims: 1.0 + avg_combined_trim / 100
         let fuel_trims = calc_fuel_trim_correction(snap);
-
-        // 5. Catalyst warmup: linear 25°C → +10%, 300°C → +0%
         let catalyst_warmup = calc_catalyst_correction(snap);
 
-        // 6. Throttle transient: rapid opening → up to +15%
         let throttle_transient =
             if let (Some(current), Some(prev)) = (snap.throttle_pct, self.prev_throttle) {
                 let delta = current - prev;
                 if delta > 5.0 {
-                    // Opening rapidly
                     1.0 + (delta / 100.0 * 1.5).clamp(0.0, 0.15)
                 } else {
                     1.0
@@ -411,7 +391,6 @@ impl FuelEconomyState {
                 1.0
             };
 
-        // 7. High-load / WOT: >85% load → up to +20%
         let high_load_wot = if let Some(load) = snap.engine_load_pct {
             if load > 85.0 {
                 let frac = ((load - 85.0) / 15.0).clamp(0.0, 1.0);
@@ -436,18 +415,15 @@ impl FuelEconomyState {
         let corrected_fuel_rate_lph = base_fuel_rate_lph * corrections.total();
         let corrected_gph = corrected_fuel_rate_lph / LITERS_PER_GALLON;
 
-        // Accumulate gallons
         if dt_secs > 0.0 && corrected_gph > 0.001 {
             self.advanced_total_gallons += corrected_gph * (dt_secs / 3600.0);
         }
 
-        // Instant MPG
         let instant_mpg = match (speed_mph, corrected_gph > 0.001) {
             (Some(mph), true) if mph > 0.5 => (mph / corrected_gph).clamp(0.0, 199.9),
             _ => 0.0,
         };
 
-        // Trip average
         let avg_mpg = if self.advanced_total_gallons > 0.001 {
             (self.advanced_total_miles / self.advanced_total_gallons).clamp(0.0, 199.9)
         } else {
@@ -477,7 +453,6 @@ fn push_history(history: &mut VecDeque<u64>, mpg: f64) {
     if history.len() >= MPG_HISTORY_CAP {
         history.pop_front();
     }
-    // Scale MPG × 10 for sparkline resolution (e.g., 28.4 → 284)
     history.push_back((mpg * 10.0).clamp(0.0, 2000.0) as u64);
 }
 
@@ -527,7 +502,6 @@ fn calc_catalyst_correction(snap: &SensorSnapshot) -> f64 {
 
     let avg = temps.iter().sum::<f64>() / temps.len() as f64;
 
-    // Linear: 25°C → +10%, 300°C → +0%
     if avg < 300.0 {
         let frac = ((300.0 - avg) / 275.0).clamp(0.0, 1.0);
         1.0 + frac * 0.10

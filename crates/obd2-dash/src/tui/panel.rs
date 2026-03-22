@@ -6,7 +6,7 @@ use ratatui::{
 };
 
 use crate::app::{AppState, PopupState};
-use obd2_core::Pid;
+use obd2_core::protocol::pid::Pid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelKind {
@@ -159,212 +159,61 @@ pub enum PanelItemDetail {
     },
 }
 
+fn pid_value_from_vehicle(v: &crate::vehicle_data::VehicleData, pid: Pid) -> Option<f64> {
+    let code = pid.0;
+    match code {
+        0x0C => v.rpm,
+        0x0D => v.speed,
+        0x04 => v.engine_load,
+        0x11 => v.throttle_position,
+        0x0B => v.intake_map,
+        0x10 => v.maf,
+        0x0A => v.fuel_pressure,
+        0x05 => v.coolant_temp,
+        0x5C => v.engine_oil_temp,
+        0x0F => v.intake_air_temp,
+        0x46 => v.ambient_air_temp,
+        0x3C => v.catalyst_temp_b1s1,
+        0x3D => v.catalyst_temp_b2s1,
+        0x3E => v.catalyst_temp_b1s2,
+        0x3F => v.catalyst_temp_b2s2,
+        0x2F => v.fuel_tank_level,
+        0x5E => v.engine_fuel_rate,
+        0x06 => v.short_fuel_trim_b1,
+        0x07 => v.long_fuel_trim_b1,
+        0x08 => v.short_fuel_trim_b2,
+        0x09 => v.long_fuel_trim_b2,
+        0x33 => v.barometric_pressure,
+        0x42 => v.control_module_voltage,
+        0x0E => v.timing_advance,
+        0x1F => v.run_time,
+        0x21 => v.distance_with_mil,
+        0x23 => v.fuel_rail_gauge_pressure,
+        0x2C => v.commanded_egr,
+        0x2E => v.commanded_evap_purge,
+        0x31 => v.distance_since_dtc_clear,
+        0x43 => v.absolute_load,
+        0x44 => v.commanded_equiv_ratio,
+        0x45 => v.relative_throttle_pos,
+        0x47 => v.abs_throttle_pos_b,
+        0x49 => v.accel_pedal_pos_d,
+        0x4A => v.accel_pedal_pos_e,
+        0x4C => v.commanded_throttle_actuator,
+        0x59 => v.fuel_rail_abs_pressure,
+        0x61 => v.demanded_torque,
+        0x62 => v.actual_torque,
+        0x63 => v.reference_torque,
+        _ => None,
+    }
+}
+
 fn pid_item(state: &AppState, pid: Pid) -> PanelItem {
-    let reading_val = match pid {
-        Pid::EngineRpm => state.domain.vehicle.rpm.as_ref().map(|r| r.value),
-        Pid::VehicleSpeed => state.domain.vehicle.speed.as_ref().map(|r| r.value),
-        Pid::EngineLoad => state.domain.vehicle.engine_load.as_ref().map(|r| r.value),
-        Pid::ThrottlePosition => state
-            .domain
-            .vehicle
-            .throttle_position
-            .as_ref()
-            .map(|r| r.value),
-        Pid::IntakeMap => state.domain.vehicle.intake_map.as_ref().map(|r| r.value),
-        Pid::Maf => state.domain.vehicle.maf.as_ref().map(|r| r.value),
-        Pid::FuelPressure => state.domain.vehicle.fuel_pressure.as_ref().map(|r| r.value),
-        Pid::OilPressure => state.domain.vehicle.oil_pressure.as_ref().map(|r| r.value),
-        Pid::CoolantTemp => state.domain.vehicle.coolant_temp.as_ref().map(|r| r.value),
-        Pid::EngineOilTemp => state
-            .domain
-            .vehicle
-            .engine_oil_temp
-            .as_ref()
-            .map(|r| r.value),
-        Pid::TransmissionTemp => state
-            .domain
-            .vehicle
-            .transmission_temp
-            .as_ref()
-            .map(|r| r.value),
-        Pid::IntakeAirTemp => state
-            .domain
-            .vehicle
-            .intake_air_temp
-            .as_ref()
-            .map(|r| r.value),
-        Pid::AmbientAirTemp => state
-            .domain
-            .vehicle
-            .ambient_air_temp
-            .as_ref()
-            .map(|r| r.value),
-        Pid::CatalystTempB1S1 => state
-            .domain
-            .vehicle
-            .catalyst_temp_b1s1
-            .as_ref()
-            .map(|r| r.value),
-        Pid::CatalystTempB2S1 => state
-            .domain
-            .vehicle
-            .catalyst_temp_b2s1
-            .as_ref()
-            .map(|r| r.value),
-        Pid::CatalystTempB1S2 => state
-            .domain
-            .vehicle
-            .catalyst_temp_b1s2
-            .as_ref()
-            .map(|r| r.value),
-        Pid::CatalystTempB2S2 => state
-            .domain
-            .vehicle
-            .catalyst_temp_b2s2
-            .as_ref()
-            .map(|r| r.value),
-        Pid::FuelTankLevel => state
-            .domain
-            .vehicle
-            .fuel_tank_level
-            .as_ref()
-            .map(|r| r.value),
-        Pid::EngineFuelRate => state
-            .domain
-            .vehicle
-            .engine_fuel_rate
-            .as_ref()
-            .map(|r| r.value),
-        Pid::ShortFuelTrimBank1 => state
-            .domain
-            .vehicle
-            .short_fuel_trim_b1
-            .as_ref()
-            .map(|r| r.value),
-        Pid::LongFuelTrimBank1 => state
-            .domain
-            .vehicle
-            .long_fuel_trim_b1
-            .as_ref()
-            .map(|r| r.value),
-        Pid::ShortFuelTrimBank2 => state
-            .domain
-            .vehicle
-            .short_fuel_trim_b2
-            .as_ref()
-            .map(|r| r.value),
-        Pid::LongFuelTrimBank2 => state
-            .domain
-            .vehicle
-            .long_fuel_trim_b2
-            .as_ref()
-            .map(|r| r.value),
-        Pid::BarometricPressure => state
-            .domain
-            .vehicle
-            .barometric_pressure
-            .as_ref()
-            .map(|r| r.value),
-        Pid::ControlModuleVoltage => state
-            .domain
-            .vehicle
-            .control_module_voltage
-            .as_ref()
-            .map(|r| r.value),
-        Pid::TimingAdvance => state
-            .domain
-            .vehicle
-            .timing_advance
-            .as_ref()
-            .map(|r| r.value),
-        Pid::RunTimeSinceStart => state.domain.vehicle.run_time.as_ref().map(|r| r.value),
-        Pid::DistanceWithMil => state
-            .domain
-            .vehicle
-            .distance_with_mil
-            .as_ref()
-            .map(|r| r.value),
-        Pid::FuelRailGaugePressure => state
-            .domain
-            .vehicle
-            .fuel_rail_gauge_pressure
-            .as_ref()
-            .map(|r| r.value),
-        Pid::CommandedEgr => state.domain.vehicle.commanded_egr.as_ref().map(|r| r.value),
-        Pid::CommandedEvapPurge => state
-            .domain
-            .vehicle
-            .commanded_evap_purge
-            .as_ref()
-            .map(|r| r.value),
-        Pid::DistanceSinceDtcClear => state
-            .domain
-            .vehicle
-            .distance_since_dtc_clear
-            .as_ref()
-            .map(|r| r.value),
-        Pid::AbsoluteLoad => state.domain.vehicle.absolute_load.as_ref().map(|r| r.value),
-        Pid::CommandedEquivRatio => state
-            .domain
-            .vehicle
-            .commanded_equiv_ratio
-            .as_ref()
-            .map(|r| r.value),
-        Pid::RelativeThrottlePos => state
-            .domain
-            .vehicle
-            .relative_throttle_pos
-            .as_ref()
-            .map(|r| r.value),
-        Pid::AbsThrottlePosB => state
-            .domain
-            .vehicle
-            .abs_throttle_pos_b
-            .as_ref()
-            .map(|r| r.value),
-        Pid::AccelPedalPosD => state
-            .domain
-            .vehicle
-            .accel_pedal_pos_d
-            .as_ref()
-            .map(|r| r.value),
-        Pid::AccelPedalPosE => state
-            .domain
-            .vehicle
-            .accel_pedal_pos_e
-            .as_ref()
-            .map(|r| r.value),
-        Pid::CommandedThrottleActuator => state
-            .domain
-            .vehicle
-            .commanded_throttle_actuator
-            .as_ref()
-            .map(|r| r.value),
-        Pid::FuelRailAbsPressure => state
-            .domain
-            .vehicle
-            .fuel_rail_abs_pressure
-            .as_ref()
-            .map(|r| r.value),
-        Pid::DemandedTorque => state
-            .domain
-            .vehicle
-            .demanded_torque
-            .as_ref()
-            .map(|r| r.value),
-        Pid::ActualTorque => state.domain.vehicle.actual_torque.as_ref().map(|r| r.value),
-        Pid::ReferenceTorque => state
-            .domain
-            .vehicle
-            .reference_torque
-            .as_ref()
-            .map(|r| r.value),
-    };
+    let reading_val = pid_value_from_vehicle(&state.domain.vehicle, pid);
 
     PanelItem {
         label: pid.name().to_string(),
         detail: PanelItemDetail::Pid {
-            pid_code: pid.code(),
+            pid_code: pid.0,
             current_value: reading_val,
             unit: pid.unit(),
             name: pid.name(),
@@ -376,19 +225,19 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
     match kind {
         PanelKind::GaugesEngine => {
             let mut items = vec![
-                pid_item(state, Pid::EngineRpm),
-                pid_item(state, Pid::VehicleSpeed),
-                pid_item(state, Pid::EngineLoad),
-                pid_item(state, Pid::ThrottlePosition),
+                pid_item(state, Pid::ENGINE_RPM),
+                pid_item(state, Pid::VEHICLE_SPEED),
+                pid_item(state, Pid::ENGINE_LOAD),
+                pid_item(state, Pid::THROTTLE_POSITION),
             ];
             if state.domain.vehicle.intake_map.is_some() {
-                items.push(pid_item(state, Pid::IntakeMap));
+                items.push(pid_item(state, Pid::INTAKE_MAP));
             }
             if state.domain.vehicle.maf.is_some() {
-                items.push(pid_item(state, Pid::Maf));
+                items.push(pid_item(state, Pid::MAF));
             }
             if state.domain.vehicle.fuel_pressure.is_some() {
-                items.push(pid_item(state, Pid::FuelPressure));
+                items.push(pid_item(state, Pid::FUEL_PRESSURE));
             }
             if state.domain.vehicle.boost_pressure.is_some() {
                 items.push(PanelItem {
@@ -402,61 +251,61 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                 });
             }
             if state.domain.vehicle.oil_pressure.is_some() {
-                items.push(pid_item(state, Pid::OilPressure));
+                items.push(pid_item(state, Pid(0xFD)));
             }
             if state.domain.vehicle.fuel_rail_gauge_pressure.is_some() {
-                items.push(pid_item(state, Pid::FuelRailGaugePressure));
+                items.push(pid_item(state, Pid::FUEL_RAIL_GAUGE_PRESSURE));
             }
             if state.domain.vehicle.fuel_rail_abs_pressure.is_some() {
-                items.push(pid_item(state, Pid::FuelRailAbsPressure));
+                items.push(pid_item(state, Pid::FUEL_RAIL_ABS_PRESSURE));
             }
             if state.domain.vehicle.timing_advance.is_some() {
-                items.push(pid_item(state, Pid::TimingAdvance));
+                items.push(pid_item(state, Pid::TIMING_ADVANCE));
             }
             if state.domain.vehicle.demanded_torque.is_some() {
-                items.push(pid_item(state, Pid::DemandedTorque));
+                items.push(pid_item(state, Pid::DEMANDED_TORQUE));
             }
             if state.domain.vehicle.actual_torque.is_some() {
-                items.push(pid_item(state, Pid::ActualTorque));
+                items.push(pid_item(state, Pid::ACTUAL_TORQUE));
             }
             if state.domain.vehicle.reference_torque.is_some() {
-                items.push(pid_item(state, Pid::ReferenceTorque));
+                items.push(pid_item(state, Pid::REFERENCE_TORQUE));
             }
             items
         }
         PanelKind::Temperatures => {
             vec![
-                pid_item(state, Pid::CoolantTemp),
-                pid_item(state, Pid::EngineOilTemp),
-                pid_item(state, Pid::TransmissionTemp),
-                pid_item(state, Pid::IntakeAirTemp),
-                pid_item(state, Pid::AmbientAirTemp),
-                pid_item(state, Pid::CatalystTempB1S1),
-                pid_item(state, Pid::CatalystTempB2S1),
-                pid_item(state, Pid::CatalystTempB1S2),
-                pid_item(state, Pid::CatalystTempB2S2),
+                pid_item(state, Pid::COOLANT_TEMP),
+                pid_item(state, Pid::ENGINE_OIL_TEMP),
+                pid_item(state, Pid(0xFE)),
+                pid_item(state, Pid::INTAKE_AIR_TEMP),
+                pid_item(state, Pid::AMBIENT_AIR_TEMP),
+                pid_item(state, Pid::CATALYST_TEMP_B1S1),
+                pid_item(state, Pid::CATALYST_TEMP_B2S1),
+                pid_item(state, Pid::CATALYST_TEMP_B1S2),
+                pid_item(state, Pid::CATALYST_TEMP_B2S2),
             ]
         }
         PanelKind::FuelSystem => {
-            let mut items = vec![pid_item(state, Pid::FuelTankLevel)];
+            let mut items = vec![pid_item(state, Pid::FUEL_TANK_LEVEL)];
             if state.domain.vehicle.engine_fuel_rate.is_some() {
-                items.push(pid_item(state, Pid::EngineFuelRate));
+                items.push(pid_item(state, Pid::ENGINE_FUEL_RATE));
             }
-            items.push(pid_item(state, Pid::ShortFuelTrimBank1));
-            items.push(pid_item(state, Pid::LongFuelTrimBank1));
-            items.push(pid_item(state, Pid::ShortFuelTrimBank2));
-            items.push(pid_item(state, Pid::LongFuelTrimBank2));
+            items.push(pid_item(state, Pid::SHORT_FUEL_TRIM_B1));
+            items.push(pid_item(state, Pid::LONG_FUEL_TRIM_B1));
+            items.push(pid_item(state, Pid::SHORT_FUEL_TRIM_B2));
+            items.push(pid_item(state, Pid::LONG_FUEL_TRIM_B2));
             if state.domain.vehicle.commanded_egr.is_some() {
-                items.push(pid_item(state, Pid::CommandedEgr));
+                items.push(pid_item(state, Pid::COMMANDED_EGR));
             }
             if state.domain.vehicle.commanded_evap_purge.is_some() {
-                items.push(pid_item(state, Pid::CommandedEvapPurge));
+                items.push(pid_item(state, Pid::COMMANDED_EVAP_PURGE));
             }
             if state.domain.vehicle.commanded_equiv_ratio.is_some() {
-                items.push(pid_item(state, Pid::CommandedEquivRatio));
+                items.push(pid_item(state, Pid::COMMANDED_EQUIV_RATIO));
             }
             if state.domain.vehicle.absolute_load.is_some() {
-                items.push(pid_item(state, Pid::AbsoluteLoad));
+                items.push(pid_item(state, Pid::ABSOLUTE_LOAD));
             }
             items
         }
@@ -477,19 +326,19 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                 });
             }
             if state.domain.vehicle.control_module_voltage.is_some() {
-                items.push(pid_item(state, Pid::ControlModuleVoltage));
+                items.push(pid_item(state, Pid::CONTROL_MODULE_VOLTAGE));
             }
             if state.domain.vehicle.barometric_pressure.is_some() {
-                items.push(pid_item(state, Pid::BarometricPressure));
+                items.push(pid_item(state, Pid::BAROMETRIC_PRESSURE));
             }
             if state.domain.vehicle.run_time.is_some() {
-                items.push(pid_item(state, Pid::RunTimeSinceStart));
+                items.push(pid_item(state, Pid::RUN_TIME));
             }
             if state.domain.vehicle.distance_with_mil.is_some() {
-                items.push(pid_item(state, Pid::DistanceWithMil));
+                items.push(pid_item(state, Pid::DISTANCE_WITH_MIL));
             }
             if state.domain.vehicle.distance_since_dtc_clear.is_some() {
-                items.push(pid_item(state, Pid::DistanceSinceDtcClear));
+                items.push(pid_item(state, Pid::DISTANCE_SINCE_CLEAR));
             }
             if let Some(info) = &state.domain.vehicle_info {
                 items.push(PanelItem {
@@ -552,7 +401,7 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                     label: dtc.code.clone(),
                     detail: PanelItemDetail::Dtc {
                         code: dtc.code.clone(),
-                        description: dtc.description.to_string(),
+                        description: dtc.description.as_deref().unwrap_or("").to_string(),
                         category: cat,
                     },
                 }
@@ -745,27 +594,15 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
             description,
             category,
         } => {
-            let mut lines = vec![
+            let lines = vec![
                 format!("Code: {}", code),
                 format!("Category: {}", category),
                 String::new(),
                 description.clone(),
             ];
 
-            // Build diagnostic context and run local analysis
-            let context = obd2_core::diagnostics::correlation::build_diagnostic_context(
-                &state.domain.vehicle,
-                &state.domain.thresholds_cache,
-                &state.domain.stored_dtcs,
-                state.domain.vehicle_info.as_ref(),
-                code,
-                description,
-                category,
-            );
-            let provider = obd2_core::diagnostics::provider::LocalDiagnosticProvider;
-            if let Some(result) = provider.diagnose_sync(&context) {
-                lines.extend(result.to_popup_lines());
-            }
+            // TODO: Diagnostic correlation was in old obd2-core diagnostics module.
+            // Will be re-implemented or migrated in a future phase.
 
             (code.clone(), lines)
         }
