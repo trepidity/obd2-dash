@@ -404,7 +404,8 @@ async fn run_session_poll_loop<A: Adapter>(
             if let Ok(Some(v)) = session.battery_voltage().await {
                 let _ = tx.send(Message::VoltageUpdate(v));
             }
-            if let Ok(dtcs) = session.read_dtcs().await {
+            if let Ok(mut dtcs) = session.read_dtcs().await {
+                obd2_core::session::diagnostics::enrich_dtcs(&mut dtcs, session.spec());
                 let _ = tx.send(Message::DtcUpdate(dtcs));
             }
         }
@@ -438,7 +439,7 @@ fn spawn_connect_and_poll(
     poll_ms: u64,
     tx: mpsc::UnboundedSender<Message>,
     prefs_path: PathBuf,
-    _ble_scan_secs: u64,
+    ble_scan_secs: u64,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
@@ -511,12 +512,21 @@ fn spawn_connect_and_poll(
             }
             DeviceKind::Ble { name } => {
                 tracing::info!("Scanning for BLE adapter: {}", name);
-                // BLE connection via btleplug would go here.
-                // For now, report error since the new obd2-core BLE transport requires
-                // the ble feature which we haven't enabled.
-                let msg = "BLE connection not yet migrated to new obd2-core";
-                let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(msg.to_string())));
-                let _ = tx.send(Message::Error(msg.to_string()));
+                let filter = if name.is_empty() { None } else { Some(name.as_str()) };
+                let scan_dur = std::time::Duration::from_secs(ble_scan_secs);
+                match obd2_core::transport::ble::BleTransport::scan_and_connect(filter, scan_dur).await {
+                    Ok(ble_transport) => {
+                        let adapter = Elm327Adapter::new(Box::new(ble_transport));
+                        let mut session = Session::new(adapter);
+                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
+                        run_session_poll_loop(&mut session, poll_ms, &tx).await;
+                    }
+                    Err(e) => {
+                        let msg = format!("BLE connection failed: {}", e);
+                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(msg.clone())));
+                        let _ = tx.send(Message::Error(msg));
+                    }
+                }
             }
         }
     })

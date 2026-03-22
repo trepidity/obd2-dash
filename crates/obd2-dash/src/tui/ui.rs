@@ -1080,12 +1080,21 @@ pub(crate) fn render_full_dtcs(
     } else {
         for (i, dtc) in dtcs.iter().enumerate() {
             let color = dtc_color(dtc);
+            let severity_tag = dtc
+                .severity
+                .as_ref()
+                .map(|s| format!("[{:?}] ", s))
+                .unwrap_or_default();
             let line = Line::from(vec![
                 Span::styled(
                     format!(" {:<6}", dtc.code),
                     Style::default().fg(color).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(dtc.description.as_deref().unwrap_or("").to_string(), Style::default().fg(color)),
+                Span::styled(severity_tag, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    dtc.description.as_deref().unwrap_or("").to_string(),
+                    Style::default().fg(color),
+                ),
             ]);
             lines.push(maybe_highlight(line, selected_item, i));
         }
@@ -1376,16 +1385,24 @@ fn mpg_color(mpg: f64) -> Color {
 
 /// Choose a color for a DTC based on its code pattern.
 fn dtc_color(dtc: &obd2_core::protocol::dtc::Dtc) -> Color {
+    use obd2_core::protocol::dtc::Severity;
+    // Use spec-provided severity when available
+    if let Some(ref severity) = dtc.severity {
+        return match severity {
+            Severity::Critical | Severity::High => Color::Red,
+            Severity::Medium => Color::Yellow,
+            Severity::Low | Severity::Info => Color::Cyan,
+        };
+    }
+    // Fallback: infer from category/code
     match dtc.category {
         DtcCategory::Powertrain => {
-            // P03xx misfire = red, P07xx transmission = red, others = yellow
             if dtc.code.starts_with("P03") || dtc.code.starts_with("P07") {
                 Color::Red
             } else {
                 Color::Yellow
             }
         }
-        // Chassis / Body / Network codes are always red (less common, more serious)
         _ => Color::Red,
     }
 }
