@@ -548,4 +548,62 @@ mod tests {
         let threshold = db.resolve_threshold(0x04, None, None).unwrap().unwrap();
         assert!((threshold.max_value - 100.0).abs() < 0.01);
     }
+
+    #[test]
+    fn rule6_engine_family_override_survives_default_change() {
+        let db = Database::open_in_memory().unwrap();
+        seed::seed_all(&db).unwrap();
+
+        let default_threshold = db.resolve_threshold(0x0C, None, None).unwrap().unwrap();
+        let mini_threshold = db
+            .resolve_threshold(0x0C, Some("WMWRE33546T000001"), Some("W11B16"))
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            (default_threshold.high_warning.unwrap() - mini_threshold.high_warning.unwrap()).abs()
+                > 1.0,
+            "Mini RPM high_warning should differ from default",
+        );
+        assert!(
+            (mini_threshold.high_warning.unwrap() - 6200.0).abs() < 0.01,
+            "Mini RPM high_warning should be 6200",
+        );
+    }
+
+    #[test]
+    fn rule6_resolve_all_returns_per_vehicle_thresholds() {
+        let db = Database::open_in_memory().unwrap();
+        seed::seed_all(&db).unwrap();
+
+        let codes: Vec<u8> = vec![0x04, 0x05, 0x0C, 0x0D, 0x11];
+
+        let duramax = db
+            .resolve_all_thresholds(Some("1GCHK23164F000001"), Some("LLY"), &codes)
+            .unwrap();
+        let mini = db
+            .resolve_all_thresholds(Some("WMWRE33546T000001"), Some("W11B16"), &codes)
+            .unwrap();
+
+        assert!(!duramax.is_empty());
+        assert!(!mini.is_empty());
+
+        if let (Some(d), Some(m)) = (duramax.get(&0x0C), mini.get(&0x0C)) {
+            assert_ne!(d.high_warning, m.high_warning);
+        }
+    }
+
+    #[test]
+    fn rule6_unknown_vehicle_falls_back_to_defaults() {
+        let db = Database::open_in_memory().unwrap();
+        seed::seed_all(&db).unwrap();
+
+        let threshold = db
+            .resolve_threshold(0x0C, Some("UNKNOWN_VIN_12345"), None)
+            .unwrap()
+            .unwrap();
+
+        assert!(threshold.high_warning.is_some());
+        assert!(threshold.high_critical.is_some());
+    }
 }
