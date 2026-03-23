@@ -731,6 +731,27 @@ async fn run_tui(
                         state.update(Message::PidUpdate(pid, reading));
                     } else if recording::replay::ReplayController::is_voltage_frame(&frame) {
                         state.update(Message::VoltageUpdate(frame.value));
+                    } else if recording::replay::ReplayController::is_enhanced_frame(&frame) {
+                        if let Some((did, module, name, unit)) = frame.decode_enhanced() {
+                            state.update(Message::EnhancedPidUpdate {
+                                did,
+                                module,
+                                name,
+                                value: frame.value,
+                                unit,
+                            });
+                        }
+                    } else if recording::replay::ReplayController::is_o2_frame(&frame) {
+                        if let Some((test_name, sensor, unit)) = frame.decode_o2() {
+                            state.update(Message::O2MonitoringUpdate(vec![
+                                crate::domain::O2Reading {
+                                    test_name,
+                                    sensor,
+                                    value: frame.value,
+                                    unit,
+                                },
+                            ]));
+                        }
                     }
                 }
 
@@ -841,37 +862,53 @@ async fn run_headless(
             }
             _ = print_interval.tick() => {
                 cycles += 1;
-                let rpm = state.domain.vehicle.rpm;
-                let speed = state.domain.vehicle.speed;
-                let temp = state.domain.vehicle.coolant_temp;
-                let load = state.domain.vehicle.engine_load;
-                let volts = state.domain.vehicle.battery_voltage;
+                let v = &state.domain.vehicle;
 
-                let alert_str = if state.domain.active_alerts.is_empty() {
-                    String::new()
-                } else {
-                    format!("  ALERTS: {}", state.domain.active_alerts.iter()
-                        .map(|a| a.to_string())
-                        .collect::<Vec<_>>()
-                        .join(", "))
+                let conn = match &state.domain.connection {
+                    ConnectionState::Connected => "connected",
+                    ConnectionState::Connecting => "connecting",
+                    ConnectionState::Disconnected => "disconnected",
+                    ConnectionState::Error(_) => "error",
                 };
 
+                // Primary line: core engine data
                 println!(
-                    "[{:>4}] RPM: {:>6.0}  Speed: {:>5.0} km/h  Coolant: {:>5.1}\u{00B0}C  Load: {:>5.1}%  Batt: {:.1}V  [{}]{}",
+                    "[{:>4}] RPM:{:>6.0}  Spd:{:>4.0}km/h  Cool:{:>5.1}°C  Load:{:>5.1}%  Batt:{:.1}V  [{}]",
                     cycles,
-                    rpm.unwrap_or(0.0),
-                    speed.unwrap_or(0.0),
-                    temp.unwrap_or(0.0),
-                    load.unwrap_or(0.0),
-                    volts.unwrap_or(0.0),
-                    match &state.domain.connection {
-                        ConnectionState::Connected => "connected",
-                        ConnectionState::Connecting => "connecting",
-                        ConnectionState::Disconnected => "disconnected",
-                        ConnectionState::Error(_) => "error",
-                    },
-                    alert_str,
+                    v.rpm.unwrap_or(0.0),
+                    v.speed.unwrap_or(0.0),
+                    v.coolant_temp.unwrap_or(0.0),
+                    v.engine_load.unwrap_or(0.0),
+                    v.battery_voltage.unwrap_or(0.0),
+                    conn,
                 );
+
+                // Secondary line: fuel, intake, temps (only if we have data)
+                let mut extras = Vec::new();
+                if let Some(tp) = v.throttle_position { extras.push(format!("Thr:{:.0}%", tp)); }
+                if let Some(maf) = v.maf { extras.push(format!("MAF:{:.1}g/s", maf)); }
+                if let Some(map) = v.intake_map { extras.push(format!("MAP:{:.0}kPa", map)); }
+                if let Some(iat) = v.intake_air_temp { extras.push(format!("IAT:{:.0}°C", iat)); }
+                if let Some(fr) = v.engine_fuel_rate { extras.push(format!("Fuel:{:.1}L/h", fr)); }
+                if let Some(ft) = v.fuel_tank_level { extras.push(format!("Tank:{:.0}%", ft)); }
+                if let Some(ot) = v.engine_oil_temp { extras.push(format!("Oil:{:.0}°C", ot)); }
+                if let Some(ta) = v.timing_advance { extras.push(format!("Tim:{:.1}°", ta)); }
+                if let Some(stft) = v.short_fuel_trim_b1 { extras.push(format!("STFT1:{:.1}%", stft)); }
+                if let Some(ltft) = v.long_fuel_trim_b1 { extras.push(format!("LTFT1:{:.1}%", ltft)); }
+                if let Some(al) = v.absolute_load { extras.push(format!("AbsLd:{:.1}%", al)); }
+                if let Some(er) = v.commanded_equiv_ratio { extras.push(format!("EqR:{:.2}", er)); }
+                if let Some(egr) = v.commanded_egr { extras.push(format!("EGR:{:.0}%", egr)); }
+                if let Some(d) = v.distance_since_dtc_clear { extras.push(format!("Dist:{:.0}km", d)); }
+                if !extras.is_empty() {
+                    println!("       {}", extras.join("  "));
+                }
+
+                if !state.domain.active_alerts.is_empty() {
+                    println!("  !! ALERTS: {}", state.domain.active_alerts.iter()
+                        .map(|a| a.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "));
+                }
             }
             _ = tokio::signal::ctrl_c() => {
                 println!("\nShutting down...");

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use super::format::{RecordingFrame, FRAME_DTC, FRAME_PID, FRAME_VOLTAGE};
+use super::format::{RecordingFrame, FRAME_DTC, FRAME_ENHANCED, FRAME_O2, FRAME_PID, FRAME_VOLTAGE};
 use super::index::SessionEntry;
 
 /// Playback speed options.
@@ -193,6 +193,16 @@ impl ReplayController {
     /// Check if a frame is a DTC frame.
     pub fn is_dtc_frame(frame: &RecordingFrame) -> bool {
         frame.frame_type == FRAME_DTC
+    }
+
+    /// Check if a frame is an enhanced PID frame.
+    pub fn is_enhanced_frame(frame: &RecordingFrame) -> bool {
+        frame.frame_type == FRAME_ENHANCED
+    }
+
+    /// Check if a frame is an O2 monitoring frame.
+    pub fn is_o2_frame(frame: &RecordingFrame) -> bool {
+        frame.frame_type == FRAME_O2
     }
 }
 

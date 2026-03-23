@@ -144,9 +144,15 @@ impl DomainState {
                         let _ = writer.write_dtc(offset_ms, &dtc.code);
                     }
                 }
-                DomainMessage::EnhancedPidUpdate { .. }
-                | DomainMessage::O2MonitoringUpdate(_) => {
-                    // Enhanced/O2 data not yet recorded
+                DomainMessage::EnhancedPidUpdate {
+                    did, ref module, ref name, value, ref unit,
+                } => {
+                    let _ = writer.write_enhanced(offset_ms, *did, module, name, unit, *value);
+                }
+                DomainMessage::O2MonitoringUpdate(ref readings) => {
+                    for r in readings {
+                        let _ = writer.write_o2(offset_ms, &r.test_name, &r.sensor, &r.unit, r.value);
+                    }
                 }
                 _ => {}
             }

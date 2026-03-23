@@ -12,6 +12,8 @@ pub const MAGIC_V2: &[u8; 8] = b"OBD2REC\x02";
 pub const FRAME_PID: u8 = 0x01;
 pub const FRAME_VOLTAGE: u8 = 0x02;
 pub const FRAME_DTC: u8 = 0x03;
+pub const FRAME_ENHANCED: u8 = 0x04;
+pub const FRAME_O2: u8 = 0x05;
 
 /// Session header stored as JSON after the magic bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +64,81 @@ impl RecordingFrame {
             value,
             raw_bytes: vec![],
         }
+    }
+
+    /// Create an enhanced PID frame. Metadata (DID, module, name, unit) is packed into raw_bytes.
+    pub fn enhanced(offset_ms: u32, did: u16, module: &str, name: &str, unit: &str, value: f64) -> Self {
+        let mut raw = Vec::new();
+        raw.extend_from_slice(&did.to_le_bytes());
+        // Pack strings as: len(u8) + bytes
+        for s in &[module, name, unit] {
+            let bytes = s.as_bytes();
+            let len = bytes.len().min(255) as u8;
+            raw.push(len);
+            raw.extend_from_slice(&bytes[..len as usize]);
+        }
+        Self {
+            frame_type: FRAME_ENHANCED,
+            offset_ms,
+            pid_code: 0,
+            value,
+            raw_bytes: raw,
+        }
+    }
+
+    /// Decode enhanced PID metadata from raw_bytes. Returns (did, module, name, unit).
+    pub fn decode_enhanced(&self) -> Option<(u16, String, String, String)> {
+        if self.frame_type != FRAME_ENHANCED || self.raw_bytes.len() < 5 {
+            return None;
+        }
+        let did = u16::from_le_bytes([self.raw_bytes[0], self.raw_bytes[1]]);
+        let mut pos = 2;
+        let mut strings = Vec::new();
+        for _ in 0..3 {
+            if pos >= self.raw_bytes.len() { return None; }
+            let len = self.raw_bytes[pos] as usize;
+            pos += 1;
+            if pos + len > self.raw_bytes.len() { return None; }
+            strings.push(String::from_utf8_lossy(&self.raw_bytes[pos..pos + len]).into_owned());
+            pos += len;
+        }
+        Some((did, strings.remove(0), strings.remove(0), strings.remove(0)))
+    }
+
+    /// Create an O2 sensor monitoring frame. Metadata (test_name, sensor, unit) packed into raw_bytes.
+    pub fn o2(offset_ms: u32, test_name: &str, sensor: &str, unit: &str, value: f64) -> Self {
+        let mut raw = Vec::new();
+        for s in &[test_name, sensor, unit] {
+            let bytes = s.as_bytes();
+            let len = bytes.len().min(255) as u8;
+            raw.push(len);
+            raw.extend_from_slice(&bytes[..len as usize]);
+        }
+        Self {
+            frame_type: FRAME_O2,
+            offset_ms,
+            pid_code: 0,
+            value,
+            raw_bytes: raw,
+        }
+    }
+
+    /// Decode O2 sensor metadata from raw_bytes. Returns (test_name, sensor, unit).
+    pub fn decode_o2(&self) -> Option<(String, String, String)> {
+        if self.frame_type != FRAME_O2 || self.raw_bytes.is_empty() {
+            return None;
+        }
+        let mut pos = 0;
+        let mut strings = Vec::new();
+        for _ in 0..3 {
+            if pos >= self.raw_bytes.len() { return None; }
+            let len = self.raw_bytes[pos] as usize;
+            pos += 1;
+            if pos + len > self.raw_bytes.len() { return None; }
+            strings.push(String::from_utf8_lossy(&self.raw_bytes[pos..pos + len]).into_owned());
+            pos += len;
+        }
+        Some((strings.remove(0), strings.remove(0), strings.remove(0)))
     }
 
     pub fn dtc(offset_ms: u32, dtc_code: &str) -> Self {

@@ -76,6 +76,37 @@ impl RecordingWriter {
         Ok(())
     }
 
+    /// Write an enhanced PID frame.
+    pub fn write_enhanced(
+        &mut self,
+        offset_ms: u32,
+        did: u16,
+        module: &str,
+        name: &str,
+        unit: &str,
+        value: f64,
+    ) -> std::io::Result<()> {
+        let frame = RecordingFrame::enhanced(offset_ms, did, module, name, unit, value);
+        frame.write_to(&mut self.writer)?;
+        self.frame_count += 1;
+        Ok(())
+    }
+
+    /// Write an O2 sensor monitoring frame.
+    pub fn write_o2(
+        &mut self,
+        offset_ms: u32,
+        test_name: &str,
+        sensor: &str,
+        unit: &str,
+        value: f64,
+    ) -> std::io::Result<()> {
+        let frame = RecordingFrame::o2(offset_ms, test_name, sensor, unit, value);
+        frame.write_to(&mut self.writer)?;
+        self.frame_count += 1;
+        Ok(())
+    }
+
     /// Flush any buffered data and finalize the recording.
     pub fn finish(mut self) -> std::io::Result<PathBuf> {
         use std::io::Write;
