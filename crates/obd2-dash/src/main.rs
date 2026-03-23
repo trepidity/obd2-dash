@@ -346,7 +346,13 @@ async fn run_session_poll_loop<A: Adapter>(
     poll_ms: u64,
     tx: &mpsc::UnboundedSender<Message>,
 ) {
-    // Initialize adapter via identify_vehicle (reads VIN, supported PIDs)
+    // Initialize adapter (ATZ, ATE0, protocol detect) if not already done
+    if let Err(e) = session.initialize().await {
+        tracing::warn!("Adapter init in poll loop failed: {e}");
+        // Continue anyway — might already be initialized from connect path
+    }
+
+    // Quick test read to verify the connection is live
     match session.read_pid(Pid::ENGINE_RPM).await {
         Ok(_) => {
             let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
@@ -556,6 +562,13 @@ fn spawn_connect_and_poll(
 
                     let adapter = Elm327Adapter::new(Box::new(transport));
                     let mut session = Session::new(adapter);
+
+                    // Initialize adapter (ATZ, ATE0, protocol detect)
+                    if let Err(e) = session.initialize().await {
+                        last_error = format!("Init failed: {}", e);
+                        tracing::warn!("{} (attempt {}/{})", last_error, attempt, MAX_ATTEMPTS);
+                        continue;
+                    }
 
                     // Try a test read to verify connection
                     match session.read_pid(Pid::ENGINE_RPM).await {
