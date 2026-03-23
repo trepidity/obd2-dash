@@ -2221,3 +2221,89 @@ pub(crate) fn temp_color_default(celsius: f64) -> Color {
         Color::Red
     }
 }
+
+// ─── Enhanced PIDs panel ─────────────────────────────────────────────────────
+
+pub(crate) fn render_full_enhanced(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    block: Block,
+    selected_item: Option<usize>,
+) {
+    let readings = &state.domain.enhanced_readings;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if readings.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No enhanced PIDs available",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for (i, r) in readings.iter().enumerate() {
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {:<20}", r.name),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("{:.2} {}", r.value, r.unit),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Span::styled(
+                    format!("  [{}]", r.module),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            lines.push(maybe_highlight(line, selected_item, i));
+        }
+    }
+
+    let panel = Paragraph::new(lines).block(block);
+    frame.render_widget(panel, area);
+}
+
+// ─── O2 Sensors panel ────────────────────────────────────────────────────────
+
+pub(crate) fn render_full_o2_sensors(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    block: Block,
+    selected_item: Option<usize>,
+) {
+    let readings = &state.domain.o2_readings;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    if readings.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " No O2 sensor data",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for (i, r) in readings.iter().enumerate() {
+            let line = Line::from(vec![
+                Span::styled(
+                    format!(" {:<6}", r.sensor),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{:<22}", r.test_name),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("{:.4} {}", r.value, r.unit),
+                    Style::default().fg(Color::Green),
+                ),
+            ]);
+            lines.push(maybe_highlight(line, selected_item, i));
+        }
+    }
+
+    let panel = Paragraph::new(lines).block(block);
+    frame.render_widget(panel, area);
+}

@@ -48,6 +48,10 @@ pub enum WidgetKind {
 
     // Alerts
     AlertsPanel,
+
+    // Enhanced & O2
+    EnhancedPidsPanel,
+    O2SensorsPanel,
 }
 
 /// Widget size within a row.
@@ -329,6 +333,21 @@ pub fn widget_registry() -> Vec<WidgetMeta> {
             category: WidgetCategory::Diagnostics,
             default_size: WidgetSize::Half,
             description: "Active threshold alerts and errors",
+        },
+        // Enhanced & O2
+        WidgetMeta {
+            kind: WidgetKind::EnhancedPidsPanel,
+            title: "Enhanced PIDs",
+            category: WidgetCategory::Diagnostics,
+            default_size: WidgetSize::Half,
+            description: "Manufacturer-specific enhanced PIDs from vehicle spec",
+        },
+        WidgetMeta {
+            kind: WidgetKind::O2SensorsPanel,
+            title: "O2 Sensors",
+            category: WidgetCategory::FuelEmissions,
+            default_size: WidgetSize::Half,
+            description: "O2 sensor monitoring test results",
         },
     ]
 }

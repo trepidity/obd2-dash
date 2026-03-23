@@ -16,6 +16,8 @@ pub enum PanelKind {
     SystemVehicle,
     Dtcs,
     FuelEconomy,
+    Enhanced,
+    O2Sensors,
 }
 
 #[allow(dead_code)]
@@ -121,6 +123,25 @@ impl Grid {
                     }],
                     default_constraints: vec![Constraint::Percentage(100)],
                     focused_expand_pct: 100,
+                },
+                GridRow {
+                    panels: vec![
+                        PanelDef {
+                            kind: PanelKind::Enhanced,
+                            title: "ENHANCED PIDs",
+                            index: 6,
+                        },
+                        PanelDef {
+                            kind: PanelKind::O2Sensors,
+                            title: "O2 SENSORS",
+                            index: 7,
+                        },
+                    ],
+                    default_constraints: vec![
+                        Constraint::Percentage(50),
+                        Constraint::Percentage(50),
+                    ],
+                    focused_expand_pct: 65,
                 },
             ],
         }
@@ -393,6 +414,45 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             }
             items
         }
+        PanelKind::Enhanced => {
+            state
+                .domain
+                .enhanced_readings
+                .iter()
+                .map(|r| PanelItem {
+                    label: r.name.clone(),
+                    detail: PanelItemDetail::DerivedValue {
+                        label: Box::leak(r.name.clone().into_boxed_str()),
+                        value: Some(r.value),
+                        unit: Box::leak(r.unit.clone().into_boxed_str()),
+                        description: Box::leak(
+                            format!("Enhanced DID 0x{:04X} [{}]", r.did, r.module)
+                                .into_boxed_str(),
+                        ),
+                    },
+                })
+                .collect()
+        }
+        PanelKind::O2Sensors => {
+            state
+                .domain
+                .o2_readings
+                .iter()
+                .map(|r| PanelItem {
+                    label: format!("{} {}", r.sensor, r.test_name),
+                    detail: PanelItemDetail::DerivedValue {
+                        label: Box::leak(
+                            format!("{} {}", r.sensor, r.test_name).into_boxed_str(),
+                        ),
+                        value: Some(r.value),
+                        unit: Box::leak(r.unit.clone().into_boxed_str()),
+                        description: Box::leak(
+                            format!("O2 {} - {}", r.sensor, r.test_name).into_boxed_str(),
+                        ),
+                    },
+                })
+                .collect()
+        }
         PanelKind::Dtcs => state
             .domain
             .stored_dtcs
@@ -517,6 +577,8 @@ fn panel_kind_for_index(index: usize) -> Option<PanelKind> {
         3 => Some(PanelKind::SystemVehicle),
         4 => Some(PanelKind::Dtcs),
         5 => Some(PanelKind::FuelEconomy),
+        6 => Some(PanelKind::Enhanced),
+        7 => Some(PanelKind::O2Sensors),
         _ => None,
     }
 }
@@ -693,6 +755,12 @@ pub fn render_panel(
         PanelKind::Dtcs => super::ui::render_full_dtcs(frame, area, state, block, selected),
         PanelKind::FuelEconomy => {
             super::ui::render_full_fuel_economy(frame, area, state, block, selected)
+        }
+        PanelKind::Enhanced => {
+            super::ui::render_full_enhanced(frame, area, state, block, selected)
+        }
+        PanelKind::O2Sensors => {
+            super::ui::render_full_o2_sensors(frame, area, state, block, selected)
         }
     }
 }

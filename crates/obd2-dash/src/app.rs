@@ -5,7 +5,7 @@ use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
 use crate::ai::{AiConfig, AiInsights};
 use crate::nhtsa::NhtsaVehicle;
-use crate::domain::{ConnectionState, DomainMessage, DomainState};
+use crate::domain::{ConnectionState, DomainMessage, DomainState, O2Reading};
 use crate::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
 
 use obd2_core::adapter::AdapterInfo;
@@ -35,6 +35,16 @@ pub enum Message {
     // AI analysis
     AiAnalysisComplete(AiInsights),
     AiAnalysisError(String),
+    // Enhanced PIDs
+    EnhancedPidUpdate {
+        did: u16,
+        module: String,
+        name: String,
+        value: f64,
+        unit: String,
+    },
+    // O2 sensor monitoring
+    O2MonitoringUpdate(Vec<O2Reading>),
 }
 
 impl Message {
@@ -184,6 +194,25 @@ impl AppState {
                 tracing::warn!("AI analysis error: {}", e);
                 self.ai_analyzing = false;
                 self.show_ai_insights = false;
+            }
+            Message::EnhancedPidUpdate {
+                did,
+                module,
+                name,
+                value,
+                unit,
+            } => {
+                self.domain.update(DomainMessage::EnhancedPidUpdate {
+                    did,
+                    module,
+                    name,
+                    value,
+                    unit,
+                });
+            }
+            Message::O2MonitoringUpdate(readings) => {
+                self.domain
+                    .update(DomainMessage::O2MonitoringUpdate(readings));
             }
             Message::Tick => {
                 // UI tick -- nothing to do here

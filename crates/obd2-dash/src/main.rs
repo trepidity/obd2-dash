@@ -46,7 +46,10 @@ use obd2_core::adapter::Adapter;
 use obd2_core::adapter::elm327::Elm327Adapter;
 use obd2_core::adapter::mock::MockAdapter;
 use obd2_core::session::Session;
+use obd2_core::vehicle::ModuleId;
 use obd2_core::error::Obd2Error;
+
+use domain::O2Reading;
 
 /// Number of mock DTC scenarios (used by dtc cycling key).
 const DTC_SCENARIO_COUNT: u8 = 4;
@@ -357,13 +360,22 @@ async fn run_session_poll_loop<A: Adapter>(
         }
     }
 
-    // Read VIN
-    match session.read_vin().await {
-        Ok(vin) => {
-            let _ = tx.send(Message::VinDetected(vin));
+    // Read VIN and identify vehicle (matches spec for enhanced PIDs)
+    match session.identify_vehicle().await {
+        Ok(profile) => {
+            let _ = tx.send(Message::VinDetected(profile.vin.clone()));
         }
         Err(e) => {
-            tracing::warn!("Could not read VIN: {e}");
+            tracing::warn!("Could not identify vehicle: {e}");
+            // Fall back to just reading VIN
+            match session.read_vin().await {
+                Ok(vin) => {
+                    let _ = tx.send(Message::VinDetected(vin));
+                }
+                Err(e2) => {
+                    tracing::warn!("Could not read VIN: {e2}");
+                }
+            }
         }
     }
 
@@ -381,6 +393,20 @@ async fn run_session_poll_loop<A: Adapter>(
     // Get supported PIDs
     let supported = session.supported_pids().await.unwrap_or_default();
     let pids_to_poll = pollable_pids();
+
+    // Cache enhanced PID list from matched spec (if any)
+    let enhanced_pid_list: Vec<obd2_core::protocol::enhanced::EnhancedPid> =
+        if let Some(spec) = session.spec() {
+            spec.enhanced_pids.clone()
+        } else {
+            vec![]
+        };
+    if !enhanced_pid_list.is_empty() {
+        tracing::info!(
+            "Found {} enhanced PIDs from spec",
+            enhanced_pid_list.len()
+        );
+    }
 
     let mut interval = tokio::time::interval(Duration::from_millis(poll_ms));
     let mut voltage_counter = 0u32;
@@ -409,6 +435,30 @@ async fn run_session_poll_loop<A: Adapter>(
         }
 
         voltage_counter += 1;
+
+        // Poll enhanced PIDs every 5th iteration
+        if !enhanced_pid_list.is_empty() && voltage_counter % 5 == 0 {
+            for epid in &enhanced_pid_list {
+                let module = ModuleId::new(&epid.module);
+                match session.read_enhanced(epid.did, module).await {
+                    Ok(reading) => {
+                        let val = reading.value.as_f64().unwrap_or(0.0);
+                        let _ = tx.send(Message::EnhancedPidUpdate {
+                            did: epid.did,
+                            module: epid.module.clone(),
+                            name: epid.name.clone(),
+                            value: val,
+                            unit: epid.unit.clone(),
+                        });
+                    }
+                    Err(_) => {
+                        // Skip failed enhanced reads silently
+                    }
+                }
+            }
+        }
+
+        // Voltage, DTCs, and O2 monitoring on slower cadence
         if voltage_counter % 10 == 0 {
             if let Ok(Some(v)) = session.battery_voltage().await {
                 let _ = tx.send(Message::VoltageUpdate(v));
@@ -416,6 +466,24 @@ async fn run_session_poll_loop<A: Adapter>(
             if let Ok(mut dtcs) = session.read_dtcs().await {
                 obd2_core::session::diagnostics::enrich_dtcs(&mut dtcs, session.spec());
                 let _ = tx.send(Message::DtcUpdate(dtcs));
+            }
+        }
+
+        // O2 monitoring every 20th iteration (changes slowly)
+        if voltage_counter % 20 == 0 {
+            if let Ok(results) = session.read_all_o2_monitoring().await {
+                let readings: Vec<O2Reading> = results
+                    .into_iter()
+                    .map(|r| O2Reading {
+                        test_name: r.test_name.to_string(),
+                        sensor: r.sensor.to_string(),
+                        value: r.value,
+                        unit: r.unit.to_string(),
+                    })
+                    .collect();
+                if !readings.is_empty() {
+                    let _ = tx.send(Message::O2MonitoringUpdate(readings));
+                }
             }
         }
     }
@@ -435,11 +503,6 @@ fn spawn_mock_poll(
 
         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
         let _ = tx.send(Message::AdapterDetected(info));
-
-        // Send VIN so the UI can display the mock vehicle identity
-        if let Ok(vin) = session.read_vin().await {
-            let _ = tx.send(Message::VinDetected(vin));
-        }
 
         run_session_poll_loop(&mut session, poll_ms, &tx).await;
     })
@@ -1569,6 +1632,8 @@ fn widget_kind_item_count(kind: widget::WidgetKind, state: &AppState) -> usize {
         WidgetKind::SystemInfoPanel => tui_panel::panel_item_count(3, state),
         WidgetKind::DtcPanel => tui_panel::panel_item_count(4, state),
         WidgetKind::FuelEconomyPanel => tui_panel::panel_item_count(5, state),
+        WidgetKind::EnhancedPidsPanel => tui_panel::panel_item_count(6, state),
+        WidgetKind::O2SensorsPanel => tui_panel::panel_item_count(7, state),
         _ => 0,
     }
 }
@@ -1598,6 +1663,8 @@ fn widget_kind_build_popup(
         WidgetKind::SystemInfoPanel => tui_panel::build_popup(3, item_idx, state),
         WidgetKind::DtcPanel => tui_panel::build_popup(4, item_idx, state),
         WidgetKind::FuelEconomyPanel => tui_panel::build_popup(5, item_idx, state),
+        WidgetKind::EnhancedPidsPanel => tui_panel::build_popup(6, item_idx, state),
+        WidgetKind::O2SensorsPanel => tui_panel::build_popup(7, item_idx, state),
         _ => None,
     }
 }

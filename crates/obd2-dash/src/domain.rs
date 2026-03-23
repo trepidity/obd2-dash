@@ -13,6 +13,25 @@ use crate::recording::RecordingState;
 use crate::vehicle_data::VehicleData;
 use obd2_db::models::{Alert, AlertLevel, ResolvedThreshold, VehicleInfo};
 
+/// A snapshot of an enhanced (manufacturer-specific) PID reading.
+#[derive(Debug, Clone)]
+pub struct EnhancedReading {
+    pub did: u16,
+    pub module: String,
+    pub name: String,
+    pub value: f64,
+    pub unit: String,
+}
+
+/// A snapshot of an O2 sensor monitoring test result.
+#[derive(Debug, Clone)]
+pub struct O2Reading {
+    pub test_name: String,
+    pub sensor: String,
+    pub value: f64,
+    pub unit: String,
+}
+
 /// Domain-only events (no scanner/UI messages).
 #[derive(Debug)]
 pub enum DomainMessage {
@@ -22,6 +41,14 @@ pub enum DomainMessage {
     ConnectionStatus(ConnectionState),
     AdapterDetected(AdapterInfo),
     Error(String),
+    EnhancedPidUpdate {
+        did: u16,
+        module: String,
+        name: String,
+        value: f64,
+        unit: String,
+    },
+    O2MonitoringUpdate(Vec<O2Reading>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +85,8 @@ pub struct DomainState {
     pub alert_history: VecDeque<String>,
     pub thresholds_cache: HashMap<u8, ResolvedThreshold>,
     pub stored_dtcs: Vec<Dtc>,
+    pub enhanced_readings: Vec<EnhancedReading>,
+    pub o2_readings: Vec<O2Reading>,
     pub fuel_economy: FuelEconomyState,
     pub driving: DrivingBehavior,
     pub recording: RecordingState,
@@ -81,6 +110,8 @@ impl DomainState {
             alert_history: VecDeque::new(),
             thresholds_cache: HashMap::new(),
             stored_dtcs: Vec::new(),
+            enhanced_readings: Vec::new(),
+            o2_readings: Vec::new(),
             fuel_economy: FuelEconomyState::new(),
             driving: DrivingBehavior::new(),
             recording: RecordingState::Idle,
@@ -112,6 +143,10 @@ impl DomainState {
                     for dtc in dtcs {
                         let _ = writer.write_dtc(offset_ms, &dtc.code);
                     }
+                }
+                DomainMessage::EnhancedPidUpdate { .. }
+                | DomainMessage::O2MonitoringUpdate(_) => {
+                    // Enhanced/O2 data not yet recorded
                 }
                 _ => {}
             }
@@ -164,6 +199,35 @@ impl DomainState {
                     self.alert_history.pop_front();
                 }
                 self.last_error = Some(e);
+            }
+            DomainMessage::EnhancedPidUpdate {
+                did,
+                module,
+                name,
+                value,
+                unit,
+            } => {
+                // Upsert: find existing by (did, module) or insert
+                if let Some(existing) = self
+                    .enhanced_readings
+                    .iter_mut()
+                    .find(|r| r.did == did && r.module == module)
+                {
+                    existing.value = value;
+                    existing.name = name;
+                    existing.unit = unit;
+                } else {
+                    self.enhanced_readings.push(EnhancedReading {
+                        did,
+                        module,
+                        name,
+                        value,
+                        unit,
+                    });
+                }
+            }
+            DomainMessage::O2MonitoringUpdate(readings) => {
+                self.o2_readings = readings;
             }
         }
     }

@@ -145,6 +145,12 @@ pub fn render_widget(
         WidgetKind::RecordingStatus => render_recording_status(frame, area, state, block),
         WidgetKind::DrivingBehavior => render_driving_behavior(frame, area, state, block),
         WidgetKind::AlertsPanel => render_alerts_panel(frame, area, state, block),
+        WidgetKind::EnhancedPidsPanel => {
+            ui::render_full_enhanced(frame, area, state, block, selected_item);
+        }
+        WidgetKind::O2SensorsPanel => {
+            ui::render_full_o2_sensors(frame, area, state, block, selected_item);
+        }
     }
 }
 
@@ -226,6 +232,22 @@ fn widget_title(kind: WidgetKind, state: &AppState) -> String {
                 " ALERTS ".to_string()
             } else {
                 format!(" ALERTS ({}) ", count)
+            }
+        }
+        WidgetKind::EnhancedPidsPanel => {
+            let count = state.domain.enhanced_readings.len();
+            if count == 0 {
+                " ENHANCED PIDs ".to_string()
+            } else {
+                format!(" ENHANCED PIDs ({}) ", count)
+            }
+        }
+        WidgetKind::O2SensorsPanel => {
+            let count = state.domain.o2_readings.len();
+            if count == 0 {
+                " O2 SENSORS ".to_string()
+            } else {
+                format!(" O2 SENSORS ({}) ", count)
             }
         }
     }
