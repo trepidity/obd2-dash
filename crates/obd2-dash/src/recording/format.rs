@@ -350,4 +350,131 @@ mod tests {
         assert_eq!(decoded.session_id, "test-id");
         assert_eq!(decoded.vin, Some("WMW12345".to_string()));
     }
+
+    #[test]
+    fn test_unknown_frame_type_roundtrip() {
+        let frame = RecordingFrame {
+            frame_type: 0xFF,
+            offset_ms: 999,
+            pid_code: 0,
+            value: 42.0,
+            raw_bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        };
+        let mut buf = Vec::new();
+        frame.write_to(&mut buf).unwrap();
+
+        let pid_frame = RecordingFrame::pid(1000, 0x0C, 3500.0);
+        pid_frame.write_to(&mut buf).unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let first = RecordingFrame::read_from(&mut cursor, 2).unwrap().unwrap();
+        assert_eq!(first.frame_type, 0xFF);
+        assert_eq!(first.offset_ms, 999);
+        assert_eq!(first.raw_bytes, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+
+        let second = RecordingFrame::read_from(&mut cursor, 2).unwrap().unwrap();
+        assert_eq!(second.frame_type, FRAME_PID);
+        assert_eq!(second.pid_code, 0x0C);
+        assert!((second.value - 3500.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_enhanced_frame_roundtrip() {
+        let frame = RecordingFrame::enhanced(500, 0x1234, "ecm", "Boost Pressure", "kPa", 22.5);
+        let mut buf = Vec::new();
+        frame.write_to(&mut buf).unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let decoded = RecordingFrame::read_from(&mut cursor, 2).unwrap().unwrap();
+        assert_eq!(decoded.frame_type, FRAME_ENHANCED);
+        assert!((decoded.value - 22.5).abs() < 0.001);
+
+        let (did, module, name, unit) = decoded.decode_enhanced().unwrap();
+        assert_eq!(did, 0x1234);
+        assert_eq!(module, "ecm");
+        assert_eq!(name, "Boost Pressure");
+        assert_eq!(unit, "kPa");
+    }
+
+    #[test]
+    fn test_o2_frame_roundtrip() {
+        let frame = RecordingFrame::o2(750, "Catalyst Monitor B1", "Sensor 1", "V", 0.45);
+        let mut buf = Vec::new();
+        frame.write_to(&mut buf).unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let decoded = RecordingFrame::read_from(&mut cursor, 2).unwrap().unwrap();
+        assert_eq!(decoded.frame_type, FRAME_O2);
+        assert!((decoded.value - 0.45).abs() < 0.001);
+
+        let (test_name, sensor, unit) = decoded.decode_o2().unwrap();
+        assert_eq!(test_name, "Catalyst Monitor B1");
+        assert_eq!(sensor, "Sensor 1");
+        assert_eq!(unit, "V");
+    }
+
+    #[test]
+    fn test_mixed_frame_stream_ordering() {
+        let mut buf = Vec::new();
+        RecordingFrame::pid_with_raw(100, 0x0C, 680.0, &[0x0A, 0xA0]).write_to(&mut buf).unwrap();
+        RecordingFrame::voltage(200, 14.4).write_to(&mut buf).unwrap();
+        RecordingFrame::enhanced(300, 0xABCD, "tcm", "Trans Temp", "°C", 85.0).write_to(&mut buf).unwrap();
+        RecordingFrame::dtc(400, "P0420").write_to(&mut buf).unwrap();
+        RecordingFrame::o2(500, "O2 Monitor", "B1S1", "V", 0.72).write_to(&mut buf).unwrap();
+        RecordingFrame { frame_type: 0xFE, offset_ms: 600, pid_code: 0, value: 0.0, raw_bytes: vec![1,2,3] }
+            .write_to(&mut buf).unwrap();
+        RecordingFrame::pid(700, 0x0D, 60.0).write_to(&mut buf).unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let mut offsets = Vec::new();
+        while let Some(frame) = RecordingFrame::read_from(&mut cursor, 2).unwrap() {
+            offsets.push(frame.offset_ms);
+        }
+        assert_eq!(offsets, vec![100, 200, 300, 400, 500, 600, 700]);
+    }
+
+    #[test]
+    fn test_full_file_roundtrip_all_frame_types() {
+        let mut buf = Vec::new();
+
+        let header = SessionHeader {
+            session_id: "test-rule5".to_string(),
+            start_time: chrono::Utc::now(),
+            vin: Some("1GCHK23164F000001".to_string()),
+            vehicle_name: Some("Test Duramax".to_string()),
+            poll_interval_ms: 250,
+        };
+        write_file_header(&mut buf, &header).unwrap();
+
+        RecordingFrame::pid_with_raw(100, 0x0C, 680.0, &[0x0A, 0xA0]).write_to(&mut buf).unwrap();
+        RecordingFrame::voltage(200, 14.4).write_to(&mut buf).unwrap();
+        RecordingFrame::dtc(300, "P0420").write_to(&mut buf).unwrap();
+        RecordingFrame::enhanced(400, 0x1234, "ecm", "Boost", "kPa", 15.0).write_to(&mut buf).unwrap();
+        RecordingFrame::o2(500, "Cat Mon", "B1S1", "V", 0.45).write_to(&mut buf).unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let (decoded_header, version) = read_file_header(&mut cursor).unwrap();
+        assert_eq!(version, 2);
+        assert_eq!(decoded_header.session_id, "test-rule5");
+
+        let mut frames = Vec::new();
+        while let Some(frame) = RecordingFrame::read_from(&mut cursor, version).unwrap() {
+            frames.push(frame);
+        }
+
+        assert_eq!(frames.len(), 5);
+        assert_eq!(frames[0].frame_type, FRAME_PID);
+        assert_eq!(frames[1].frame_type, FRAME_VOLTAGE);
+        assert_eq!(frames[2].frame_type, FRAME_DTC);
+        assert_eq!(frames[3].frame_type, FRAME_ENHANCED);
+        assert_eq!(frames[4].frame_type, FRAME_O2);
+
+        let (did, module, _, _) = frames[3].decode_enhanced().unwrap();
+        assert_eq!(did, 0x1234);
+        assert_eq!(module, "ecm");
+
+        let (test_name, sensor, _) = frames[4].decode_o2().unwrap();
+        assert_eq!(test_name, "Cat Mon");
+        assert_eq!(sensor, "B1S1");
+    }
 }
