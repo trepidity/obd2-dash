@@ -524,6 +524,15 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
         }
     }
 
+    // Raw capture indicator
+    if state.capture_handle.as_ref().map_or(false, |h| h.is_active()) {
+        spans.push(Span::styled(" ", Style::default()));
+        spans.push(Span::styled(
+            "RAW",
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        ));
+    }
+
     spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
     spans.push(Span::styled(
         voltage_text,
@@ -2057,6 +2066,13 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         } else {
             " | r:rec R:replay"
         };
+        let cap_hint = if state.capture_handle.as_ref().map_or(false, |h| h.is_active()) {
+            " | c:stop raw"
+        } else if state.capture_handle.is_some() {
+            " | c:raw"
+        } else {
+            ""
+        };
         let edit_hint = if state.layout == DashboardLayout::Full {
             " | e:edit"
         } else {
@@ -2067,8 +2083,8 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
             _ => "",
         };
         format!(
-            "Poll: {}ms{} | {} | q/p/u/d/+/-/Tab/l:log{}{}{}",
-            state.domain.poll_interval_ms, paused, layout_toggle, edit_hint, rec_hint, scan_hint
+            "Poll: {}ms{} | {} | q/p/u/d/+/-/Tab/l:log{}{}{}{}",
+            state.domain.poll_interval_ms, paused, layout_toggle, edit_hint, rec_hint, cap_hint, scan_hint
         )
     };
 
