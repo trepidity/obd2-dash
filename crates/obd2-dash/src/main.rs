@@ -1236,6 +1236,9 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
                 handle_toggle_recording(state);
             }
         }
+        KeyCode::Char('c') => {
+            handle_toggle_raw_capture(state);
+        }
         KeyCode::Char('R') => {
             if state.domain.recording.is_idle() {
                 state.show_session_picker = true;
@@ -1641,6 +1644,33 @@ fn start_ai_analysis(state: &mut AppState) {
 static AI_TX: std::sync::OnceLock<mpsc::UnboundedSender<Message>> = std::sync::OnceLock::new();
 static AI_ANALYSIS_PENDING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+
+fn handle_toggle_raw_capture(state: &mut AppState) {
+    if let Some(ref handle) = state.capture_handle {
+        if handle.is_active() {
+            if let Some(ref tx) = state.capture_tx {
+                let _ = tx.send(app::CaptureCommand::Stop);
+            }
+        } else {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let path = handle.recordings_dir().join(format!("{}.obd2raw", session_id));
+            let metadata = obd2_core::transport::CaptureMetadata {
+                transport_type: state.domain.adapter_info
+                    .as_ref()
+                    .map(|i| format!("{:?}", i.chipset))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                port_or_device: state.domain.adapter_info
+                    .as_ref()
+                    .map(|i| i.firmware.clone())
+                    .unwrap_or_else(|| "unknown".to_string()),
+                baud_rate: None,
+            };
+            if let Some(ref tx) = state.capture_tx {
+                let _ = tx.send(app::CaptureCommand::Start { path, metadata });
+            }
+        }
+    }
+}
 
 fn handle_toggle_recording(state: &mut AppState) {
     match &state.domain.recording {
