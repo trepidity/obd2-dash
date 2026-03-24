@@ -109,6 +109,21 @@ impl StorageManager {
         Ok(())
     }
 
+    /// Total size of .obd2raw sidecar files in the recordings directory.
+    pub fn raw_capture_bytes(&self) -> u64 {
+        fs::read_dir(&self.config.recordings_dir)
+            .ok()
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "obd2raw"))
+                    .filter_map(|e| e.metadata().ok())
+                    .map(|m| m.len())
+                    .sum()
+            })
+            .unwrap_or(0)
+    }
+
     /// Run maintenance: compress large raw files, trim oldest if over storage limit.
     pub fn run_maintenance(&mut self) -> anyhow::Result<()> {
         // Compress large raw files
@@ -126,8 +141,8 @@ impl StorageManager {
             }
         }
 
-        // Trim oldest sessions if over total limit
-        while self.index.total_size_bytes() > self.config.max_total_bytes {
+        // Trim oldest sessions if over total limit (including .obd2raw sidecars)
+        while self.index.total_size_bytes() + self.raw_capture_bytes() > self.config.max_total_bytes {
             // Find oldest session
             let oldest = self
                 .index
@@ -138,9 +153,15 @@ impl StorageManager {
 
             match oldest {
                 Some((sid, path)) => {
-                    // Delete file
+                    // Delete recording file
                     if path.exists() {
                         fs::remove_file(&path).ok();
+                    }
+                    // Delete matching .obd2raw sidecar if it exists
+                    let raw_path = self.config.recordings_dir.join(format!("{}.obd2raw", sid));
+                    if raw_path.exists() {
+                        fs::remove_file(&raw_path).ok();
+                        tracing::info!("Deleted raw capture sidecar: {}", sid);
                     }
                     self.index.remove_session(&sid);
                     tracing::info!("Trimmed oldest session: {}", sid);
@@ -173,7 +194,7 @@ impl StorageManager {
 
     /// Get human-readable storage stats.
     pub fn storage_stats(&self) -> StorageStats {
-        let total_bytes = self.index.total_size_bytes();
+        let total_bytes = self.index.total_size_bytes() + self.raw_capture_bytes();
         let session_count = self.index.sessions.len();
         let raw_count = self.index.sessions.iter().filter(|s| !s.compressed).count();
         let compressed_count = session_count - raw_count;
