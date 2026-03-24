@@ -231,7 +231,8 @@ async fn main() -> Result<()> {
                     };
                     tracing::info!("Emulator transport opened: {}", port_path);
 
-                    let adapter = Elm327Adapter::new(Box::new(transport));
+                    let logging = obd2_core::transport::LoggingTransport::new(transport);
+                    let adapter = Elm327Adapter::new(Box::new(logging));
                     let mut session = Session::new(adapter);
 
                     run_session_poll_loop(&mut session, poll_ms, &tx).await;
@@ -560,7 +561,8 @@ fn spawn_connect_and_poll(
                     // Post-open delay: macOS USB-serial drivers need time to configure
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    let adapter = Elm327Adapter::new(Box::new(transport));
+                    let logging = obd2_core::transport::LoggingTransport::new(transport);
+                    let adapter = Elm327Adapter::new(Box::new(logging));
                     let mut session = Session::new(adapter);
 
                     // Initialize adapter (ATZ, ATE0, protocol detect)
@@ -605,7 +607,8 @@ fn spawn_connect_and_poll(
                 let scan_dur = std::time::Duration::from_secs(ble_scan_secs);
                 match obd2_core::transport::ble::BleTransport::scan_and_connect(filter, scan_dur).await {
                     Ok(ble_transport) => {
-                        let adapter = Elm327Adapter::new(Box::new(ble_transport));
+                        let logging = obd2_core::transport::LoggingTransport::new(ble_transport);
+                        let adapter = Elm327Adapter::new(Box::new(logging));
                         let mut session = Session::new(adapter);
                         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
                         run_session_poll_loop(&mut session, poll_ms, &tx).await;
