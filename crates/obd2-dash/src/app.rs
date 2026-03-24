@@ -1,5 +1,9 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use tokio::sync::mpsc;
 
 use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
@@ -12,6 +16,42 @@ use obd2_core::adapter::AdapterInfo;
 use obd2_core::protocol::dtc::Dtc;
 use obd2_core::protocol::enhanced::Reading;
 use obd2_core::protocol::pid::Pid;
+use obd2_core::transport::CaptureMetadata;
+
+/// Commands sent from the UI thread to the session task for raw capture control.
+pub enum CaptureCommand {
+    Start { path: PathBuf, metadata: CaptureMetadata },
+    Stop,
+}
+
+/// Shared handle for raw protocol capture state.
+/// Arc-wrapped so the session task and main thread can coordinate.
+#[derive(Clone)]
+pub struct CaptureHandle {
+    active: Arc<AtomicBool>,
+    recordings_dir: Arc<PathBuf>,
+}
+
+impl CaptureHandle {
+    pub fn new(recordings_dir: PathBuf) -> Self {
+        Self {
+            active: Arc::new(AtomicBool::new(false)),
+            recordings_dir: Arc::new(recordings_dir),
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Relaxed)
+    }
+
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Relaxed);
+    }
+
+    pub fn recordings_dir(&self) -> &Path {
+        &self.recordings_dir
+    }
+}
 
 /// Messages flowing into the app state (TEA / Elm-style).
 #[derive(Debug)]
@@ -45,6 +85,10 @@ pub enum Message {
     },
     // O2 sensor monitoring
     O2MonitoringUpdate(Vec<O2Reading>),
+    // Raw protocol capture
+    RawCaptureStarted,
+    RawCaptureStopped(PathBuf),
+    RawCaptureError(String),
 }
 
 impl Message {
@@ -110,6 +154,9 @@ pub struct AppState {
     pub ai_analyzing: bool,
     pub ai_scroll: usize,
     pub show_ai_insights: bool,
+    // Raw protocol capture
+    pub capture_handle: Option<CaptureHandle>,
+    pub capture_tx: Option<mpsc::UnboundedSender<CaptureCommand>>,
 }
 
 impl AppState {
@@ -141,6 +188,8 @@ impl AppState {
             ai_analyzing: false,
             ai_scroll: 0,
             show_ai_insights: false,
+            capture_handle: None,
+            capture_tx: None,
         }
     }
 
@@ -216,6 +265,26 @@ impl AppState {
             }
             Message::Tick => {
                 // UI tick -- nothing to do here
+            }
+            Message::RawCaptureStarted => {
+                if let Some(ref handle) = self.capture_handle {
+                    handle.set_active(true);
+                }
+                tracing::info!("Raw protocol capture started");
+            }
+            Message::RawCaptureStopped(path) => {
+                if let Some(ref handle) = self.capture_handle {
+                    handle.set_active(false);
+                }
+                let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                tracing::info!("Raw capture saved: {} ({} bytes)", path.display(), file_size);
+            }
+            Message::RawCaptureError(e) => {
+                if let Some(ref handle) = self.capture_handle {
+                    handle.set_active(false);
+                }
+                tracing::warn!("Raw capture error: {}", e);
+                self.domain.last_error = Some(format!("Raw capture error: {}", e));
             }
             Message::Quit => {
                 self.running = false;
