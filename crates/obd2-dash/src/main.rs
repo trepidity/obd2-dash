@@ -208,6 +208,7 @@ async fn main() -> Result<()> {
             obd_tx.clone(),
             prefs_path.clone(),
             cli.ble_scan_secs,
+            cli.recordings_dir.clone(),
         ))
     } else if cli.emu {
         #[cfg(unix)]
@@ -215,6 +216,7 @@ async fn main() -> Result<()> {
             if let Some(ref port) = cli.port {
                 let port_path = port.clone();
                 let tx = obd_tx.clone();
+                let recordings_dir = cli.recordings_dir.clone();
                 Some(tokio::spawn(async move {
                     let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
 
@@ -235,7 +237,12 @@ async fn main() -> Result<()> {
                     let adapter = Elm327Adapter::new(Box::new(logging));
                     let mut session = Session::new(adapter);
 
-                    run_session_poll_loop(&mut session, poll_ms, &tx).await;
+                    // Set up raw capture channel
+                    let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
+                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
+
+                    run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
                 }))
             } else {
                 tracing::error!("--emu requires --port <PTY path>");
@@ -259,6 +266,7 @@ async fn main() -> Result<()> {
             obd_tx.clone(),
             prefs_path.clone(),
             cli.ble_scan_secs,
+            cli.recordings_dir.clone(),
         ))
     } else if let Some(ref last_device) = connection_prefs.last_device {
         tracing::info!("Reconnecting to last device: {:?}", last_device);
@@ -269,6 +277,7 @@ async fn main() -> Result<()> {
             obd_tx.clone(),
             prefs_path.clone(),
             cli.ble_scan_secs,
+            cli.recordings_dir.clone(),
         ))
     } else if let Ok(port) = auto_detect_port() {
         tracing::info!("Auto-detected serial port: {}", port);
@@ -283,6 +292,7 @@ async fn main() -> Result<()> {
             obd_tx.clone(),
             prefs_path.clone(),
             cli.ble_scan_secs,
+            cli.recordings_dir.clone(),
         ))
     } else {
         tracing::info!("No device specified, starting disconnected (press 's' to scan)");
@@ -336,6 +346,7 @@ async fn main() -> Result<()> {
             log_buffer,
             database,
             ai_config,
+            cli.recordings_dir,
         )
         .await
     }
@@ -346,6 +357,8 @@ async fn run_session_poll_loop<A: Adapter>(
     session: &mut Session<A>,
     poll_ms: u64,
     tx: &mpsc::UnboundedSender<Message>,
+    mut capture_rx: tokio::sync::mpsc::UnboundedReceiver<app::CaptureCommand>,
+    capture_handle: app::CaptureHandle,
 ) {
     // Initialize adapter (ATZ, ATE0, protocol detect) if not already done
     if let Err(e) = session.initialize().await {
@@ -420,6 +433,37 @@ async fn run_session_poll_loop<A: Adapter>(
 
     loop {
         interval.tick().await;
+
+        // Drain any pending capture commands (non-blocking)
+        while let Ok(cmd) = capture_rx.try_recv() {
+            match cmd {
+                app::CaptureCommand::Start { path, metadata } => {
+                    if let Some(transport) = session.adapter_mut().transport_mut() {
+                        if transport.start_raw_capture(&path, &metadata) {
+                            capture_handle.set_active(true);
+                            let _ = tx.send(Message::RawCaptureStarted);
+                        } else {
+                            let _ = tx.send(Message::RawCaptureError(
+                                "Failed to start raw capture".to_string(),
+                            ));
+                        }
+                    } else {
+                        let _ = tx.send(Message::RawCaptureError(
+                            "No transport available for capture".to_string(),
+                        ));
+                    }
+                }
+                app::CaptureCommand::Stop => {
+                    if let Some(transport) = session.adapter_mut().transport_mut() {
+                        if let Some(path) = transport.stop_raw_capture() {
+                            capture_handle.set_active(false);
+                            let _ = tx.send(Message::RawCaptureStopped(path));
+                        }
+                    }
+                    capture_handle.set_active(false);
+                }
+            }
+        }
 
         for &pid in &pids_to_poll {
             if !supported.is_empty() && !supported.contains(&pid) {
@@ -511,7 +555,12 @@ fn spawn_mock_poll(
         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
         let _ = tx.send(Message::AdapterDetected(info));
 
-        run_session_poll_loop(&mut session, poll_ms, &tx).await;
+        // Mock adapter has no transport, so capture won't work — but we still
+        // need to pass the channel to satisfy the poll loop signature.
+        let (_cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
+        let cap_handle = app::CaptureHandle::new(PathBuf::from("recordings"));
+
+        run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
     })
 }
 
@@ -523,6 +572,7 @@ fn spawn_connect_and_poll(
     tx: mpsc::UnboundedSender<Message>,
     prefs_path: PathBuf,
     ble_scan_secs: u64,
+    recordings_dir: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
@@ -587,7 +637,12 @@ fn spawn_connect_and_poll(
                                 tracing::warn!("Failed to save connection prefs: {}", e);
                             }
 
-                            run_session_poll_loop(&mut session, poll_ms, &tx).await;
+                            // Set up raw capture channel
+                            let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
+                            let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
+                            let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
+
+                            run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
                             return;
                         }
                         Err(e) => {
@@ -611,7 +666,13 @@ fn spawn_connect_and_poll(
                         let adapter = Elm327Adapter::new(Box::new(logging));
                         let mut session = Session::new(adapter);
                         let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
-                        run_session_poll_loop(&mut session, poll_ms, &tx).await;
+
+                        // Set up raw capture channel
+                        let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
+                        let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
+
+                        run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
                     }
                     Err(e) => {
                         let msg = format!("BLE connection failed: {}", e);
@@ -642,6 +703,7 @@ async fn run_tui(
     log_buffer: debug_log::LogBuffer,
     database: obd2_db::Database,
     ai_config: Option<AiConfig>,
+    recordings_dir: String,
 ) -> Result<()> {
     let mut tui = Tui::new()?;
     tui.enter()?;
@@ -800,6 +862,7 @@ async fn run_tui(
                 obd_tx.clone(),
                 prefs_path.clone(),
                 ble_scan_secs,
+                recordings_dir.clone(),
             ));
         }
         if state.scan_mode == ScanMode::Idle {

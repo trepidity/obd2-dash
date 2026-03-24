@@ -26,7 +26,7 @@ pub enum CaptureCommand {
 
 /// Shared handle for raw protocol capture state.
 /// Arc-wrapped so the session task and main thread can coordinate.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CaptureHandle {
     active: Arc<AtomicBool>,
     recordings_dir: Arc<PathBuf>,
@@ -86,6 +86,10 @@ pub enum Message {
     // O2 sensor monitoring
     O2MonitoringUpdate(Vec<O2Reading>),
     // Raw protocol capture
+    CaptureReady {
+        handle: CaptureHandle,
+        tx: mpsc::UnboundedSender<CaptureCommand>,
+    },
     RawCaptureStarted,
     RawCaptureStopped(PathBuf),
     RawCaptureError(String),
@@ -265,6 +269,10 @@ impl AppState {
             }
             Message::Tick => {
                 // UI tick -- nothing to do here
+            }
+            Message::CaptureReady { handle, tx } => {
+                self.capture_handle = Some(handle);
+                self.capture_tx = Some(tx);
             }
             Message::RawCaptureStarted => {
                 if let Some(ref handle) = self.capture_handle {
