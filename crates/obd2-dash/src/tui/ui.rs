@@ -525,7 +525,7 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
     }
 
     // Raw capture indicator
-    if state.capture_handle.as_ref().map_or(false, |h| h.is_active()) {
+    if state.capture_handle.as_ref().is_some_and(|h| h.is_active()) {
         spans.push(Span::styled(" ", Style::default()));
         spans.push(Span::styled(
             "RAW",
@@ -2066,7 +2066,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         } else {
             " | r:rec R:replay"
         };
-        let cap_hint = if state.capture_handle.as_ref().map_or(false, |h| h.is_active()) {
+        let cap_hint = if state.capture_handle.as_ref().is_some_and(|h| h.is_active()) {
             " | c:stop raw"
         } else if state.capture_handle.is_some() {
             " | c:raw"

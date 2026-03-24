@@ -116,7 +116,7 @@ impl StorageManager {
             .map(|entries| {
                 entries
                     .filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().map_or(false, |ext| ext == "obd2raw"))
+                    .filter(|e| e.path().extension().is_some_and(|ext| ext == "obd2raw"))
                     .filter_map(|e| e.metadata().ok())
                     .map(|m| m.len())
                     .sum()
