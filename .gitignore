@@ -21,5 +21,8 @@ connection.json
 # Python
 emulator/__pycache__/
 
+# Worktrees
+.worktrees/
+
 # macOS
 .DS_Store
