@@ -151,6 +151,7 @@ pub fn render_widget(
         WidgetKind::O2SensorsPanel => {
             ui::render_full_o2_sensors(frame, area, state, block, selected_item);
         }
+        WidgetKind::ReadinessPanel => render_readiness_panel(frame, area, state, block),
     }
 }
 
@@ -248,6 +249,15 @@ fn widget_title(kind: WidgetKind, state: &AppState) -> String {
                 " O2 SENSORS ".to_string()
             } else {
                 format!(" O2 SENSORS ({}) ", count)
+            }
+        }
+        WidgetKind::ReadinessPanel => {
+            if let Some(ref status) = state.domain.readiness {
+                let supported = status.monitors.iter().filter(|m| m.supported).count();
+                let complete = status.monitors.iter().filter(|m| m.supported && m.complete).count();
+                format!(" READINESS ({}/{}) ", complete, supported)
+            } else {
+                " READINESS ".to_string()
             }
         }
     }
@@ -1047,5 +1057,62 @@ fn render_alerts_panel(frame: &mut Frame, area: Rect, state: &AppState, block: B
         .collect();
 
     let paragraph = Paragraph::new(visible);
+    frame.render_widget(paragraph, inner);
+}
+
+fn render_readiness_panel(frame: &mut Frame, area: Rect, state: &AppState, block: Block<'_>) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let mut lines = Vec::new();
+
+    match &state.domain.readiness {
+        Some(status) => {
+            let mil_style = if status.mil_on {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            let mil_text = if status.mil_on { "ON" } else { "OFF" };
+            lines.push(Line::from(vec![
+                Span::raw("  MIL: "),
+                Span::styled(mil_text, mil_style),
+                Span::raw(format!("  DTCs: {}  ", status.dtc_count)),
+                Span::raw(if status.compression_ignition { "Diesel" } else { "Spark" }),
+            ]));
+            lines.push(Line::from(""));
+
+            let supported: Vec<_> = status.monitors.iter().filter(|m| m.supported).collect();
+            let complete_count = supported.iter().filter(|m| m.complete).count();
+            lines.push(Line::from(format!(
+                "  Monitors: {}/{} complete",
+                complete_count,
+                supported.len()
+            )));
+            lines.push(Line::from(""));
+
+            for monitor in &status.monitors {
+                if !monitor.supported {
+                    continue;
+                }
+                let (icon, style) = if monitor.complete {
+                    ("OK", Style::default().fg(Color::Green))
+                } else {
+                    ("--", Style::default().fg(Color::Yellow))
+                };
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{:>2}", icon), style),
+                    Span::raw(format!("  {}", monitor.name)),
+                ]));
+            }
+        }
+        None => {
+            lines.push(Line::from("  No readiness data"));
+            lines.push(Line::from("  (waiting for connection)"));
+        }
+    }
+
+    let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
 }

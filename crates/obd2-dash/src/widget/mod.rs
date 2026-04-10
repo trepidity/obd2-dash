@@ -57,6 +57,9 @@ pub enum WidgetKind {
     // Enhanced & O2
     EnhancedPidsPanel,
     O2SensorsPanel,
+
+    // Readiness
+    ReadinessPanel,
 }
 
 /// Widget size within a row.
@@ -353,6 +356,14 @@ pub fn widget_registry() -> Vec<WidgetMeta> {
             category: WidgetCategory::FuelEmissions,
             default_size: WidgetSize::Half,
             description: "O2 sensor monitoring test results",
+        },
+        // Readiness
+        WidgetMeta {
+            kind: WidgetKind::ReadinessPanel,
+            title: "Readiness Monitors",
+            category: WidgetCategory::Diagnostics,
+            default_size: WidgetSize::Half,
+            description: "MIL status, DTC count, and per-monitor readiness",
         },
     ]
 }
