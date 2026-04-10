@@ -39,6 +39,11 @@ pub fn render(frame: &mut Frame, state: &AppState, log_buffer: &LogBuffer) {
         render_edit_overlay(frame, edit);
     }
 
+    // Clear DTC confirmation popup
+    if let Some(crate::app::ClearDtcConfirm::BroadcastPopup) = &state.clear_dtc_confirm {
+        render_clear_dtc_popup(frame);
+    }
+
     // Popup overlay (rendered last, on top of everything)
     if let Some(popup) = &state.popup {
         render_popup(frame, popup);
@@ -1791,6 +1796,34 @@ fn render_device_picker(frame: &mut Frame, state: &AppState) {
 
     let para = Paragraph::new(lines);
     frame.render_widget(para, inner);
+}
+
+fn render_clear_dtc_popup(frame: &mut Frame) {
+    let area = centered_rect(50, 30, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .title(" CLEAR ALL DTCs ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(Style::default().fg(Color::Red));
+
+    let text = vec![
+        Line::from(""),
+        Line::from("  This will clear all stored DTCs and"),
+        Line::from("  reset readiness monitors."),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("Enter", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": confirm  |  "),
+            Span::styled("Esc", Style::default().add_modifier(Modifier::BOLD)),
+            Span::raw(": cancel"),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text).block(block);
+    frame.render_widget(paragraph, area);
 }
 
 // ─── Popup overlay ──────────────────────────────────────────────────────────

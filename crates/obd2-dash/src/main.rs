@@ -1006,6 +1006,23 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
         return;
     }
 
+    // Clear DTC confirmation takes priority
+    if state.clear_dtc_confirm.is_some() {
+        match key.code {
+            KeyCode::Enter => {
+                if matches!(state.clear_dtc_confirm, Some(app::ClearDtcConfirm::BroadcastPopup)) {
+                    state.send_diagnostic(app::DiagnosticCommand::ClearAll);
+                    state.clear_dtc_confirm = None;
+                }
+            }
+            KeyCode::Esc => {
+                state.clear_dtc_confirm = None;
+            }
+            _ => {}
+        }
+        return;
+    }
+
     if state.domain.recording.is_replaying() {
         match key.code {
             KeyCode::Char(' ') => {
@@ -1095,6 +1112,9 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
         }
         KeyCode::Char('c') => {
             handle_toggle_raw_capture(state);
+        }
+        KeyCode::Char('C') => {
+            handle_clear_dtcs(state);
         }
         KeyCode::Char('R') => {
             if state.domain.recording.is_idle() {
@@ -1525,6 +1545,44 @@ fn handle_toggle_raw_capture(state: &mut AppState) {
             if let Some(ref tx) = state.capture_tx {
                 let _ = tx.send(app::CaptureCommand::Start { path, metadata });
             }
+        }
+    }
+}
+
+fn handle_clear_dtcs(state: &mut AppState) {
+    // Only allow when connected and DTCs exist
+    if state.domain.stored_dtcs.is_empty() || state.diagnostic_tx.is_none() {
+        return;
+    }
+
+    match &state.clear_dtc_confirm {
+        Some(app::ClearDtcConfirm::ModulePending { module_id, expires }) => {
+            // Second press within 2 seconds — execute module-targeted clear
+            if expires.elapsed().as_secs() < 2 {
+                state.send_diagnostic(app::DiagnosticCommand::ClearOnModule(module_id.clone()));
+                state.clear_dtc_confirm = None;
+            } else {
+                // Expired — restart
+                state.clear_dtc_confirm = None;
+            }
+        }
+        _ => {
+            // Check if a specific DTC is selected — if so, use module-targeted clear
+            if let Some(widget_idx) = state.focused_widget {
+                if let Some(&item_idx) = state.widget_selections.get(&widget_idx) {
+                    if let Some(dtc) = state.domain.stored_dtcs.get(item_idx) {
+                        if let Some(ref source_module) = dtc.source_module {
+                            state.clear_dtc_confirm = Some(app::ClearDtcConfirm::ModulePending {
+                                module_id: obd2_core::vehicle::ModuleId::new(source_module),
+                                expires: std::time::Instant::now(),
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+            // No specific module — broadcast popup
+            state.clear_dtc_confirm = Some(app::ClearDtcConfirm::BroadcastPopup);
         }
     }
 }
