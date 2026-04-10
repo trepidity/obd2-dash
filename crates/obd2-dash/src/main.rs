@@ -1233,6 +1233,24 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
             if state.layout == DashboardLayout::Full && state.popup.is_none() {
                 if let Some(widget_idx) = state.focused_widget {
                     if let Some(&item_idx) = state.widget_selections.get(&widget_idx) {
+                        // Check if this is a DTC popup — if so, request freeze-frame
+                        if let Some(slot) = state.dashboard_config.widget_at(widget_idx) {
+                            if slot.kind == widget::WidgetKind::DtcPanel {
+                                if let Some(dtc) = state.domain.stored_dtcs.get(item_idx) {
+                                    let correlated_pids = vec![
+                                        Pid::ENGINE_RPM, Pid::VEHICLE_SPEED, Pid::COOLANT_TEMP,
+                                        Pid::ENGINE_LOAD, Pid::SHORT_FUEL_TRIM_B1, Pid::LONG_FUEL_TRIM_B1,
+                                        Pid::THROTTLE_POSITION, Pid::MAF,
+                                    ];
+                                    state.domain.freeze_frame_pending = true;
+                                    state.domain.freeze_frame_data = None;
+                                    state.send_diagnostic(app::DiagnosticCommand::FetchFreezeFrame {
+                                        dtc_code: dtc.code.clone(),
+                                        pids: correlated_pids,
+                                    });
+                                }
+                            }
+                        }
                         state.popup = widget_build_popup(widget_idx, item_idx, state);
                     }
                 }

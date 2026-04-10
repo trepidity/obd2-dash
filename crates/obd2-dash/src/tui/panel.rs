@@ -675,6 +675,21 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
                 lines.push(String::new());
                 lines.push(format!("Notes: {}", n));
             }
+
+            // Freeze-frame data (on-demand, may still be loading)
+            if state.domain.freeze_frame_pending {
+                lines.push(String::new());
+                lines.push("Freeze-Frame: loading...".to_string());
+            } else if let Some(ref ff) = state.domain.freeze_frame_data {
+                if ff.dtc_code == *code {
+                    lines.push(String::new());
+                    lines.push("Freeze-Frame Snapshot:".to_string());
+                    for (pid, value, unit) in &ff.readings {
+                        lines.push(format!("  {}: {:.1} {}", pid.name(), value, unit));
+                    }
+                }
+            }
+
             (code.clone(), lines)
         }
         PanelItemDetail::VehicleField { field_name, value } => {
