@@ -1,10 +1,12 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
-use obd2_core::adapter::AdapterInfo;
+use obd2_core::adapter::{AdapterInfo, ProtocolSelectionSource};
 use obd2_core::protocol::dtc::Dtc;
 use obd2_core::protocol::enhanced::Reading;
 use obd2_core::protocol::pid::Pid;
+use obd2_core::session::discovery::{DiscoveryProfile, VisibleEcu};
+use obd2_core::vehicle::{ModuleId, Protocol};
 
 use crate::analysis::driving::DrivingBehavior;
 use crate::analysis::fuel_economy::{FuelEconomyState, SensorSnapshot};
@@ -32,6 +34,42 @@ pub struct O2Reading {
     pub unit: String,
 }
 
+/// Discovery information surfaced from obd2-core Session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveryState {
+    pub selected_protocol: Protocol,
+    pub protocol_choice_source: ProtocolSelectionSource,
+    pub active_bus_id: Option<String>,
+    pub active_bus_description: Option<String>,
+    pub active_bus_speed_bps: Option<u32>,
+    pub resolved_modules: Vec<ModuleId>,
+    pub visible_ecus: Vec<VisibleEcu>,
+}
+
+impl From<&DiscoveryProfile> for DiscoveryState {
+    fn from(profile: &DiscoveryProfile) -> Self {
+        let active_bus_id = profile.active_bus.as_ref().map(|bus| bus.id.0.clone());
+        let active_bus_description = profile
+            .active_bus
+            .as_ref()
+            .and_then(|bus| bus.description.clone());
+        let active_bus_speed_bps = profile.active_bus.as_ref().map(|bus| bus.speed_bps);
+
+        let mut resolved_modules: Vec<ModuleId> = profile.modules.keys().cloned().collect();
+        resolved_modules.sort_by(|a, b| a.0.cmp(&b.0));
+
+        Self {
+            selected_protocol: profile.selected_protocol,
+            protocol_choice_source: profile.protocol_choice_source,
+            active_bus_id,
+            active_bus_description,
+            active_bus_speed_bps,
+            resolved_modules,
+            visible_ecus: profile.visible_ecus.clone(),
+        }
+    }
+}
+
 /// Domain-only events (no scanner/UI messages).
 #[derive(Debug)]
 pub enum DomainMessage {
@@ -39,6 +77,7 @@ pub enum DomainMessage {
     VoltageUpdate(f64),
     DtcUpdate(Vec<Dtc>),
     ConnectionStatus(ConnectionState),
+    DiscoveryUpdated(DiscoveryState),
     AdapterDetected(AdapterInfo),
     Error(String),
     EnhancedPidUpdate {
@@ -55,8 +94,32 @@ pub enum DomainMessage {
 pub enum ConnectionState {
     Disconnected,
     Connecting,
+    AdapterPresent,
+    AdapterInitialized,
+    ProtocolNegotiating,
     Connected,
+    IgnitionOff,
+    UnsupportedProtocol,
     Error(String),
+}
+
+impl ConnectionState {
+    pub fn from_session(state: &obd2_core::session::ConnectionState) -> Self {
+        match state {
+            obd2_core::session::ConnectionState::AdapterPresent => Self::AdapterPresent,
+            obd2_core::session::ConnectionState::AdapterInitialized => Self::AdapterInitialized,
+            obd2_core::session::ConnectionState::ProtocolNegotiating => Self::ProtocolNegotiating,
+            obd2_core::session::ConnectionState::Connected => Self::Connected,
+            obd2_core::session::ConnectionState::IgnitionOff => Self::IgnitionOff,
+            obd2_core::session::ConnectionState::UnsupportedProtocol => Self::UnsupportedProtocol,
+            obd2_core::session::ConnectionState::Disconnected => Self::Disconnected,
+            obd2_core::session::ConnectionState::Error(e) => Self::Error(e.clone()),
+        }
+    }
+
+    pub fn allows_scan_hint(&self) -> bool {
+        matches!(self, Self::Disconnected | Self::Error(_) | Self::UnsupportedProtocol)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +138,7 @@ pub enum SpeedUnit {
 pub struct DomainState {
     pub vehicle: VehicleData,
     pub connection: ConnectionState,
+    pub discovery: Option<DiscoveryState>,
     pub adapter_info: Option<AdapterInfo>,
     pub last_error: Option<String>,
     pub poll_interval_ms: u64,
@@ -100,6 +164,7 @@ impl DomainState {
         Self {
             vehicle: VehicleData::default(),
             connection: ConnectionState::Disconnected,
+            discovery: None,
             adapter_info: None,
             last_error: None,
             poll_interval_ms,
@@ -187,7 +252,20 @@ impl DomainState {
                 self.stored_dtcs = dtcs;
             }
             DomainMessage::ConnectionStatus(state) => {
+                if matches!(
+                    state,
+                    ConnectionState::Disconnected
+                        | ConnectionState::Connecting
+                        | ConnectionState::Error(_)
+                ) {
+                    self.discovery = None;
+                    self.enhanced_readings.clear();
+                    self.o2_readings.clear();
+                }
                 self.connection = state;
+            }
+            DomainMessage::DiscoveryUpdated(discovery) => {
+                self.discovery = Some(discovery);
             }
             DomainMessage::AdapterDetected(info) => {
                 tracing::info!(
@@ -317,5 +395,60 @@ fn detect_system_units() -> (TemperatureUnit, SpeedUnit) {
     } else {
         tracing::debug!("Locale '{}' -> Celsius + km/h", locale);
         (TemperatureUnit::Celsius, SpeedUnit::Kmh)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use obd2_core::vehicle::BusId;
+
+    fn sample_discovery() -> DiscoveryState {
+        DiscoveryState {
+            selected_protocol: Protocol::Can11Bit500,
+            protocol_choice_source: ProtocolSelectionSource::AutoDetect,
+            active_bus_id: Some("can".into()),
+            active_bus_description: Some("CAN".into()),
+            active_bus_speed_bps: Some(500_000),
+            resolved_modules: vec![ModuleId::new("ecm"), ModuleId::new("tcm")],
+            visible_ecus: vec![VisibleEcu {
+                id: "7e8".into(),
+                bus: Some(BusId("can".into())),
+                module: Some(ModuleId::new("ecm")),
+                address: None,
+                observation_count: 1,
+            }],
+        }
+    }
+
+    #[test]
+    fn test_connection_state_from_session_preserves_ignition_off() {
+        let mapped = ConnectionState::from_session(&obd2_core::session::ConnectionState::IgnitionOff);
+        assert_eq!(mapped, ConnectionState::IgnitionOff);
+    }
+
+    #[test]
+    fn test_disconnect_clears_discovery_and_enhanced_state() {
+        let mut domain = DomainState::new(250);
+        domain.update(DomainMessage::DiscoveryUpdated(sample_discovery()));
+        domain.enhanced_readings.push(EnhancedReading {
+            did: 0x1234,
+            module: "ecm".into(),
+            name: "Test".into(),
+            value: 1.0,
+            unit: "u".into(),
+        });
+        domain.o2_readings.push(O2Reading {
+            test_name: "TID".into(),
+            sensor: "O2".into(),
+            value: 1.0,
+            unit: "V".into(),
+        });
+
+        domain.update(DomainMessage::ConnectionStatus(ConnectionState::Disconnected));
+
+        assert!(domain.discovery.is_none());
+        assert!(domain.enhanced_readings.is_empty());
+        assert!(domain.o2_readings.is_empty());
     }
 }

@@ -151,23 +151,20 @@ Options:
 ## Architecture
 
 ```
-src/
-├── main.rs              # CLI, OBD2 poll loop, TUI event loop, key handling
-├── app.rs               # AppState, Message enum, update() (TEA pattern)
-├── debug_log.rs         # LogBuffer ring buffer, tracing Layer for in-app log viewer
-├── driving.rs           # DrivingBehavior — smoothness score, hard brake/jackrabbit detection
-├── obd2/
-│   ├── mod.rs           # Obd2Connection trait (async)
-│   ├── elm327.rs        # Real ELM327 serial driver (uses Transport trait)
-│   ├── mock.rs          # MockObd2 vehicle simulator
-│   ├── pid.rs           # Pid enum — codes, names, units, parsing
-│   ├── dtc.rs           # DTC decoding, descriptions, mock scenarios
-│   ├── types.rs         # PidReading, VehicleData, Obd2Error
-│   ├── transport.rs     # Transport trait — byte-level I/O abstraction
-│   ├── serial_transport.rs  # SerialTransport (tokio-serial)
-│   ├── ble_transport.rs     # BleTransport (btleplug GATT)
-│   ├── scanner.rs       # Device discovery — serial ports + BLE scan
-│   └── connection_prefs.rs  # Persisted last-used device preference
+crates/obd2-dash/src/
+├── main.rs              # CLI, runtime wiring, transport setup, TUI event loop, replay loop
+├── session_runner.rs    # Shared obd2-core session bootstrap and live polling orchestration
+├── app.rs               # AppState, Message enum, update() integration boundary
+├── domain.rs            # Vehicle state, connection/discovery state, reducer logic
+├── scanner.rs           # Device discovery for serial ports and BLE adapters
+├── connection_prefs.rs  # Persisted last-used device preference
+├── debug_log.rs         # LogBuffer ring buffer, tracing layer for in-app log viewer
+├── mock_profile.rs      # Mock VIN/profile helpers for the obd2-core mock adapter
+├── vehicle_data.rs      # Canonical vehicle telemetry model used by widgets and analysis
+├── analysis/
+│   ├── mod.rs           # Analysis exports
+│   ├── driving.rs       # DrivingBehavior — smoothness score, hard brake/jackrabbit detection
+│   └── fuel_economy.rs  # Dual fuel economy: ECU + calculated methods
 ├── tui/
 │   ├── mod.rs           # Terminal setup/teardown
 │   ├── event.rs         # Async key/tick/render event handler
@@ -180,33 +177,32 @@ src/
 │   └── edit_mode.rs     # Edit mode state machine (Browse/Category/Widget/Size)
 ├── recording/
 │   ├── mod.rs           # RecordingState enum (Idle/Recording/Replaying)
-│   ├── format.rs        # Binary frame format — magic + header + 14-byte frames
+│   ├── format.rs        # Binary frame format and frame codecs
 │   ├── writer.rs        # RecordingWriter — append-only binary file
 │   ├── reader.rs        # Frame reader (raw + gzip)
-│   ├── index.rs         # SessionIndex — JSON metadata for all sessions
+│   ├── index.rs         # Session index and metadata
 │   ├── storage.rs       # StorageManager — compress, trim, quota enforcement
 │   └── replay.rs        # ReplayController — speed, seek, pause
-├── diagnostics/
-│   ├── mod.rs           # Module exports
-│   ├── provider.rs      # DiagnosticProvider trait, LocalDiagnosticProvider
-│   └── correlation.rs   # DTC-to-PID mapping, guidance text, snapshot builder
-├── fuel_economy.rs      # Dual fuel economy: gold-standard + speed-density
-└── db/
-    ├── mod.rs           # SQLite database, schema, threshold resolution
-    ├── models.rs        # VehicleInfo, thresholds, alerts, mock profiles
-    └── seed.rs          # Reference data seeding (engine families, vehicles)
+├── ai/
+│   ├── mod.rs           # AI module exports
+│   ├── client.rs        # LLM client wiring
+│   ├── config.rs        # AI configuration
+│   ├── insights.rs      # Text insight parsing/helpers
+│   ├── prompt.rs        # Prompt construction
+│   └── summary.rs       # Recording summarization pipeline
+└── nhtsa.rs             # NHTSA vehicle/threshold enrichment helpers
 ```
 
 ### Design patterns
 
-- **TEA (The Elm Architecture)**: Unidirectional data flow -- `AppState` is the single source of truth, `Message` enum carries all state transitions, `update()` is the pure reducer
-- **Async trait abstraction**: `Obd2Connection` trait allows swapping between `Elm327` (real, over serial or BLE) and `MockObd2` (demo) at startup
-- **Transport layer**: `Transport` trait abstracts byte-level I/O, with `SerialTransport` and `BleTransport` implementations behind a single `Elm327` driver
+- **TEA-style state flow**: `AppState` is the single source of truth, `Message` carries live/replay/session events, and `update()` folds them into domain state
+- **Session-first integration**: `obd2-dash` talks to `obd2_core::session::Session`; `session_runner` owns adapter/session bootstrap, discovery emission, standard polling, enhanced polling cadence, DTC aggregation, and raw capture control
+- **Transport setup at the edge**: `main.rs` is responsible for selecting serial, BLE, emulator, or mock transports and then handing an initialized `Session` boundary to `session_runner`
 - **Widget-config-driven rendering**: `DashboardConfig` (JSON) drives the full layout dynamically -- the rendering loop iterates config rows/slots rather than hardcoded panels
-- **Recording interception**: Data capture sits at the top of `update()`, passively recording every PID/Voltage/DTC message that flows through the app
+- **Recording interception**: Data capture sits at the top of `update()`, passively recording every PID/Voltage/DTC/enhanced/O2 message that flows through the app
 - **Replay injection**: Playback feeds frames back into the same `Message` pipeline via a `tokio::select!` arm, so replayed data follows the exact same code path as live data
+- **Rich connection/discovery state**: The domain preserves `obd2-core` connection states such as protocol negotiation, ignition-off, and unsupported protocol, plus discovery metadata for the current vehicle/modules
 - **Layered threshold resolution**: Default thresholds -> engine family overrides -> VIN-specific overrides, resolved at startup from SQLite
-- **DiagnosticProvider trait**: Async trait for diagnostic analysis, with `LocalDiagnosticProvider` using static correlation tables. Designed for future AI provider integration without restructuring
 
 ## Database
 
@@ -235,7 +231,7 @@ At 25 PIDs polled at 4 Hz, this produces approximately 5 MB/hour of raw data. Fi
 cargo test
 ```
 
-46 tests covering PID parsing, DTC decoding, database operations, threshold resolution, diagnostic correlation, ELM327 command parsing, and recording format roundtrips.
+23 tests covering domain state transitions, poll-event translation, discovery-driven enhanced planning, recording format roundtrips, NHTSA parsing, and analysis helpers.
 
 ## Dependencies
 

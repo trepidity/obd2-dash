@@ -9,7 +9,7 @@ use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
 use crate::ai::{AiConfig, AiInsights};
 use crate::nhtsa::NhtsaVehicle;
-use crate::domain::{ConnectionState, DomainMessage, DomainState, O2Reading};
+use crate::domain::{ConnectionState, DiscoveryState, DomainMessage, DomainState, O2Reading};
 use crate::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
 
 use obd2_core::adapter::AdapterInfo;
@@ -61,6 +61,7 @@ pub enum Message {
     VoltageUpdate(f64),
     DtcUpdate(Vec<Dtc>),
     ConnectionStatus(ConnectionState),
+    DiscoveryUpdated(DiscoveryState),
     AdapterDetected(AdapterInfo),
     Error(String),
     // UI-only
@@ -211,6 +212,10 @@ impl AppState {
             Message::ConnectionStatus(state) => {
                 self.domain
                     .update(DomainMessage::ConnectionStatus(state));
+            }
+            Message::DiscoveryUpdated(discovery) => {
+                self.domain
+                    .update(DomainMessage::DiscoveryUpdated(discovery));
             }
             Message::AdapterDetected(info) => {
                 self.domain.update(DomainMessage::AdapterDetected(info));

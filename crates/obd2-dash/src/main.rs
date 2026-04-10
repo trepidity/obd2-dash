@@ -8,6 +8,7 @@ mod mock_profile;
 mod nhtsa;
 pub mod recording;
 mod scanner;
+mod session_runner;
 mod tui;
 pub mod vehicle_data;
 mod widget;
@@ -42,14 +43,13 @@ use widget::edit_mode::{EditModeState, EditPhase};
 // New obd2-core imports
 use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::enhanced::Reading;
-use obd2_core::adapter::Adapter;
 use obd2_core::adapter::elm327::Elm327Adapter;
 use obd2_core::adapter::mock::MockAdapter;
 use obd2_core::session::Session;
-use obd2_core::vehicle::ModuleId;
-use obd2_core::error::Obd2Error;
-
-use domain::O2Reading;
+use session_runner::{
+    build_mock_capture_handle, prepare_session, run_prepared_session, run_session_task,
+    SessionRunnerConfig,
+};
 
 /// Number of mock DTC scenarios (used by dtc cycling key).
 const DTC_SCENARIO_COUNT: u8 = 4;
@@ -242,7 +242,17 @@ async fn main() -> Result<()> {
                     let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
                     let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
 
-                    run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
+                    let _ = run_session_task(
+                        &mut session,
+                        SessionRunnerConfig {
+                            poll_ms,
+                            standard_pids: pollable_pids(),
+                        },
+                        &tx,
+                        cap_rx,
+                        cap_handle,
+                    )
+                    .await;
                 }))
             } else {
                 tracing::error!("--emu requires --port <PTY path>");
@@ -352,194 +362,6 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Run the Session-based poll loop (shared between serial/BLE/emu paths).
-async fn run_session_poll_loop<A: Adapter>(
-    session: &mut Session<A>,
-    poll_ms: u64,
-    tx: &mpsc::UnboundedSender<Message>,
-    mut capture_rx: tokio::sync::mpsc::UnboundedReceiver<app::CaptureCommand>,
-    capture_handle: app::CaptureHandle,
-) {
-    // Initialize adapter (ATZ, ATE0, protocol detect) if not already done
-    if let Err(e) = session.initialize().await {
-        tracing::warn!("Adapter init in poll loop failed: {e}");
-        // Continue anyway — might already be initialized from connect path
-    }
-
-    // Quick test read to verify the connection is live
-    match session.read_pid(Pid::ENGINE_RPM).await {
-        Ok(_) => {
-            let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
-            let info = session.adapter_info().clone();
-            let _ = tx.send(Message::AdapterDetected(info));
-        }
-        Err(e) => {
-            let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(e.to_string())));
-            let _ = tx.send(Message::Error(format!("Init failed: {e}")));
-            return;
-        }
-    }
-
-    // Read VIN and identify vehicle (matches spec for enhanced PIDs)
-    match session.identify_vehicle().await {
-        Ok(profile) => {
-            let _ = tx.send(Message::VinDetected(profile.vin.clone()));
-        }
-        Err(e) => {
-            tracing::warn!("Could not identify vehicle: {e}");
-            // Fall back to just reading VIN
-            match session.read_vin().await {
-                Ok(vin) => {
-                    let _ = tx.send(Message::VinDetected(vin));
-                }
-                Err(e2) => {
-                    tracing::warn!("Could not read VIN: {e2}");
-                }
-            }
-        }
-    }
-
-    // Read initial voltage
-    match session.battery_voltage().await {
-        Ok(Some(v)) => {
-            let _ = tx.send(Message::VoltageUpdate(v));
-        }
-        Ok(None) => {}
-        Err(e) => {
-            tracing::warn!("Could not read voltage: {e}");
-        }
-    }
-
-    // Get supported PIDs
-    let supported = session.supported_pids().await.unwrap_or_default();
-    let pids_to_poll = pollable_pids();
-
-    // Cache enhanced PID list from matched spec (if any)
-    let enhanced_pid_list: Vec<obd2_core::protocol::enhanced::EnhancedPid> =
-        if let Some(spec) = session.spec() {
-            spec.enhanced_pids.clone()
-        } else {
-            vec![]
-        };
-    if !enhanced_pid_list.is_empty() {
-        tracing::info!(
-            "Found {} enhanced PIDs from spec",
-            enhanced_pid_list.len()
-        );
-    }
-
-    let mut interval = tokio::time::interval(Duration::from_millis(poll_ms));
-    let mut voltage_counter = 0u32;
-
-    loop {
-        interval.tick().await;
-
-        // Drain any pending capture commands (non-blocking)
-        while let Ok(cmd) = capture_rx.try_recv() {
-            match cmd {
-                app::CaptureCommand::Start { path, metadata } => {
-                    if let Some(transport) = session.adapter_mut().transport_mut() {
-                        if transport.start_raw_capture(&path, &metadata) {
-                            capture_handle.set_active(true);
-                            let _ = tx.send(Message::RawCaptureStarted);
-                        } else {
-                            let _ = tx.send(Message::RawCaptureError(
-                                "Failed to start raw capture".to_string(),
-                            ));
-                        }
-                    } else {
-                        let _ = tx.send(Message::RawCaptureError(
-                            "No transport available for capture".to_string(),
-                        ));
-                    }
-                }
-                app::CaptureCommand::Stop => {
-                    if let Some(transport) = session.adapter_mut().transport_mut() {
-                        if let Some(path) = transport.stop_raw_capture() {
-                            capture_handle.set_active(false);
-                            let _ = tx.send(Message::RawCaptureStopped(path));
-                        }
-                    }
-                    capture_handle.set_active(false);
-                }
-            }
-        }
-
-        for &pid in &pids_to_poll {
-            if !supported.is_empty() && !supported.contains(&pid) {
-                continue;
-            }
-            match session.read_pid(pid).await {
-                Ok(reading) => {
-                    if tx.send(Message::PidUpdate(pid, reading)).is_err() {
-                        return;
-                    }
-                }
-                Err(Obd2Error::NoData) => {
-                    // PID not supported by this vehicle, skip silently
-                }
-                Err(e) => {
-                    tracing::warn!("PID {} query failed: {e}", pid);
-                    let _ = tx.send(Message::Error(format!("{}: {e}", pid)));
-                }
-            }
-        }
-
-        voltage_counter += 1;
-
-        // Poll enhanced PIDs every 5th iteration
-        if !enhanced_pid_list.is_empty() && voltage_counter % 5 == 0 {
-            for epid in &enhanced_pid_list {
-                let module = ModuleId::new(&epid.module);
-                match session.read_enhanced(epid.did, module).await {
-                    Ok(reading) => {
-                        let val = reading.value.as_f64().unwrap_or(0.0);
-                        let _ = tx.send(Message::EnhancedPidUpdate {
-                            did: epid.did,
-                            module: epid.module.clone(),
-                            name: epid.name.clone(),
-                            value: val,
-                            unit: epid.unit.clone(),
-                        });
-                    }
-                    Err(_) => {
-                        // Skip failed enhanced reads silently
-                    }
-                }
-            }
-        }
-
-        // Voltage, DTCs, and O2 monitoring on slower cadence
-        if voltage_counter % 10 == 0 {
-            if let Ok(Some(v)) = session.battery_voltage().await {
-                let _ = tx.send(Message::VoltageUpdate(v));
-            }
-            if let Ok(mut dtcs) = session.read_dtcs().await {
-                obd2_core::session::diagnostics::enrich_dtcs(&mut dtcs, session.spec());
-                let _ = tx.send(Message::DtcUpdate(dtcs));
-            }
-        }
-
-        // O2 monitoring every 20th iteration (changes slowly)
-        if voltage_counter % 20 == 0 {
-            if let Ok(results) = session.read_all_o2_monitoring().await {
-                let readings: Vec<O2Reading> = results
-                    .into_iter()
-                    .map(|r| O2Reading {
-                        test_name: r.test_name.to_string(),
-                        sensor: r.sensor.to_string(),
-                        value: r.value,
-                        unit: r.unit.to_string(),
-                    })
-                    .collect();
-                if !readings.is_empty() {
-                    let _ = tx.send(Message::O2MonitoringUpdate(readings));
-                }
-            }
-        }
-    }
-}
-
 /// Spawn mock adapter polling task.
 fn spawn_mock_poll(
     vin: &'static str,
@@ -549,18 +371,24 @@ fn spawn_mock_poll(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let adapter = MockAdapter::with_vin(vin);
-        let info = adapter.info().clone();
         let mut session = Session::new(adapter);
-
-        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
-        let _ = tx.send(Message::AdapterDetected(info));
 
         // Mock adapter has no transport, so capture won't work — but we still
         // need to pass the channel to satisfy the poll loop signature.
         let (_cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
-        let cap_handle = app::CaptureHandle::new(PathBuf::from("recordings"));
+        let cap_handle = build_mock_capture_handle();
 
-        run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
+        let _ = run_session_task(
+            &mut session,
+            SessionRunnerConfig {
+                poll_ms,
+                standard_pids: pollable_pids(),
+            },
+            &tx,
+            cap_rx,
+            cap_handle,
+        )
+        .await;
     })
 }
 
@@ -615,42 +443,41 @@ fn spawn_connect_and_poll(
                     let adapter = Elm327Adapter::new(Box::new(logging));
                     let mut session = Session::new(adapter);
 
-                    // Initialize adapter (ATZ, ATE0, protocol detect)
-                    if let Err(e) = session.initialize().await {
-                        last_error = format!("Init failed: {}", e);
-                        tracing::warn!("{} (attempt {}/{})", last_error, attempt, MAX_ATTEMPTS);
-                        continue;
-                    }
+                    // Set up raw capture channel
+                    let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
+                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
 
-                    // Try a test read to verify connection
-                    match session.read_pid(Pid::ENGINE_RPM).await {
-                        Ok(_) => {
-                            let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connected));
-                            let info = session.adapter_info().clone();
-                            let _ = tx.send(Message::AdapterDetected(info));
+                    let config = SessionRunnerConfig {
+                        poll_ms,
+                        standard_pids: pollable_pids(),
+                    };
 
-                            // Save connection prefs
-                            let prefs = ConnectionPrefs {
-                                last_device: Some(device.clone()),
-                            };
-                            if let Err(e) = prefs.save(&prefs_path) {
-                                tracing::warn!("Failed to save connection prefs: {}", e);
-                            }
-
-                            // Set up raw capture channel
-                            let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
-                            let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
-                            let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
-
-                            run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
-                            return;
-                        }
+                    let prepared = match prepare_session(&mut session, config, &tx).await {
+                        Ok(prepared) => prepared,
                         Err(e) => {
-                            last_error = format!("Init failed: {}", e);
+                            last_error = e;
                             tracing::warn!("{} (attempt {}/{})", last_error, attempt, MAX_ATTEMPTS);
                             continue;
                         }
+                    };
+
+                    let prefs = ConnectionPrefs {
+                        last_device: Some(device.clone()),
+                    };
+                    if let Err(e) = prefs.save(&prefs_path) {
+                        tracing::warn!("Failed to save connection prefs: {}", e);
                     }
+
+                    run_prepared_session(
+                        &mut session,
+                        prepared,
+                        &tx,
+                        cap_rx,
+                        cap_handle,
+                    )
+                    .await;
+                    return;
                 }
 
                 let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(last_error.clone())));
@@ -672,7 +499,17 @@ fn spawn_connect_and_poll(
                         let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
                         let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
 
-                        run_session_poll_loop(&mut session, poll_ms, &tx, cap_rx, cap_handle).await;
+                        let _ = run_session_task(
+                            &mut session,
+                            SessionRunnerConfig {
+                                poll_ms,
+                                standard_pids: pollable_pids(),
+                            },
+                            &tx,
+                            cap_rx,
+                            cap_handle,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         let msg = format!("BLE connection failed: {}", e);
@@ -933,6 +770,11 @@ async fn run_headless(
                 let conn = match &state.domain.connection {
                     ConnectionState::Connected => "connected",
                     ConnectionState::Connecting => "connecting",
+                    ConnectionState::AdapterPresent => "adapter-present",
+                    ConnectionState::AdapterInitialized => "adapter-ready",
+                    ConnectionState::ProtocolNegotiating => "negotiating",
+                    ConnectionState::IgnitionOff => "ignition-off",
+                    ConnectionState::UnsupportedProtocol => "unsupported-protocol",
                     ConnectionState::Disconnected => "disconnected",
                     ConnectionState::Error(_) => "error",
                 };

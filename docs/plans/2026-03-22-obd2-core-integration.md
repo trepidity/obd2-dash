@@ -1,5 +1,7 @@
 # obd2-core Integration Plan
 
+> Historical note (2026-04-09): this document reflects the original migration from the inline core implementation to the external `obd2-core` crate. The current active follow-on work is tracked in [`2026-04-09-obd2-core-api-alignment.md`](/Users/jared/Projects/HaulLogic/obd2-dash/docs/plans/2026-04-09-obd2-core-api-alignment.md) and its execution board.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace the inline `crates/obd2-core` with the standalone `~/Projects/obd2-core` library, making obd2-dash a pure UI shell.

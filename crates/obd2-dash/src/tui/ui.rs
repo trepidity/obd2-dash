@@ -333,6 +333,21 @@ fn render_compact_header(frame: &mut Frame, area: Rect, state: &AppState) {
         Span::styled(voltage_text, Style::default().fg(Color::Yellow)),
     ];
 
+    if let Some(discovery) = &state.domain.discovery {
+        spans.push(Span::raw("    "));
+        spans.push(Span::styled(
+            format!("{:?}", discovery.selected_protocol),
+            Style::default().fg(Color::White),
+        ));
+        if !discovery.visible_ecus.is_empty() {
+            spans.push(Span::raw("    "));
+            spans.push(Span::styled(
+                format!("{} ECU", discovery.visible_ecus.len()),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    }
+
     if let Some(ref info) = state.domain.adapter_info {
         spans.push(Span::raw("    "));
         spans.push(Span::styled(
@@ -521,6 +536,21 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
         RecordingState::Idle => {
             let (status_text, status_color) = connection_style(&state.domain.connection);
             spans.push(Span::styled(status_text, Style::default().fg(status_color)));
+        }
+    }
+
+    if let Some(discovery) = &state.domain.discovery {
+        spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            format!("{:?}", discovery.selected_protocol),
+            Style::default().fg(Color::White),
+        ));
+        if !discovery.visible_ecus.is_empty() {
+            spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                format!("{} ECU", discovery.visible_ecus.len()),
+                Style::default().fg(Color::DarkGray),
+            ));
         }
     }
 
@@ -2078,9 +2108,10 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         } else {
             ""
         };
-        let scan_hint = match state.domain.connection {
-            ConnectionState::Disconnected | ConnectionState::Error(_) => " | s:scan",
-            _ => "",
+        let scan_hint = if state.domain.connection.allows_scan_hint() {
+            " | s:scan"
+        } else {
+            ""
         };
         format!(
             "Poll: {}ms{} | {} | q/p/u/d/+/-/Tab/l:log{}{}{}{}",
@@ -2177,6 +2208,11 @@ fn connection_style(conn: &ConnectionState) -> (&'static str, Color) {
     match conn {
         ConnectionState::Connected => ("Connected", Color::Green),
         ConnectionState::Connecting => ("Connecting...", Color::Yellow),
+        ConnectionState::AdapterPresent => ("Adapter Present", Color::Cyan),
+        ConnectionState::AdapterInitialized => ("Adapter Ready", Color::Cyan),
+        ConnectionState::ProtocolNegotiating => ("Negotiating...", Color::Yellow),
+        ConnectionState::IgnitionOff => ("Ignition Off", Color::Yellow),
+        ConnectionState::UnsupportedProtocol => ("Unsupported Protocol", Color::Red),
         ConnectionState::Disconnected => ("Disconnected (s:scan)", Color::DarkGray),
         ConnectionState::Error(_) => ("Error (s:scan)", Color::Red),
     }
