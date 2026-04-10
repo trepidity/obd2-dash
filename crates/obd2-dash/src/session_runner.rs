@@ -176,6 +176,7 @@ pub async fn run_prepared_session<A: Adapter>(
 
         if cycle % 20 == 0 {
             poll_o2_monitoring(session, tx).await;
+            poll_readiness(session, tx).await;
             emit_session_state(session, tx, &mut prepared.last_connection);
             if emit_discovery(session, tx, &mut prepared.last_discovery) {
                 prepared.enhanced_targets = build_enhanced_targets(session);
@@ -300,6 +301,20 @@ async fn poll_o2_monitoring<A: Adapter>(
         }
         Err(e) => {
             tracing::debug!("Skipping O2 monitoring update this cycle: {}", e);
+        }
+    }
+}
+
+async fn poll_readiness<A: Adapter>(
+    session: &mut Session<A>,
+    tx: &mpsc::UnboundedSender<Message>,
+) {
+    match session.read_readiness().await {
+        Ok(status) => {
+            let _ = tx.send(Message::ReadinessUpdate(status));
+        }
+        Err(e) => {
+            tracing::debug!("Skipping readiness update this cycle: {}", e);
         }
     }
 }
