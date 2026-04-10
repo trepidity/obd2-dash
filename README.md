@@ -44,7 +44,9 @@ A real-time OBD-II vehicle diagnostics TUI dashboard built with Rust. Connects t
 - **Session replay**: Play back recorded sessions with adjustable speed (0.5x--4x), seek, and pause controls through a session picker UI
 - **Dual fuel economy**: ECU gold-standard MPG alongside speed-density calculated MPG with 7 real-time correction factors
 - **Threshold alerts**: Vehicle-specific and engine-family-specific warning/critical thresholds with color-coded gauges, loaded from a SQLite database
-- **DTC diagnostics**: Reads stored, pending, and permanent trouble codes via `read_all_dtcs()` with contextual analysis -- correlated sensor snapshots, other active DTCs, common causes, and suggested repair actions
+- **DTC diagnostics**: Reads stored, pending, and permanent trouble codes via `read_all_dtcs()` with contextual analysis -- correlated sensor snapshots, other active DTCs, common causes, suggested repair actions, and on-demand freeze-frame data
+- **Clear DTCs**: Clear all DTCs (`C` key) with popup confirmation, or clear per-module with two-key confirmation
+- **Readiness monitors**: MIL status, DTC count, and per-monitor supported/complete state polled every 5 seconds
 - **Sparkline histories**: Rolling 30-second trend graphs for RPM, speed, throttle, and load
 - **Interactive panels**: Tab between widgets, arrow-key select items, Enter for detail popups
 - **Mock mode**: Built-in vehicle simulator with realistic drive patterns, warmup cycles, and DTC scenarios for demo/development without hardware
@@ -127,6 +129,7 @@ Options:
 | `e` | Enter edit mode (Full layout) |
 | `r` | Toggle recording on/off |
 | `c` | Toggle raw protocol capture on/off |
+| `C` | Clear DTCs (popup or two-key confirmation) |
 | `R` | Open session picker for replay |
 | `s` / `S` | Open device scanner/picker |
 | `l` | Open debug log viewer |
@@ -240,7 +243,7 @@ At 25 PIDs polled at 4 Hz, this produces approximately 5 MB/hour of raw data. Fi
 cargo test
 ```
 
-79 tests covering domain state transitions, poll-event translation, discovery-driven enhanced planning, recording format roundtrips, replay controller seek/pause/speed, vehicle data model, fuel economy calculations (gold standard, speed-density, correction factors), driving behavior analysis (hard braking, jackrabbit detection, smoothness scoring), NHTSA parsing, and database threshold resolution.
+98 tests covering domain state transitions (connection, discovery, readiness, freeze-frame), poll-event translation, discovery-driven enhanced planning, recording format roundtrips, replay controller seek/pause/speed, vehicle data model, fuel economy calculations (gold standard, speed-density, correction factors), driving behavior analysis (hard braking, jackrabbit detection, smoothness scoring), NHTSA parsing, database threshold resolution, SessionIndex/StorageManager filesystem operations, and ConnectionPrefs serialization.
 
 ## Dependencies
 

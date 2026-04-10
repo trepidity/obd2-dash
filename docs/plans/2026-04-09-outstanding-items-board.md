@@ -44,19 +44,19 @@ Resolve all outstanding items from `docs/OUTSTANDING.md`: diagnostics expansion 
 
 | ID | Status | Task | Phase | Depends On | Exit Criteria |
 |----|--------|------|-------|------------|---------------|
-| T1 | READY | Fix baud_rate passthrough in raw capture metadata | 1 | None | `CaptureMetadata.baud_rate` populated from serial baud, `cargo check` passes |
-| T2 | READY | Add tempfile dev-dependency | 1 | None | `tempfile = "3"` in `[dev-dependencies]`, `cargo check` passes |
-| T3 | READY | Add SessionIndex tests | 1 | T2 | 7 tests pass: load missing, save/load roundtrip, remove, total size, mark compressed, sorted, duration display |
-| T4 | READY | Add StorageManager tests | 1 | T2 | 6 tests pass: register, delete, stats, maintenance trim, raw capture bytes, reload |
-| T5 | READY | Add ConnectionPrefs tests | 1 | T2 | 4 tests pass: missing file, serial roundtrip, BLE roundtrip, invalid JSON |
-| T6 | READY | Add readiness message types and domain state | 2 | None | `ReadinessUpdate` message flows through app → domain, domain test passes |
-| T7 | READY | Add poll_readiness to session runner | 2 | T6 | `poll_readiness` called every 20th cycle, `cargo check` passes |
-| T8 | READY | Add ReadinessPanel widget | 2 | T6, T7 | Widget renders MIL/monitors, visible in `--mock` mode via edit mode |
-| T9 | READY | Add clear DTC command channel and session runner handling | 2 | T6 | `DiagnosticCommand` channel created, `ClearAll`/`ClearOnModule` handled in runner |
-| T10 | READY | Add clear DTC UI (popup + two-key) | 2 | T9 | `C` in DTC panel shows popup, Enter confirms, Esc cancels; per-module two-key works |
-| T11 | READY | Add freeze-frame to DTC detail popup | 2 | T9 | DTC popup shows freeze-frame section when data available, "Loading..." while pending |
-| T12 | READY | Add tests for diagnostics features | 3 | T6–T11 | All new domain transitions and runner operations have tests, `cargo test` passes |
-| T13 | READY | Update documentation | 3 | T8, T10, T11 | README, MANUAL, OUTSTANDING.md updated with new features and keybindings |
+| T1 | DONE | Fix baud_rate passthrough in raw capture metadata | 1 | None | `CaptureMetadata.baud_rate` populated from serial baud, `cargo check` passes |
+| T2 | DONE | Add tempfile dev-dependency | 1 | None | `tempfile = "3"` in `[dev-dependencies]`, `cargo check` passes |
+| T3 | DONE | Add SessionIndex tests | 1 | T2 | 7 tests pass: load missing, save/load roundtrip, remove, total size, mark compressed, sorted, duration display |
+| T4 | DONE | Add StorageManager tests | 1 | T2 | 6 tests pass: register, delete, stats, maintenance trim, raw capture bytes, reload |
+| T5 | DONE | Add ConnectionPrefs tests | 1 | T2 | 4 tests pass: missing file, serial roundtrip, BLE roundtrip, invalid JSON |
+| T6 | DONE | Add readiness message types and domain state | 2 | None | `ReadinessUpdate` message flows through app → domain, domain test passes |
+| T7 | DONE | Add poll_readiness to session runner | 2 | T6 | `poll_readiness` called every 20th cycle, `cargo check` passes |
+| T8 | DONE | Add ReadinessPanel widget | 2 | T6, T7 | Widget renders MIL/monitors, visible in `--mock` mode via edit mode |
+| T9 | DONE | Add clear DTC command channel and session runner handling | 2 | T6 | `DiagnosticCommand` channel created, `ClearAll`/`ClearOnModule` handled in runner |
+| T10 | DONE | Add clear DTC UI (popup + two-key) | 2 | T9 | `C` in DTC panel shows popup, Enter confirms, Esc cancels; per-module two-key works |
+| T11 | DONE | Add freeze-frame to DTC detail popup | 2 | T9 | DTC popup shows freeze-frame section when data available, "Loading..." while pending |
+| T12 | DONE | Add tests for diagnostics features | 3 | T6–T11 | All new domain transitions and runner operations have tests, `cargo test` passes |
+| T13 | DONE | Update documentation | 3 | T8, T10, T11 | README, MANUAL, OUTSTANDING.md updated with new features and keybindings |
 
 ## Task Cards
 
@@ -371,3 +371,4 @@ Execute tasks in this order:
 ## Update Log
 
 - `2026-04-09`: Board created from the outstanding items implementation plan. All 13 tasks in READY state.
+- `2026-04-09`: All 13 tasks implemented and verified. Phase 1: baud_rate fix, tempfile dep, 17 filesystem tests. Phase 2: readiness polling + widget, clear DTC command channel + UI, freeze-frame popup. Phase 3: diagnostics tests, full doc update. 98 total tests passing.

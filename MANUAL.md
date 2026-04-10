@@ -570,6 +570,40 @@ Suggested Actions:
   5. Inspect catalyst for physical damage
 ```
 
+### Freeze-Frame Data
+
+When you open a DTC detail popup (Enter on a selected code), the app automatically requests freeze-frame data (Mode $02) from the vehicle. If freeze-frame data is available, a "Freeze-Frame Snapshot" section appears at the bottom of the popup showing the sensor values that were captured when the DTC was set:
+
+```
+Freeze-Frame Snapshot:
+  Engine RPM: 2847.0 rpm
+  Vehicle Speed: 59.0 km/h
+  Coolant Temp: 92.1 °C
+  Engine Load: 42.1 %
+```
+
+Not all vehicles store freeze-frame data. If no data is available, this section is omitted.
+
+### Clearing DTCs
+
+Press `C` (capital C) while the DTC panel is focused to clear diagnostic trouble codes:
+
+- **No DTC selected**: A confirmation popup appears: "Clear all DTCs? This resets readiness monitors." Press Enter to confirm or Esc to cancel.
+- **DTC selected**: If the selected DTC has a source module, a two-key confirmation activates — press `C` again within 2 seconds to clear DTCs on that specific module only.
+
+Clearing DTCs resets the vehicle's readiness monitors. After clearing, the readiness panel will show monitors as incomplete until the vehicle completes its drive cycles.
+
+### Readiness Monitors
+
+Add the "Readiness Monitors" widget via edit mode (under Diagnostics category) to see:
+
+- **MIL status**: Malfunction Indicator Light on/off (red if on, green if off)
+- **DTC count**: Number of stored codes as reported by the ECU
+- **Ignition type**: Spark (gasoline) or Diesel
+- **Monitor status**: Per-monitor supported/complete state with color coding (green = complete, yellow = incomplete)
+
+Readiness data is polled every 5 seconds. Monitors reset when DTCs are cleared and complete progressively during normal driving.
+
 ### DTC Color Coding
 
 | Color | Meaning |
@@ -861,6 +895,7 @@ RUST_LOG=warn cargo run -- --mock
 | `e` | Enter edit mode (Full layout only) |
 | `r` | Toggle recording on/off |
 | `c` | Toggle raw protocol capture on/off |
+| `C` | Clear DTCs (popup confirmation or two-key per-module) |
 | `R` | Open session picker for replay |
 | `s` / `S` | Open device scanner/picker |
 | `l` | Open debug log viewer |
