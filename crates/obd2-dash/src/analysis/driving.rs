@@ -147,3 +147,136 @@ impl DrivingBehavior {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: feed a sequence of (speed_kmh, throttle_pct) pairs with small time gaps.
+    fn feed_updates(db: &mut DrivingBehavior, updates: &[(f64, f64)]) {
+        for &(speed, throttle) in updates {
+            db.update(speed, throttle);
+            // Small sleep to ensure Instant::now() advances enough for dt > 0.01
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn test_initial_state() {
+        let db = DrivingBehavior::new();
+        assert_eq!(db.hard_brake_count, 0);
+        assert_eq!(db.jackrabbit_count, 0);
+        assert_eq!(db.smoothness_score, 100.0);
+        assert_eq!(db.current_accel, 0.0);
+    }
+
+    #[test]
+    fn test_steady_speed_is_smooth() {
+        let mut db = DrivingBehavior::new();
+        // Steady 60 km/h for several samples — should remain very smooth
+        feed_updates(&mut db, &[
+            (60.0, 30.0),
+            (60.0, 30.0),
+            (60.0, 30.0),
+            (60.0, 30.0),
+            (60.0, 30.0),
+        ]);
+
+        assert!(db.smoothness_score > 90.0, "steady speed should score high, got {}", db.smoothness_score);
+        assert_eq!(db.hard_brake_count, 0);
+        assert_eq!(db.jackrabbit_count, 0);
+    }
+
+    #[test]
+    fn test_hard_brake_detection() {
+        let mut db = DrivingBehavior::new();
+        // Start at 80 km/h, then drop sharply (simulating emergency stop)
+        db.update(80.0, 30.0);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Drop to 0 in ~50ms → delta = -80 km/h = -22.2 m/s in 0.05s = -444 m/s²
+        // This far exceeds the -2.8 m/s² threshold
+        db.update(0.0, 0.0);
+
+        assert!(db.hard_brake_count >= 1, "should detect a hard brake, got {}", db.hard_brake_count);
+    }
+
+    #[test]
+    fn test_hard_brake_hysteresis() {
+        let mut db = DrivingBehavior::new();
+        // Trigger a hard brake
+        db.update(80.0, 30.0);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        db.update(0.0, 0.0);
+        assert_eq!(db.hard_brake_count, 1);
+
+        // Still decelerating, but shouldn't count twice (hysteresis)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        db.update(0.0, 0.0);
+        assert_eq!(db.hard_brake_count, 1, "hysteresis should prevent double-counting");
+    }
+
+    #[test]
+    fn test_jackrabbit_start_detection() {
+        let mut db = DrivingBehavior::new();
+        // Low speed, high throttle, rapid acceleration
+        db.update(0.0, 70.0);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        // Jump to 40 km/h in 50ms → 11.1 m/s in 0.05s = 222 m/s² (well above 2.8)
+        db.update(40.0, 70.0);
+
+        assert!(db.jackrabbit_count >= 1, "should detect jackrabbit start, got {}", db.jackrabbit_count);
+    }
+
+    #[test]
+    fn test_no_jackrabbit_at_highway_speed() {
+        let mut db = DrivingBehavior::new();
+        // High speed (>50 km/h) — jackrabbit detection doesn't apply
+        db.update(80.0, 70.0);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        db.update(120.0, 80.0);
+
+        assert_eq!(db.jackrabbit_count, 0, "jackrabbit shouldn't trigger at highway speed");
+    }
+
+    #[test]
+    fn test_no_jackrabbit_at_low_throttle() {
+        let mut db = DrivingBehavior::new();
+        // Rapid acceleration from stop, but low throttle
+        db.update(0.0, 20.0);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        db.update(40.0, 20.0);
+
+        assert_eq!(db.jackrabbit_count, 0, "jackrabbit shouldn't trigger with low throttle");
+    }
+
+    #[test]
+    fn test_smoothness_label() {
+        let mut db = DrivingBehavior::new();
+        db.smoothness_score = 95.0;
+        assert_eq!(db.smoothness_label(), "Smooth");
+
+        db.smoothness_score = 75.0;
+        assert_eq!(db.smoothness_label(), "Good");
+
+        db.smoothness_score = 55.0;
+        assert_eq!(db.smoothness_label(), "Fair");
+
+        db.smoothness_score = 35.0;
+        assert_eq!(db.smoothness_label(), "Rough");
+
+        db.smoothness_score = 10.0;
+        assert_eq!(db.smoothness_label(), "Aggressive");
+    }
+
+    #[test]
+    fn test_accel_history_capacity() {
+        let mut db = DrivingBehavior::new();
+        // Feed more than ACCEL_HISTORY_CAP updates
+        for i in 0..150 {
+            db.update(i as f64, 30.0);
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+        assert!(db.accel_history.len() <= ACCEL_HISTORY_CAP,
+            "history should be capped at {}, got {}", ACCEL_HISTORY_CAP, db.accel_history.len());
+    }
+}

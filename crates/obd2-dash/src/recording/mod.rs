@@ -1,3 +1,15 @@
+//! Recording and replay subsystem.
+//!
+//! Captures live OBD-II data to binary `.obd2rec` files and plays them back
+//! through the same message pipeline as live data.
+//!
+//! - [`format`]: Binary frame format (v1/v2), codecs for PID, voltage, DTC, enhanced, and O2 frames.
+//! - [`writer`]: Append-only binary file writer.
+//! - [`reader`]: Frame reader supporting raw and gzip-compressed files.
+//! - [`index`]: Session metadata index (`sessions.json`).
+//! - [`storage`]: Storage manager — automatic compression, quota enforcement, FIFO trimming.
+//! - [`replay`]: Replay controller with variable speed, seek, and pause.
+
 pub mod format;
 pub mod index;
 pub mod reader;

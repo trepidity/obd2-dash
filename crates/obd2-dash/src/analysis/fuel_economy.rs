@@ -456,6 +456,8 @@ fn push_history(history: &mut VecDeque<u64>, mpg: f64) {
     history.push_back((mpg * 10.0).clamp(0.0, 2000.0) as u64);
 }
 
+/// Calculate fuel trim correction factor from available STFT/LTFT readings.
+/// Averages all available trims and converts percentage to a multiplier.
 fn calc_fuel_trim_correction(snap: &SensorSnapshot) -> f64 {
     let mut sum = 0.0;
     let mut count = 0;
@@ -485,6 +487,8 @@ fn calc_fuel_trim_correction(snap: &SensorSnapshot) -> f64 {
     }
 }
 
+/// Calculate catalyst temperature correction factor.
+/// Returns 1.0-1.1 based on average catalyst temperature (enrichment during light-off).
 fn calc_catalyst_correction(snap: &SensorSnapshot) -> f64 {
     let temps: Vec<f64> = [
         snap.catalyst_temp_b1s1,
@@ -507,5 +511,288 @@ fn calc_catalyst_correction(snap: &SensorSnapshot) -> f64 {
         1.0 + frac * 0.10
     } else {
         1.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_snapshot() -> SensorSnapshot {
+        SensorSnapshot {
+            rpm: None,
+            speed_kph: None,
+            coolant_temp_c: None,
+            engine_load_pct: None,
+            intake_map_kpa: None,
+            maf_gs: None,
+            intake_air_temp_c: None,
+            ambient_air_temp_c: None,
+            throttle_pct: None,
+            barometric_kpa: None,
+            engine_fuel_rate_lph: None,
+            stft_b1: None,
+            ltft_b1: None,
+            stft_b2: None,
+            ltft_b2: None,
+            catalyst_temp_b1s1: None,
+            catalyst_temp_b2s1: None,
+            catalyst_temp_b1s2: None,
+            catalyst_temp_b2s2: None,
+        }
+    }
+
+    fn cruising_snapshot() -> SensorSnapshot {
+        SensorSnapshot {
+            rpm: Some(2500.0),
+            speed_kph: Some(100.0),
+            coolant_temp_c: Some(92.0),
+            engine_load_pct: Some(40.0),
+            intake_map_kpa: Some(65.0),
+            maf_gs: Some(12.0),
+            intake_air_temp_c: Some(25.0),
+            ambient_air_temp_c: Some(22.0),
+            throttle_pct: Some(35.0),
+            barometric_kpa: Some(101.3),
+            engine_fuel_rate_lph: Some(8.5),
+            stft_b1: Some(2.0),
+            ltft_b1: Some(-1.0),
+            stft_b2: None,
+            ltft_b2: None,
+            catalyst_temp_b1s1: Some(420.0),
+            catalyst_temp_b2s1: None,
+            catalyst_temp_b1s2: None,
+            catalyst_temp_b2s2: None,
+        }
+    }
+
+    // ── FuelType tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_fuel_type_afr_and_density() {
+        assert!((FuelType::Gasoline.afr() - 14.7).abs() < 0.01);
+        assert!((FuelType::Diesel.afr() - 14.5).abs() < 0.01);
+        assert!((FuelType::E85.afr() - 9.765).abs() < 0.01);
+
+        assert!((FuelType::Gasoline.density() - 0.745).abs() < 0.001);
+        assert!((FuelType::Diesel.density() - 0.832).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_fuel_type_from_str_hint() {
+        assert_eq!(FuelType::from_str_hint("Diesel"), FuelType::Diesel);
+        assert_eq!(FuelType::from_str_hint("diesel fuel"), FuelType::Diesel);
+        assert_eq!(FuelType::from_str_hint("E85"), FuelType::E85);
+        assert_eq!(FuelType::from_str_hint("Flex Fuel"), FuelType::E85);
+        assert_eq!(FuelType::from_str_hint("Gasoline"), FuelType::Gasoline);
+        assert_eq!(FuelType::from_str_hint("Premium Unleaded"), FuelType::Gasoline);
+        assert_eq!(FuelType::from_str_hint(""), FuelType::Gasoline);
+    }
+
+    // ── Configure tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_configure_sets_fuel_type_and_displacement() {
+        let mut state = FuelEconomyState::new();
+        assert_eq!(state.fuel_type, FuelType::Gasoline);
+        assert!((state.displacement_l - 2.0).abs() < 0.01);
+
+        state.configure(Some(6.6), Some("Diesel"));
+        assert_eq!(state.fuel_type, FuelType::Diesel);
+        assert!((state.displacement_l - 6.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_configure_partial() {
+        let mut state = FuelEconomyState::new();
+        state.configure(None, Some("E85"));
+        assert_eq!(state.fuel_type, FuelType::E85);
+        assert!((state.displacement_l - 2.0).abs() < 0.01); // unchanged
+
+        state.configure(Some(1.6), None);
+        assert_eq!(state.fuel_type, FuelType::E85); // unchanged
+        assert!((state.displacement_l - 1.6).abs() < 0.01);
+    }
+
+    // ── Gold standard calculation ────────────────────────────────────
+
+    #[test]
+    fn test_gold_direct_fuel_rate() {
+        let mut state = FuelEconomyState::new();
+        let snap = cruising_snapshot();
+        state.recalculate(&snap, 0.25);
+
+        let gold = state.gold.as_ref().expect("gold should be available");
+        assert_eq!(gold.source, GoldSource::DirectFuelRate);
+        assert!((gold.fuel_rate_lph - 8.5).abs() < 0.01);
+        assert!(gold.instant_mpg > 0.0, "should have positive MPG at speed");
+    }
+
+    #[test]
+    fn test_gold_maf_fallback() {
+        let mut state = FuelEconomyState::new();
+        let mut snap = cruising_snapshot();
+        snap.engine_fuel_rate_lph = None; // Remove direct fuel rate
+        state.recalculate(&snap, 0.25);
+
+        let gold = state.gold.as_ref().expect("gold should fall back to MAF");
+        assert_eq!(gold.source, GoldSource::MafDerived);
+        assert!(gold.fuel_rate_lph > 0.0);
+    }
+
+    #[test]
+    fn test_gold_unavailable_without_rate_or_maf() {
+        let mut state = FuelEconomyState::new();
+        let mut snap = cruising_snapshot();
+        snap.engine_fuel_rate_lph = None;
+        snap.maf_gs = None;
+        state.recalculate(&snap, 0.25);
+
+        assert!(state.gold.is_none(), "gold should be None without fuel rate or MAF");
+    }
+
+    // ── Advanced calculation ─────────────────────────────────────────
+
+    #[test]
+    fn test_advanced_requires_rpm_and_map() {
+        let mut state = FuelEconomyState::new();
+        let snap = empty_snapshot();
+        state.recalculate(&snap, 0.25);
+
+        assert!(state.advanced.is_none(), "advanced should be None without RPM/MAP");
+    }
+
+    #[test]
+    fn test_advanced_calculation_produces_result() {
+        let mut state = FuelEconomyState::new();
+        let snap = cruising_snapshot();
+        state.recalculate(&snap, 0.25);
+
+        let adv = state.advanced.as_ref().expect("advanced should be available");
+        assert!(adv.base_maf_gs > 0.0);
+        assert!(adv.base_fuel_rate_lph > 0.0);
+        assert!(adv.corrected_fuel_rate_lph > 0.0);
+        assert!(adv.instant_mpg > 0.0);
+    }
+
+    // ── Correction factors ───────────────────────────────────────────
+
+    #[test]
+    fn test_correction_factors_total() {
+        let cf = CorrectionFactors {
+            cold_engine: 1.1,
+            altitude: 0.95,
+            air_density: 1.02,
+            fuel_trims: 1.03,
+            catalyst_warmup: 1.05,
+            throttle_transient: 1.0,
+            high_load_wot: 1.0,
+        };
+        let total = cf.total();
+        let expected = 1.1 * 0.95 * 1.02 * 1.03 * 1.05 * 1.0 * 1.0;
+        assert!((total - expected).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_cold_engine_correction() {
+        let mut state = FuelEconomyState::new();
+        let mut snap = cruising_snapshot();
+
+        // Warm engine — correction should be ~1.0
+        snap.coolant_temp_c = Some(92.0);
+        state.recalculate(&snap, 0.25);
+        let warm = state.advanced.as_ref().unwrap().corrections.cold_engine;
+        assert!((warm - 1.0).abs() < 0.01);
+
+        // Cold engine — correction should be > 1.0
+        snap.coolant_temp_c = Some(20.0);
+        state.recalculate(&snap, 0.25);
+        let cold = state.advanced.as_ref().unwrap().corrections.cold_engine;
+        assert!(cold > 1.0, "cold engine correction should be > 1.0, got {}", cold);
+        assert!(cold <= 1.2, "cold engine correction should be <= 1.2, got {}", cold);
+    }
+
+    #[test]
+    fn test_fuel_trim_correction_positive() {
+        let snap = SensorSnapshot {
+            stft_b1: Some(10.0),
+            ltft_b1: Some(5.0),
+            ..empty_snapshot()
+        };
+        let correction = calc_fuel_trim_correction(&snap);
+        // avg = 7.5%, correction = 1.075
+        assert!((correction - 1.075).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_fuel_trim_correction_no_data() {
+        let snap = empty_snapshot();
+        let correction = calc_fuel_trim_correction(&snap);
+        assert!((correction - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_catalyst_correction_warm() {
+        let snap = SensorSnapshot {
+            catalyst_temp_b1s1: Some(420.0),
+            ..empty_snapshot()
+        };
+        let correction = calc_catalyst_correction(&snap);
+        assert!((correction - 1.0).abs() < 0.001, "warm catalyst should give 1.0");
+    }
+
+    #[test]
+    fn test_catalyst_correction_cold() {
+        let snap = SensorSnapshot {
+            catalyst_temp_b1s1: Some(100.0),
+            ..empty_snapshot()
+        };
+        let correction = calc_catalyst_correction(&snap);
+        assert!(correction > 1.0, "cold catalyst should give > 1.0, got {}", correction);
+        assert!(correction <= 1.1, "cold catalyst should give <= 1.1, got {}", correction);
+    }
+
+    // ── Sparkline history ────────────────────────────────────────────
+
+    #[test]
+    fn test_mpg_history_accumulates() {
+        let mut state = FuelEconomyState::new();
+        let snap = cruising_snapshot();
+
+        for _ in 0..10 {
+            state.recalculate(&snap, 0.25);
+        }
+
+        assert_eq!(state.gold_mpg_history.len(), 10);
+        assert_eq!(state.advanced_mpg_history.len(), 10);
+    }
+
+    #[test]
+    fn test_mpg_history_capped() {
+        let mut state = FuelEconomyState::new();
+        let snap = cruising_snapshot();
+
+        for _ in 0..200 {
+            state.recalculate(&snap, 0.25);
+        }
+
+        assert!(state.gold_mpg_history.len() <= MPG_HISTORY_CAP);
+        assert!(state.advanced_mpg_history.len() <= MPG_HISTORY_CAP);
+    }
+
+    // ── Average MPG accumulation ─────────────────────────────────────
+
+    #[test]
+    fn test_average_mpg_accumulates_over_time() {
+        let mut state = FuelEconomyState::new();
+        let snap = cruising_snapshot();
+
+        // Simulate 10 seconds of driving at 100 km/h
+        for _ in 0..40 {
+            state.recalculate(&snap, 0.25);
+        }
+
+        let gold = state.gold.as_ref().unwrap();
+        assert!(gold.avg_mpg > 0.0, "average MPG should accumulate, got {}", gold.avg_mpg);
     }
 }

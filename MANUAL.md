@@ -21,10 +21,11 @@ Complete guide to the OBD-II vehicle diagnostics TUI dashboard.
 13. [Headless Mode](#13-headless-mode)
 14. [Driving Behavior](#14-driving-behavior)
 15. [Debug Log Viewer](#15-debug-log-viewer)
-16. [Configuration Files](#16-configuration-files)
-17. [Keyboard Reference](#17-keyboard-reference)
-18. [CLI Reference](#18-cli-reference)
-19. [Troubleshooting](#19-troubleshooting)
+16. [Raw Protocol Capture](#16-raw-protocol-capture)
+17. [Configuration Files](#17-configuration-files)
+18. [Keyboard Reference](#18-keyboard-reference)
+19. [CLI Reference](#19-cli-reference)
+20. [Troubleshooting](#20-troubleshooting)
 
 ---
 
@@ -129,7 +130,7 @@ The BLE scan looks for devices matching known adapter name prefixes: OBDLink, OB
 
 #### Device Scanner
 
-Press `s` or `S` during normal operation to open the built-in device scanner. It discovers both serial ports and BLE adapters simultaneously and presents a picker to connect. The last-used device is saved to `connection_prefs.json` for quick reconnection.
+Press `s` or `S` during normal operation to open the built-in device scanner. It discovers both serial ports and BLE adapters simultaneously and presents a picker to connect. The last-used device is saved to `connection.json` for quick reconnection.
 
 ### Polling Rate
 
@@ -346,9 +347,11 @@ The footer also updates to show `r:stop rec` as a reminder.
 ### What Gets Recorded
 
 Every message that flows through the app is captured:
-- **PID readings**: All 25 sensor values with millisecond-precision timestamps
-- **Battery voltage**: Captured every ~2.5 seconds
-- **Diagnostic trouble codes**: Captured every ~2.5 seconds
+- **PID readings**: All standard sensor values with millisecond-precision timestamps and optional raw hex bytes
+- **Battery voltage**: Captured every poll cycle
+- **Diagnostic trouble codes**: Captured every ~2.5 seconds (10 poll cycles)
+- **Enhanced PIDs**: Manufacturer-specific readings captured every ~1.25 seconds (5 poll cycles)
+- **O2 monitoring**: O2 sensor test results captured every ~5 seconds (20 poll cycles)
 
 Recording works identically for both real and mock connections.
 
@@ -381,13 +384,18 @@ cargo run -- --mock --max-storage-mb 1000
 Each session produces a `.obd2rec` file (or `.obd2rec.gz` when compressed):
 
 ```
-[OBD2REC\x01]           8 bytes magic
+[OBD2REC\x02]           8 bytes magic (v2 format)
 [u32 header_length]     4 bytes
 [JSON SessionHeader]    Variable (session ID, start time, VIN, vehicle name, poll interval)
-[frame][frame][frame]   14 bytes each (type + offset_ms + pid_code + f64 value)
+[frame][frame][frame]   Variable-length frames:
+                          PID:      14 bytes + optional raw hex
+                          Voltage:  13 bytes
+                          DTC:      14 bytes
+                          Enhanced: variable (metadata + value)
+                          O2:       variable (metadata + value)
 ```
 
-At 25 PIDs polled at 4 Hz, raw data is approximately 5 MB/hour.
+At 25 PIDs polled at 4 Hz, raw data is approximately 5 MB/hour. The v1 format (14-byte fixed frames without raw bytes or extended types) is still readable for backward compatibility.
 
 ---
 
@@ -725,7 +733,33 @@ The log viewer shows the same data written to the `logs/` directory, but accessi
 
 ---
 
-## 16. Configuration Files
+## 16. Raw Protocol Capture
+
+Raw protocol capture records the hex-level ELM327/adapter traffic to a `.obd2raw` sidecar file, useful for offline protocol analysis, debugging adapter behavior, or contributing to protocol reverse-engineering efforts.
+
+### Toggling Capture
+
+Press `c` during normal operation (when connected) to start raw capture. The status bar shows a `RAW` indicator while capture is active. Press `c` again to stop.
+
+### What Gets Captured
+
+The `.obd2raw` file contains the raw hex bytes exchanged between the adapter and the vehicle's OBD-II bus, including:
+- ELM327 AT command responses
+- Raw OBD-II request/response frames
+- Protocol negotiation traffic
+- Timestamps for each exchange
+
+### File Location
+
+Raw capture files are stored alongside recordings in the `recordings/` directory with the naming pattern `{session_id}.obd2raw`. They are tracked by the storage manager and counted toward the total storage quota.
+
+### Storage Management
+
+Raw capture files are included in the storage manager's quota calculations. When total storage (recordings + raw captures) exceeds the `--max-storage-mb` limit, the oldest sessions and their associated `.obd2raw` sidecars are trimmed together.
+
+---
+
+## 17. Configuration Files
 
 ### Dashboard Layout (`dashboard.json`)
 
@@ -786,7 +820,7 @@ Automatically maintained by the recording system. Each entry tracks:
 }
 ```
 
-### Connection Preferences (`connection_prefs.json`)
+### Connection Preferences (`connection.json`)
 
 Automatically saved when you connect to a device via the scanner. Stores the last-used device (serial port path + baud, or BLE adapter name) so the scanner can highlight it on next launch.
 
@@ -804,7 +838,7 @@ RUST_LOG=warn cargo run -- --mock
 
 ---
 
-## 17. Keyboard Reference
+## 18. Keyboard Reference
 
 ### Normal Mode (Live Data)
 
@@ -826,6 +860,7 @@ RUST_LOG=warn cargo run -- --mock
 | `Enter` | Open detail popup for selected item |
 | `e` | Enter edit mode (Full layout only) |
 | `r` | Toggle recording on/off |
+| `c` | Toggle raw protocol capture on/off |
 | `R` | Open session picker for replay |
 | `s` / `S` | Open device scanner/picker |
 | `l` | Open debug log viewer |
@@ -881,7 +916,7 @@ RUST_LOG=warn cargo run -- --mock
 
 ---
 
-## 18. CLI Reference
+## 19. CLI Reference
 
 ```
 obd2-dash — OBD2 vehicle diagnostics TUI dashboard
@@ -936,7 +971,7 @@ OPTIONS:
 
 ---
 
-## 19. Troubleshooting
+## 20. Troubleshooting
 
 ### "No serial ports found"
 

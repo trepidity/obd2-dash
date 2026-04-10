@@ -255,3 +255,116 @@ impl VehicleData {
         };
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+    use obd2_core::protocol::enhanced::{ReadingSource, Value};
+
+    fn make_reading(value: f64) -> Reading {
+        Reading {
+            value: Value::Scalar(value),
+            unit: "",
+            timestamp: Instant::now(),
+            raw_bytes: vec![],
+            source: ReadingSource::Live,
+        }
+    }
+
+    #[test]
+    fn test_apply_reading_rpm() {
+        let mut data = VehicleData::default();
+        assert!(data.rpm.is_none());
+
+        data.apply_reading(Pid::ENGINE_RPM, &make_reading(2500.0));
+
+        assert_eq!(data.rpm, Some(2500.0));
+        assert_eq!(data.rpm_history.readings.len(), 1);
+        assert_eq!(data.rpm_history.readings[0], 2500);
+    }
+
+    #[test]
+    fn test_apply_reading_speed_and_history() {
+        let mut data = VehicleData::default();
+
+        for i in 0..5 {
+            data.apply_reading(Pid::VEHICLE_SPEED, &make_reading(i as f64 * 20.0));
+        }
+
+        assert_eq!(data.speed, Some(80.0));
+        assert_eq!(data.speed_history.readings.len(), 5);
+    }
+
+    #[test]
+    fn test_boost_pressure_derived() {
+        let mut data = VehicleData::default();
+
+        // Only MAP set — no boost yet
+        data.apply_reading(Pid::INTAKE_MAP, &make_reading(120.0));
+        assert!(data.boost_pressure.is_none());
+
+        // Now set barometric — boost = MAP - baro
+        data.apply_reading(Pid::BAROMETRIC_PRESSURE, &make_reading(101.0));
+        assert!((data.boost_pressure.unwrap() - 19.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_boost_pressure_updates_on_map_change() {
+        let mut data = VehicleData::default();
+        data.apply_reading(Pid::BAROMETRIC_PRESSURE, &make_reading(101.0));
+        data.apply_reading(Pid::INTAKE_MAP, &make_reading(150.0));
+        assert!((data.boost_pressure.unwrap() - 49.0).abs() < 0.001);
+
+        // MAP drops below baro — negative boost (vacuum)
+        data.apply_reading(Pid::INTAKE_MAP, &make_reading(80.0));
+        assert!((data.boost_pressure.unwrap() - (-21.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_apply_reading_temperatures() {
+        let mut data = VehicleData::default();
+        data.apply_reading(Pid::COOLANT_TEMP, &make_reading(92.0));
+        data.apply_reading(Pid::ENGINE_OIL_TEMP, &make_reading(87.0));
+        data.apply_reading(Pid::CATALYST_TEMP_B1S1, &make_reading(412.0));
+
+        assert_eq!(data.coolant_temp, Some(92.0));
+        assert_eq!(data.engine_oil_temp, Some(87.0));
+        assert_eq!(data.catalyst_temp_b1s1, Some(412.0));
+    }
+
+    #[test]
+    fn test_apply_reading_fuel_trims() {
+        let mut data = VehicleData::default();
+        data.apply_reading(Pid::SHORT_FUEL_TRIM_B1, &make_reading(2.3));
+        data.apply_reading(Pid::LONG_FUEL_TRIM_B1, &make_reading(-1.1));
+        data.apply_reading(Pid::SHORT_FUEL_TRIM_B2, &make_reading(3.5));
+        data.apply_reading(Pid::LONG_FUEL_TRIM_B2, &make_reading(-0.5));
+
+        assert_eq!(data.short_fuel_trim_b1, Some(2.3));
+        assert_eq!(data.long_fuel_trim_b1, Some(-1.1));
+        assert_eq!(data.short_fuel_trim_b2, Some(3.5));
+        assert_eq!(data.long_fuel_trim_b2, Some(-0.5));
+    }
+
+    #[test]
+    fn test_pid_history_capacity() {
+        let mut history = PidHistory::new();
+        for i in 0..200 {
+            history.push(i);
+        }
+        assert_eq!(history.readings.len(), HISTORY_CAPACITY);
+        // Oldest values should have been dropped
+        assert_eq!(history.readings[0], 200 - HISTORY_CAPACITY as u64);
+    }
+
+    #[test]
+    fn test_unknown_pid_ignored() {
+        let mut data = VehicleData::default();
+        // PID 0xFF is not mapped — should be silently ignored
+        data.apply_reading(Pid(0xFF), &make_reading(42.0));
+        // No panic, no state change to any known field
+        assert!(data.rpm.is_none());
+        assert!(data.speed.is_none());
+    }
+}

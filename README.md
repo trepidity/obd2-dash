@@ -34,14 +34,17 @@ A real-time OBD-II vehicle diagnostics TUI dashboard built with Rust. Connects t
 
 ## Features
 
-- **25 OBD-II PIDs**: RPM, speed, coolant temp, engine load, fuel trims (all 4 banks), MAF, MAP, throttle, fuel pressure, catalyst temps (4 sensors), oil temp/pressure, transmission temp, fuel level/rate, voltages, and more
+- **25+ OBD-II PIDs**: RPM, speed, coolant temp, engine load, fuel trims (all 4 banks), MAF, MAP, throttle, fuel pressure, catalyst temps (4 sensors), oil temp/pressure, transmission temp, fuel level/rate, voltages, torque, EGR/EVAP, and more
+- **Enhanced (manufacturer-specific) PIDs**: Discovery-driven module resolution reads manufacturer-specific DIDs from identified ECU modules
+- **O2 sensor monitoring**: Periodic O2 sensor test result collection from all available sensors
 - **Customizable widget dashboard**: 27 widget types across 8 categories, configurable grid layout with JSON persistence, real-time edit mode to add/remove/resize widgets
 - **Two layouts**: Compact (4-gauge view) and Full (configurable widget grid)
-- **Data recording**: Binary recording format captures all PID, voltage, and DTC data to disk with automatic gzip compression and storage management
+- **Data recording**: Binary recording format captures all PID, voltage, DTC, enhanced PID, and O2 monitoring data to disk with automatic gzip compression and storage management
+- **Raw protocol capture**: Toggle hex-level protocol capture (`c` key) to `.obd2raw` sidecar files for offline protocol analysis
 - **Session replay**: Play back recorded sessions with adjustable speed (0.5x--4x), seek, and pause controls through a session picker UI
 - **Dual fuel economy**: ECU gold-standard MPG alongside speed-density calculated MPG with 7 real-time correction factors
 - **Threshold alerts**: Vehicle-specific and engine-family-specific warning/critical thresholds with color-coded gauges, loaded from a SQLite database
-- **DTC diagnostics**: Reads stored trouble codes with contextual analysis -- correlated sensor snapshots, other active DTCs, common causes, and suggested repair actions
+- **DTC diagnostics**: Reads stored, pending, and permanent trouble codes via `read_all_dtcs()` with contextual analysis -- correlated sensor snapshots, other active DTCs, common causes, and suggested repair actions
 - **Sparkline histories**: Rolling 30-second trend graphs for RPM, speed, throttle, and load
 - **Interactive panels**: Tab between widgets, arrow-key select items, Enter for detail popups
 - **Mock mode**: Built-in vehicle simulator with realistic drive patterns, warmup cycles, and DTC scenarios for demo/development without hardware
@@ -123,6 +126,7 @@ Options:
 | `Enter` | Open detail popup for selected item |
 | `e` | Enter edit mode (Full layout) |
 | `r` | Toggle recording on/off |
+| `c` | Toggle raw protocol capture on/off |
 | `R` | Open session picker for replay |
 | `s` / `S` | Open device scanner/picker |
 | `l` | Open debug log viewer |
@@ -217,13 +221,18 @@ Threshold resolution follows a priority chain: VIN-specific > engine family > de
 
 ## Recording Format
 
-Recorded sessions use a compact binary format:
+Recorded sessions use a compact binary format (v2):
 
-- **Magic**: `OBD2REC\x01` (8 bytes)
+- **Magic**: `OBD2REC\x02` (8 bytes)
 - **Header**: JSON `SessionHeader` (session ID, start time, VIN, vehicle name, poll interval)
-- **Frames**: 14 bytes each -- `u8 type | u32 offset_ms | u8 pid_code | f64 value`
+- **Frames**: Variable length per type:
+  - **PID** (type 0x00): 14 bytes fixed + optional raw hex bytes (v2)
+  - **Voltage** (type 0x01): 13 bytes
+  - **DTC** (type 0x02): 14 bytes (5-char code packed into `u8 + f64`)
+  - **Enhanced** (type 0x03): variable (module/name/unit metadata + f64 value)
+  - **O2** (type 0x04): variable (test_name/sensor/unit metadata + f64 value)
 
-At 25 PIDs polled at 4 Hz, this produces approximately 5 MB/hour of raw data. Files larger than 50 MB are automatically gzip-compressed on session end.
+At 25 PIDs polled at 4 Hz, this produces approximately 5 MB/hour of raw data. Files larger than 50 MB are automatically gzip-compressed on session end. The v1 format (without raw bytes or extended frame types) is still readable for backward compatibility.
 
 ## Testing
 
@@ -231,7 +240,7 @@ At 25 PIDs polled at 4 Hz, this produces approximately 5 MB/hour of raw data. Fi
 cargo test
 ```
 
-23 tests covering domain state transitions, poll-event translation, discovery-driven enhanced planning, recording format roundtrips, NHTSA parsing, and analysis helpers.
+79 tests covering domain state transitions, poll-event translation, discovery-driven enhanced planning, recording format roundtrips, replay controller seek/pause/speed, vehicle data model, fuel economy calculations (gold standard, speed-density, correction factors), driving behavior analysis (hard braking, jackrabbit detection, smoothness scoring), NHTSA parsing, and database threshold resolution.
 
 ## Dependencies
 
@@ -239,6 +248,7 @@ cargo test
 |-------|---------|
 | `tokio` | Async runtime |
 | `ratatui` / `crossterm` | Terminal UI framework |
+| `obd2-core` | OBD-II session, poller, discovery, and protocol layer |
 | `tokio-serial` / `serialport` | Serial port communication |
 | `btleplug` | Bluetooth Low Energy communication |
 | `clap` | CLI argument parsing |

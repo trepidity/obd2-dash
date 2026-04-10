@@ -206,6 +206,204 @@ impl ReplayController {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::recording::index::SessionEntry;
+    use chrono::Utc;
+    use std::path::PathBuf;
+
+    fn sample_entry() -> SessionEntry {
+        SessionEntry {
+            session_id: "test-session".into(),
+            start_time: Utc::now(),
+            vin: Some("TESTVIN1234567890".into()),
+            vehicle_name: Some("Test Car".into()),
+            duration_secs: 60,
+            frame_count: 100,
+            file_path: PathBuf::from("test.obd2rec"),
+            file_size_bytes: 1400,
+            compressed: false,
+        }
+    }
+
+    fn sample_frames() -> Vec<RecordingFrame> {
+        (0..100)
+            .map(|i| RecordingFrame {
+                frame_type: FRAME_PID,
+                offset_ms: i * 100, // 100ms apart, 0..9900ms
+                pid_code: 0x0C,
+                value: 2000.0 + i as f64,
+                raw_bytes: vec![],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_new_replay_controller() {
+        let ctrl = ReplayController::new(sample_entry(), sample_frames());
+        assert_eq!(ctrl.cursor, 0);
+        assert!(!ctrl.paused);
+        assert_eq!(ctrl.playback_speed, PlaybackSpeed::Normal);
+        assert_eq!(ctrl.total_duration_ms, 9900);
+        assert!(!ctrl.is_finished());
+    }
+
+    #[test]
+    fn test_empty_frames() {
+        let ctrl = ReplayController::new(sample_entry(), vec![]);
+        assert_eq!(ctrl.total_duration_ms, 0);
+        assert!(ctrl.is_finished());
+    }
+
+    #[test]
+    fn test_toggle_pause() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        assert!(!ctrl.paused);
+
+        ctrl.toggle_pause();
+        assert!(ctrl.paused);
+
+        ctrl.toggle_pause();
+        assert!(!ctrl.paused);
+    }
+
+    #[test]
+    fn test_paused_returns_no_frames() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        ctrl.toggle_pause(); // Pause immediately
+
+        let frames = ctrl.next_frames();
+        assert!(frames.is_empty(), "paused controller should return no frames");
+    }
+
+    #[test]
+    fn test_cycle_speed() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        assert_eq!(ctrl.playback_speed, PlaybackSpeed::Normal);
+
+        ctrl.cycle_speed();
+        assert_eq!(ctrl.playback_speed, PlaybackSpeed::Double);
+
+        ctrl.cycle_speed();
+        assert_eq!(ctrl.playback_speed, PlaybackSpeed::Quad);
+
+        ctrl.cycle_speed();
+        assert_eq!(ctrl.playback_speed, PlaybackSpeed::Half);
+
+        ctrl.cycle_speed();
+        assert_eq!(ctrl.playback_speed, PlaybackSpeed::Normal);
+    }
+
+    #[test]
+    fn test_speed_labels() {
+        assert_eq!(PlaybackSpeed::Half.label(), "0.5x");
+        assert_eq!(PlaybackSpeed::Normal.label(), "1x");
+        assert_eq!(PlaybackSpeed::Double.label(), "2x");
+        assert_eq!(PlaybackSpeed::Quad.label(), "4x");
+    }
+
+    #[test]
+    fn test_speed_multipliers() {
+        assert!((PlaybackSpeed::Half.multiplier() - 0.5).abs() < 0.001);
+        assert!((PlaybackSpeed::Normal.multiplier() - 1.0).abs() < 0.001);
+        assert!((PlaybackSpeed::Double.multiplier() - 2.0).abs() < 0.001);
+        assert!((PlaybackSpeed::Quad.multiplier() - 4.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_seek_forward() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        ctrl.toggle_pause(); // Pause to get deterministic position
+        assert_eq!(ctrl.current_position_ms(), 0);
+
+        ctrl.seek_forward(5000);
+        assert_eq!(ctrl.current_position_ms(), 5000);
+
+        // Cursor should advance past the 5000ms mark
+        // Frames at 0, 100, 200, ..., 4900 ms should be behind cursor
+        assert_eq!(ctrl.cursor, 51); // frames 0..=50 have offset_ms <= 5000
+    }
+
+    #[test]
+    fn test_seek_backward() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        ctrl.toggle_pause();
+        ctrl.seek_forward(8000);
+        assert_eq!(ctrl.current_position_ms(), 8000);
+
+        ctrl.seek_backward(3000);
+        assert_eq!(ctrl.current_position_ms(), 5000);
+    }
+
+    #[test]
+    fn test_seek_backward_saturates_at_zero() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        ctrl.toggle_pause();
+        ctrl.seek_forward(2000);
+        ctrl.seek_backward(5000); // Would go negative without saturation
+        assert_eq!(ctrl.current_position_ms(), 0);
+    }
+
+    #[test]
+    fn test_seek_forward_clamped_at_end() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        ctrl.toggle_pause();
+        ctrl.seek_forward(999_999);
+        assert_eq!(ctrl.current_position_ms(), ctrl.total_duration_ms);
+    }
+
+    #[test]
+    fn test_progress_ratio() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        ctrl.toggle_pause();
+        assert!((ctrl.progress_ratio() - 0.0).abs() < 0.01);
+
+        ctrl.seek_forward(ctrl.total_duration_ms);
+        assert!((ctrl.progress_ratio() - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_progress_text_format() {
+        let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
+        ctrl.toggle_pause();
+        let text = ctrl.progress_text();
+        assert!(text.contains("/"), "progress text should contain '/', got '{}'", text);
+    }
+
+    #[test]
+    fn test_frame_type_checks() {
+        let pid_frame = RecordingFrame {
+            frame_type: FRAME_PID, offset_ms: 0, pid_code: 0, value: 0.0,
+            raw_bytes: vec![],
+        };
+        let voltage_frame = RecordingFrame {
+            frame_type: FRAME_VOLTAGE, offset_ms: 0, pid_code: 0, value: 0.0,
+            raw_bytes: vec![],
+        };
+        let dtc_frame = RecordingFrame {
+            frame_type: FRAME_DTC, offset_ms: 0, pid_code: 0, value: 0.0,
+            raw_bytes: vec![],
+        };
+        let enhanced_frame = RecordingFrame {
+            frame_type: FRAME_ENHANCED, offset_ms: 0, pid_code: 0, value: 0.0,
+            raw_bytes: vec![],
+        };
+        let o2_frame = RecordingFrame {
+            frame_type: FRAME_O2, offset_ms: 0, pid_code: 0, value: 0.0,
+            raw_bytes: vec![],
+        };
+
+        assert!(ReplayController::is_pid_frame(&pid_frame));
+        assert!(ReplayController::is_voltage_frame(&voltage_frame));
+        assert!(ReplayController::is_dtc_frame(&dtc_frame));
+        assert!(ReplayController::is_enhanced_frame(&enhanced_frame));
+        assert!(ReplayController::is_o2_frame(&o2_frame));
+
+        assert!(!ReplayController::is_pid_frame(&voltage_frame));
+    }
+}
+
 fn format_duration_ms(ms: u64) -> String {
     let total_secs = ms / 1000;
     let hours = total_secs / 3600;

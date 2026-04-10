@@ -1,3 +1,8 @@
+//! Dashboard widget system — types, registry, configuration, edit mode, and rendering.
+//!
+//! 30 widget types across 8 categories, driven by a JSON-persisted
+//! [`config::DashboardConfig`] grid layout.
+
 pub mod config;
 pub mod edit_mode;
 pub mod renderers;

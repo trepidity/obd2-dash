@@ -1,3 +1,9 @@
+//! Terminal UI layer built on `ratatui` and `crossterm`.
+//!
+//! - [`event`]: Async key/tick/render event handler.
+//! - [`panel`]: Panel grid layout, item models, and popup builder.
+//! - [`ui`]: All rendering — compact, full widget grid, overlays, and footer.
+
 pub mod event;
 pub mod panel;
 pub mod ui;
