@@ -241,6 +241,145 @@ impl StorageStats {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use crate::recording::index::SessionEntry;
+
+    fn sample_entry(id: &str, size: u64, recordings_dir: &Path) -> SessionEntry {
+        let file_path = recordings_dir.join(format!("{}.obd2rec", id));
+        std::fs::write(&file_path, vec![0u8; size as usize]).ok();
+        SessionEntry {
+            session_id: id.to_string(),
+            start_time: Utc::now(),
+            vin: Some("TEST".into()),
+            vehicle_name: Some("Test".into()),
+            duration_secs: 60,
+            frame_count: 100,
+            file_path,
+            file_size_bytes: size,
+            compressed: false,
+        }
+    }
+
+    #[test]
+    fn test_register_session_persists_to_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = StorageConfig {
+            recordings_dir: dir.path().to_path_buf(),
+            ..StorageConfig::default()
+        };
+        let mut mgr = StorageManager::new(config);
+
+        let entry = sample_entry("sess1", 5000, dir.path());
+        mgr.register_session(entry).unwrap();
+
+        assert_eq!(mgr.index.sessions.len(), 1);
+        assert_eq!(mgr.index.sessions[0].session_id, "sess1");
+
+        let reloaded = SessionIndex::load(mgr.index_path());
+        assert_eq!(reloaded.sessions.len(), 1);
+    }
+
+    #[test]
+    fn test_delete_session_removes_file_and_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = StorageConfig {
+            recordings_dir: dir.path().to_path_buf(),
+            ..StorageConfig::default()
+        };
+        let mut mgr = StorageManager::new(config);
+
+        let entry = sample_entry("sess1", 5000, dir.path());
+        let file_path = entry.file_path.clone();
+        mgr.register_session(entry).unwrap();
+
+        assert!(file_path.exists());
+        mgr.delete_session("sess1").unwrap();
+        assert!(!file_path.exists());
+        assert!(mgr.index.sessions.is_empty());
+    }
+
+    #[test]
+    fn test_storage_stats() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = StorageConfig {
+            recordings_dir: dir.path().to_path_buf(),
+            max_total_bytes: 1_000_000,
+            ..StorageConfig::default()
+        };
+        let mut mgr = StorageManager::new(config);
+        mgr.register_session(sample_entry("a", 1000, dir.path())).unwrap();
+        mgr.register_session(sample_entry("b", 2000, dir.path())).unwrap();
+
+        let stats = mgr.storage_stats();
+        assert_eq!(stats.session_count, 2);
+        assert_eq!(stats.raw_count, 2);
+        assert_eq!(stats.compressed_count, 0);
+        assert_eq!(stats.max_bytes, 1_000_000);
+    }
+
+    #[test]
+    fn test_maintenance_trims_oldest_when_over_quota() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = StorageConfig {
+            recordings_dir: dir.path().to_path_buf(),
+            max_total_bytes: 5000,
+            compress_threshold_bytes: 999_999,
+            ..StorageConfig::default()
+        };
+        let mut mgr = StorageManager::new(config);
+
+        let mut old = sample_entry("old", 3000, dir.path());
+        old.start_time = Utc::now() - chrono::Duration::hours(2);
+        mgr.register_session(old).unwrap();
+        mgr.register_session(sample_entry("new", 3000, dir.path())).unwrap();
+
+        mgr.run_maintenance().unwrap();
+
+        assert_eq!(mgr.index.sessions.len(), 1);
+        assert_eq!(mgr.index.sessions[0].session_id, "new");
+    }
+
+    #[test]
+    fn test_raw_capture_bytes_counts_obd2raw_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = StorageConfig {
+            recordings_dir: dir.path().to_path_buf(),
+            ..StorageConfig::default()
+        };
+        let mgr = StorageManager::new(config);
+
+        assert_eq!(mgr.raw_capture_bytes(), 0);
+
+        std::fs::write(dir.path().join("test1.obd2raw"), vec![0u8; 1000]).unwrap();
+        std::fs::write(dir.path().join("test2.obd2raw"), vec![0u8; 2000]).unwrap();
+        std::fs::write(dir.path().join("test3.obd2rec"), vec![0u8; 5000]).unwrap();
+
+        assert_eq!(mgr.raw_capture_bytes(), 3000);
+    }
+
+    #[test]
+    fn test_reload_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = StorageConfig {
+            recordings_dir: dir.path().to_path_buf(),
+            ..StorageConfig::default()
+        };
+        let mut mgr = StorageManager::new(config);
+        mgr.register_session(sample_entry("a", 100, dir.path())).unwrap();
+
+        let mut external = SessionIndex::load(mgr.index_path());
+        external.add_session(sample_entry("b", 200, dir.path()));
+        external.save(mgr.index_path()).unwrap();
+
+        assert_eq!(mgr.index.sessions.len(), 1);
+        mgr.reload_index();
+        assert_eq!(mgr.index.sessions.len(), 2);
+    }
+}
+
 fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
         format!("{} B", bytes)
