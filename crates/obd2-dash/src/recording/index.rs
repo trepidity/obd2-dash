@@ -94,3 +94,98 @@ impl SessionIndex {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_entry(id: &str, size: u64) -> SessionEntry {
+        SessionEntry {
+            session_id: id.to_string(),
+            start_time: Utc::now(),
+            vin: Some("TESTVIN1234567890".into()),
+            vehicle_name: Some("Test Car".into()),
+            duration_secs: 60,
+            frame_count: 100,
+            file_path: PathBuf::from(format!("recordings/{}.obd2rec", id)),
+            file_size_bytes: size,
+            compressed: false,
+        }
+    }
+
+    #[test]
+    fn test_load_missing_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+        let index = SessionIndex::load(&path);
+        assert!(index.sessions.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("sessions.json");
+
+        let mut index = SessionIndex::default();
+        index.add_session(sample_entry("aaa", 1000));
+        index.add_session(sample_entry("bbb", 2000));
+        index.save(&path).unwrap();
+
+        let loaded = SessionIndex::load(&path);
+        assert_eq!(loaded.sessions.len(), 2);
+        assert_eq!(loaded.sessions[0].session_id, "aaa");
+        assert_eq!(loaded.sessions[1].session_id, "bbb");
+    }
+
+    #[test]
+    fn test_remove_session() {
+        let mut index = SessionIndex::default();
+        index.add_session(sample_entry("aaa", 1000));
+        index.add_session(sample_entry("bbb", 2000));
+
+        index.remove_session("aaa");
+        assert_eq!(index.sessions.len(), 1);
+        assert_eq!(index.sessions[0].session_id, "bbb");
+    }
+
+    #[test]
+    fn test_total_size_bytes() {
+        let mut index = SessionIndex::default();
+        index.add_session(sample_entry("aaa", 1000));
+        index.add_session(sample_entry("bbb", 2500));
+        assert_eq!(index.total_size_bytes(), 3500);
+    }
+
+    #[test]
+    fn test_mark_compressed() {
+        let mut index = SessionIndex::default();
+        index.add_session(sample_entry("aaa", 10000));
+
+        index.mark_compressed("aaa", PathBuf::from("recordings/aaa.obd2rec.gz"), 3000);
+
+        assert!(index.sessions[0].compressed);
+        assert_eq!(index.sessions[0].file_size_bytes, 3000);
+        assert_eq!(index.sessions[0].file_path, PathBuf::from("recordings/aaa.obd2rec.gz"));
+    }
+
+    #[test]
+    fn test_sessions_sorted_newest_first() {
+        let mut index = SessionIndex::default();
+        let mut old = sample_entry("old", 1000);
+        old.start_time = Utc::now() - chrono::Duration::hours(2);
+        index.add_session(old);
+        index.add_session(sample_entry("new", 2000));
+
+        let sorted = index.sessions_sorted();
+        assert_eq!(sorted[0].session_id, "new");
+        assert_eq!(sorted[1].session_id, "old");
+    }
+
+    #[test]
+    fn test_duration_display() {
+        let mut entry = sample_entry("x", 100);
+        entry.duration_secs = 7380; // 2h 3m
+        let display = entry.duration_display();
+        assert_eq!(display, "2h 03m");
+    }
+}
