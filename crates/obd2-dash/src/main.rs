@@ -242,6 +242,9 @@ async fn main() -> Result<()> {
                     let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
                     let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: Some(38400) });
 
+                    let (diag_tx, diag_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let _ = tx.send(Message::DiagnosticReady(diag_tx));
+
                     let _ = run_session_task(
                         &mut session,
                         SessionRunnerConfig {
@@ -251,6 +254,7 @@ async fn main() -> Result<()> {
                         &tx,
                         cap_rx,
                         cap_handle,
+                        diag_rx,
                     )
                     .await;
                 }))
@@ -374,9 +378,11 @@ fn spawn_mock_poll(
         let mut session = Session::new(adapter);
 
         // Mock adapter has no transport, so capture won't work — but we still
-        // need to pass the channel to satisfy the poll loop signature.
+        // need to pass the channels to satisfy the poll loop signature.
         let (_cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
         let cap_handle = build_mock_capture_handle();
+        let (diag_tx, diag_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = tx.send(Message::DiagnosticReady(diag_tx));
 
         let _ = run_session_task(
             &mut session,
@@ -387,6 +393,7 @@ fn spawn_mock_poll(
             &tx,
             cap_rx,
             cap_handle,
+            diag_rx,
         )
         .await;
     })
@@ -448,6 +455,9 @@ fn spawn_connect_and_poll(
                     let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
                     let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: Some(actual_baud) });
 
+                    let (diag_tx, diag_rx) = tokio::sync::mpsc::unbounded_channel();
+                    let _ = tx.send(Message::DiagnosticReady(diag_tx));
+
                     let config = SessionRunnerConfig {
                         poll_ms,
                         standard_pids: pollable_pids(),
@@ -475,6 +485,7 @@ fn spawn_connect_and_poll(
                         &tx,
                         cap_rx,
                         cap_handle,
+                        diag_rx,
                     )
                     .await;
                     return;
@@ -499,6 +510,9 @@ fn spawn_connect_and_poll(
                         let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
                         let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: None });
 
+                        let (diag_tx, diag_rx) = tokio::sync::mpsc::unbounded_channel();
+                        let _ = tx.send(Message::DiagnosticReady(diag_tx));
+
                         let _ = run_session_task(
                             &mut session,
                             SessionRunnerConfig {
@@ -508,6 +522,7 @@ fn spawn_connect_and_poll(
                             &tx,
                             cap_rx,
                             cap_handle,
+                            diag_rx,
                         )
                         .await;
                     }

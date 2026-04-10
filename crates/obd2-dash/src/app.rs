@@ -18,11 +18,19 @@ use obd2_core::protocol::dtc::Dtc;
 use obd2_core::protocol::enhanced::Reading;
 use obd2_core::protocol::pid::Pid;
 use obd2_core::transport::CaptureMetadata;
+use obd2_core::vehicle::ModuleId;
 
 /// Commands sent from the UI thread to the session task for raw capture control.
 pub enum CaptureCommand {
     Start { path: PathBuf, metadata: CaptureMetadata },
     Stop,
+}
+
+/// Commands sent from the UI thread to the session task for diagnostics.
+pub enum DiagnosticCommand {
+    ClearAll,
+    ClearOnModule(ModuleId),
+    FetchFreezeFrame { dtc_code: String, pids: Vec<Pid> },
 }
 
 /// Shared handle for raw protocol capture state.
@@ -89,6 +97,12 @@ pub enum Message {
     O2MonitoringUpdate(Vec<O2Reading>),
     // Readiness monitors
     ReadinessUpdate(ReadinessStatus),
+    // Diagnostics commands
+    DiagnosticReady(mpsc::UnboundedSender<DiagnosticCommand>),
+    ClearDtcsComplete,
+    ClearDtcsError(String),
+    FreezeFrameResult(crate::domain::FreezeFrameSnapshot),
+    FreezeFrameError(String),
     // Raw protocol capture
     CaptureReady {
         handle: CaptureHandle,
@@ -127,6 +141,14 @@ pub enum DashboardLayout {
 pub struct PopupState {
     pub title: String,
     pub body: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ClearDtcConfirm {
+    /// Popup asking "Clear all DTCs?"
+    BroadcastPopup,
+    /// Two-key: waiting for second C press within 2 seconds
+    ModulePending { module_id: ModuleId, expires: std::time::Instant },
 }
 
 pub struct AppState {
@@ -168,6 +190,10 @@ pub struct AppState {
     pub capture_tx: Option<mpsc::UnboundedSender<CaptureCommand>>,
     // Connection metadata for raw capture
     pub serial_baud_rate: Option<u32>,
+    // Diagnostics command channel
+    pub diagnostic_tx: Option<mpsc::UnboundedSender<DiagnosticCommand>>,
+    // Clear DTC confirmation state
+    pub clear_dtc_confirm: Option<ClearDtcConfirm>,
 }
 
 impl AppState {
@@ -202,6 +228,17 @@ impl AppState {
             capture_handle: None,
             capture_tx: None,
             serial_baud_rate: None,
+            diagnostic_tx: None,
+            clear_dtc_confirm: None,
+        }
+    }
+
+    /// Send a diagnostic command if the channel is available.
+    pub fn send_diagnostic(&self, cmd: DiagnosticCommand) -> bool {
+        if let Some(ref tx) = self.diagnostic_tx {
+            tx.send(cmd).is_ok()
+        } else {
+            false
         }
     }
 
@@ -282,6 +319,27 @@ impl AppState {
             Message::ReadinessUpdate(status) => {
                 self.domain
                     .update(DomainMessage::ReadinessUpdate(status));
+            }
+            Message::DiagnosticReady(tx) => {
+                self.diagnostic_tx = Some(tx);
+            }
+            Message::ClearDtcsComplete => {
+                self.domain.stored_dtcs.clear();
+                self.clear_dtc_confirm = None;
+                tracing::info!("DTCs cleared successfully");
+            }
+            Message::ClearDtcsError(e) => {
+                self.domain.last_error = Some(format!("Clear DTCs failed: {}", e));
+                self.clear_dtc_confirm = None;
+                tracing::warn!("Clear DTCs failed: {}", e);
+            }
+            Message::FreezeFrameResult(snapshot) => {
+                self.domain.freeze_frame_pending = false;
+                self.domain.freeze_frame_data = Some(snapshot);
+            }
+            Message::FreezeFrameError(e) => {
+                self.domain.freeze_frame_pending = false;
+                tracing::debug!("Freeze-frame: {}", e);
             }
             Message::Tick => {
                 // UI tick -- nothing to do here

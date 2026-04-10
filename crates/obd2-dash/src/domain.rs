@@ -35,6 +35,13 @@ pub struct O2Reading {
     pub unit: String,
 }
 
+/// Freeze-frame sensor snapshot associated with a specific DTC.
+#[derive(Debug, Clone)]
+pub struct FreezeFrameSnapshot {
+    pub dtc_code: String,
+    pub readings: Vec<(Pid, f64, &'static str)>, // (pid, value, unit)
+}
+
 /// Discovery information surfaced from obd2-core Session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryState {
@@ -156,6 +163,8 @@ pub struct DomainState {
     pub fuel_economy: FuelEconomyState,
     pub driving: DrivingBehavior,
     pub readiness: Option<ReadinessStatus>,
+    pub freeze_frame_pending: bool,
+    pub freeze_frame_data: Option<FreezeFrameSnapshot>,
     pub recording: RecordingState,
     pub storage_manager: Option<StorageManager>,
     last_pid_update: Instant,
@@ -183,6 +192,8 @@ impl DomainState {
             fuel_economy: FuelEconomyState::new(),
             driving: DrivingBehavior::new(),
             readiness: None,
+            freeze_frame_pending: false,
+            freeze_frame_data: None,
             recording: RecordingState::Idle,
             storage_manager: None,
             last_pid_update: Instant::now(),
@@ -264,6 +275,8 @@ impl DomainState {
                 ) {
                     self.discovery = None;
                     self.readiness = None;
+                    self.freeze_frame_data = None;
+                    self.freeze_frame_pending = false;
                     self.enhanced_readings.clear();
                     self.o2_readings.clear();
                 }

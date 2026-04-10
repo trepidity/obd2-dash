@@ -11,7 +11,8 @@ use obd2_core::session::poller::{execute_poll_cycle, PollConfig, PollEvent};
 use obd2_core::session::Session;
 use obd2_core::vehicle::ModuleId;
 
-use crate::app::{CaptureCommand, CaptureHandle, Message};
+use crate::app::{CaptureCommand, CaptureHandle, DiagnosticCommand, Message};
+use crate::domain::FreezeFrameSnapshot;
 use crate::domain::{ConnectionState, DiscoveryState, O2Reading};
 
 #[derive(Debug, Clone)]
@@ -115,6 +116,7 @@ pub async fn run_prepared_session<A: Adapter>(
     tx: &mpsc::UnboundedSender<Message>,
     mut capture_rx: mpsc::UnboundedReceiver<CaptureCommand>,
     capture_handle: CaptureHandle,
+    mut diagnostic_rx: mpsc::UnboundedReceiver<DiagnosticCommand>,
 ) {
     let (poll_tx, mut poll_rx) = mpsc::channel(256);
     let mut interval = tokio::time::interval(Duration::from_millis(prepared.poll_ms));
@@ -147,6 +149,10 @@ pub async fn run_prepared_session<A: Adapter>(
                     }
                 },
             }
+        }
+
+        while let Ok(cmd) = diagnostic_rx.try_recv() {
+            handle_diagnostic_command(session, cmd, tx).await;
         }
 
         execute_poll_cycle(session, &prepared.poll_config, &poll_tx, None).await;
@@ -191,9 +197,10 @@ pub async fn run_session_task<A: Adapter>(
     tx: &mpsc::UnboundedSender<Message>,
     capture_rx: mpsc::UnboundedReceiver<CaptureCommand>,
     capture_handle: CaptureHandle,
+    diagnostic_rx: mpsc::UnboundedReceiver<DiagnosticCommand>,
 ) -> Result<(), String> {
     let prepared = prepare_session(session, config, tx).await?;
-    run_prepared_session(session, prepared, tx, capture_rx, capture_handle).await;
+    run_prepared_session(session, prepared, tx, capture_rx, capture_handle, diagnostic_rx).await;
     Ok(())
 }
 
@@ -301,6 +308,47 @@ async fn poll_o2_monitoring<A: Adapter>(
         }
         Err(e) => {
             tracing::debug!("Skipping O2 monitoring update this cycle: {}", e);
+        }
+    }
+}
+
+async fn handle_diagnostic_command<A: Adapter>(
+    session: &mut Session<A>,
+    cmd: DiagnosticCommand,
+    tx: &mpsc::UnboundedSender<Message>,
+) {
+    match cmd {
+        DiagnosticCommand::ClearAll => {
+            match session.clear_dtcs().await {
+                Ok(()) => { let _ = tx.send(Message::ClearDtcsComplete); }
+                Err(e) => { let _ = tx.send(Message::ClearDtcsError(e.to_string())); }
+            }
+        }
+        DiagnosticCommand::ClearOnModule(module_id) => {
+            match session.clear_dtcs_on_module(module_id).await {
+                Ok(()) => { let _ = tx.send(Message::ClearDtcsComplete); }
+                Err(e) => { let _ = tx.send(Message::ClearDtcsError(e.to_string())); }
+            }
+        }
+        DiagnosticCommand::FetchFreezeFrame { dtc_code, pids } => {
+            let mut readings = Vec::new();
+            for pid in &pids {
+                match session.read_freeze_frame(*pid, 0).await {
+                    Ok(reading) => {
+                        if let Ok(val) = reading.value.as_f64() {
+                            readings.push((*pid, val, reading.unit));
+                        }
+                    }
+                    Err(_) => {} // Skip PIDs with no freeze-frame data
+                }
+            }
+            if !readings.is_empty() {
+                let _ = tx.send(Message::FreezeFrameResult(FreezeFrameSnapshot {
+                    dtc_code, readings,
+                }));
+            } else {
+                let _ = tx.send(Message::FreezeFrameError("No freeze-frame data available".into()));
+            }
         }
     }
 }
