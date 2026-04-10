@@ -90,6 +90,7 @@ pub enum Message {
     CaptureReady {
         handle: CaptureHandle,
         tx: mpsc::UnboundedSender<CaptureCommand>,
+        baud_rate: Option<u32>,
     },
     RawCaptureStarted,
     RawCaptureStopped(PathBuf),
@@ -162,6 +163,8 @@ pub struct AppState {
     // Raw protocol capture
     pub capture_handle: Option<CaptureHandle>,
     pub capture_tx: Option<mpsc::UnboundedSender<CaptureCommand>>,
+    // Connection metadata for raw capture
+    pub serial_baud_rate: Option<u32>,
 }
 
 impl AppState {
@@ -195,6 +198,7 @@ impl AppState {
             show_ai_insights: false,
             capture_handle: None,
             capture_tx: None,
+            serial_baud_rate: None,
         }
     }
 
@@ -275,9 +279,10 @@ impl AppState {
             Message::Tick => {
                 // UI tick -- nothing to do here
             }
-            Message::CaptureReady { handle, tx } => {
+            Message::CaptureReady { handle, tx, baud_rate } => {
                 self.capture_handle = Some(handle);
                 self.capture_tx = Some(tx);
+                self.serial_baud_rate = baud_rate;
             }
             Message::RawCaptureStarted => {
                 if let Some(ref handle) = self.capture_handle {

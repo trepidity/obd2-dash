@@ -240,7 +240,7 @@ async fn main() -> Result<()> {
                     // Set up raw capture channel
                     let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
                     let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
-                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
+                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: Some(38400) });
 
                     let _ = run_session_task(
                         &mut session,
@@ -446,7 +446,7 @@ fn spawn_connect_and_poll(
                     // Set up raw capture channel
                     let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
                     let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
-                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
+                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: Some(actual_baud) });
 
                     let config = SessionRunnerConfig {
                         poll_ms,
@@ -497,7 +497,7 @@ fn spawn_connect_and_poll(
                         // Set up raw capture channel
                         let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
                         let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
-                        let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx });
+                        let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: None });
 
                         let _ = run_session_task(
                             &mut session,
@@ -1505,7 +1505,7 @@ fn handle_toggle_raw_capture(state: &mut AppState) {
                     .as_ref()
                     .map(|i| i.firmware.clone())
                     .unwrap_or_else(|| "unknown".to_string()),
-                baud_rate: None,
+                baud_rate: state.serial_baud_rate,
             };
             if let Some(ref tx) = state.capture_tx {
                 let _ = tx.send(app::CaptureCommand::Start { path, metadata });
