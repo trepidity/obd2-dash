@@ -449,6 +449,21 @@ mod tests {
     }
 
     #[test]
+    fn test_freeze_frame_cleared_on_disconnect() {
+        let mut domain = DomainState::new(250);
+        domain.freeze_frame_data = Some(FreezeFrameSnapshot {
+            dtc_code: "P0420".into(),
+            readings: vec![(Pid::ENGINE_RPM, 2500.0, "rpm")],
+        });
+        domain.freeze_frame_pending = true;
+
+        domain.update(DomainMessage::ConnectionStatus(ConnectionState::Disconnected));
+
+        assert!(domain.freeze_frame_data.is_none());
+        assert!(!domain.freeze_frame_pending);
+    }
+
+    #[test]
     fn test_readiness_stored_and_cleared_on_disconnect() {
         use obd2_core::protocol::service::MonitorStatus;
 
