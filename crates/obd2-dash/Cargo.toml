@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 obd2-db = { path = "../obd2-db" }
-obd2-core = { path = "/Users/jared/Projects/obd2-core/crates/obd2-core", features = ["serial", "ble", "embedded-specs"] }
+obd2-core = { path = "/Users/jared/Projects/HaulLogic/obd2-core/crates/obd2-core", features = ["serial", "ble", "embedded-specs"] }
 tokio = { workspace = true }
 ratatui = "0.29"
 crossterm = { version = "0.28", features = ["event-stream"] }
