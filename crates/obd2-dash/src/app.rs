@@ -10,6 +10,7 @@ use crate::widget::edit_mode::EditModeState;
 use crate::ai::{AiConfig, AiInsights};
 use crate::nhtsa::NhtsaVehicle;
 use crate::domain::{ConnectionState, DiscoveryState, DomainMessage, DomainState, O2Reading};
+use obd2_core::protocol::service::ReadinessStatus;
 use crate::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
 
 use obd2_core::adapter::AdapterInfo;
@@ -86,6 +87,8 @@ pub enum Message {
     },
     // O2 sensor monitoring
     O2MonitoringUpdate(Vec<O2Reading>),
+    // Readiness monitors
+    ReadinessUpdate(ReadinessStatus),
     // Raw protocol capture
     CaptureReady {
         handle: CaptureHandle,
@@ -275,6 +278,10 @@ impl AppState {
             Message::O2MonitoringUpdate(readings) => {
                 self.domain
                     .update(DomainMessage::O2MonitoringUpdate(readings));
+            }
+            Message::ReadinessUpdate(status) => {
+                self.domain
+                    .update(DomainMessage::ReadinessUpdate(status));
             }
             Message::Tick => {
                 // UI tick -- nothing to do here

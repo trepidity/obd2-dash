@@ -5,6 +5,7 @@ use obd2_core::adapter::{AdapterInfo, ProtocolSelectionSource};
 use obd2_core::protocol::dtc::Dtc;
 use obd2_core::protocol::enhanced::Reading;
 use obd2_core::protocol::pid::Pid;
+use obd2_core::protocol::service::ReadinessStatus;
 use obd2_core::session::discovery::{DiscoveryProfile, VisibleEcu};
 use obd2_core::vehicle::{ModuleId, Protocol};
 
@@ -88,6 +89,7 @@ pub enum DomainMessage {
         unit: String,
     },
     O2MonitoringUpdate(Vec<O2Reading>),
+    ReadinessUpdate(ReadinessStatus),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -153,6 +155,7 @@ pub struct DomainState {
     pub o2_readings: Vec<O2Reading>,
     pub fuel_economy: FuelEconomyState,
     pub driving: DrivingBehavior,
+    pub readiness: Option<ReadinessStatus>,
     pub recording: RecordingState,
     pub storage_manager: Option<StorageManager>,
     last_pid_update: Instant,
@@ -179,6 +182,7 @@ impl DomainState {
             o2_readings: Vec::new(),
             fuel_economy: FuelEconomyState::new(),
             driving: DrivingBehavior::new(),
+            readiness: None,
             recording: RecordingState::Idle,
             storage_manager: None,
             last_pid_update: Instant::now(),
@@ -259,6 +263,7 @@ impl DomainState {
                         | ConnectionState::Error(_)
                 ) {
                     self.discovery = None;
+                    self.readiness = None;
                     self.enhanced_readings.clear();
                     self.o2_readings.clear();
                 }
@@ -312,6 +317,9 @@ impl DomainState {
             }
             DomainMessage::O2MonitoringUpdate(readings) => {
                 self.o2_readings = readings;
+            }
+            DomainMessage::ReadinessUpdate(status) => {
+                self.readiness = Some(status);
             }
         }
     }
@@ -425,6 +433,30 @@ mod tests {
     fn test_connection_state_from_session_preserves_ignition_off() {
         let mapped = ConnectionState::from_session(&obd2_core::session::ConnectionState::IgnitionOff);
         assert_eq!(mapped, ConnectionState::IgnitionOff);
+    }
+
+    #[test]
+    fn test_readiness_stored_and_cleared_on_disconnect() {
+        use obd2_core::protocol::service::MonitorStatus;
+
+        let mut domain = DomainState::new(250);
+        let status = ReadinessStatus {
+            mil_on: false,
+            dtc_count: 0,
+            compression_ignition: false,
+            monitors: vec![MonitorStatus {
+                name: "Catalyst".into(),
+                supported: true,
+                complete: true,
+            }],
+        };
+
+        domain.update(DomainMessage::ReadinessUpdate(status));
+        assert!(domain.readiness.is_some());
+        assert_eq!(domain.readiness.as_ref().unwrap().monitors.len(), 1);
+
+        domain.update(DomainMessage::ConnectionStatus(ConnectionState::Disconnected));
+        assert!(domain.readiness.is_none());
     }
 
     #[test]
