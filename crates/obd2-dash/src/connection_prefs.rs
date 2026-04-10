@@ -47,3 +47,71 @@ impl ConnectionPrefs {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scanner::DeviceKind;
+
+    #[test]
+    fn test_load_missing_file_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+        let prefs = ConnectionPrefs::load(&path);
+        assert!(prefs.last_device.is_none());
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip_serial() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefs.json");
+
+        let prefs = ConnectionPrefs {
+            last_device: Some(DeviceKind::Serial {
+                port_path: "/dev/ttyUSB0".into(),
+                baud: 115200,
+            }),
+        };
+        prefs.save(&path).unwrap();
+
+        let loaded = ConnectionPrefs::load(&path);
+        match loaded.last_device {
+            Some(DeviceKind::Serial { port_path, baud }) => {
+                assert_eq!(port_path, "/dev/ttyUSB0");
+                assert_eq!(baud, 115200);
+            }
+            other => panic!("expected Serial, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip_ble() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefs.json");
+
+        let prefs = ConnectionPrefs {
+            last_device: Some(DeviceKind::Ble {
+                name: "OBDLink MX+".into(),
+            }),
+        };
+        prefs.save(&path).unwrap();
+
+        let loaded = ConnectionPrefs::load(&path);
+        match loaded.last_device {
+            Some(DeviceKind::Ble { name }) => {
+                assert_eq!(name, "OBDLink MX+");
+            }
+            other => panic!("expected Ble, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_invalid_json_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("prefs.json");
+        std::fs::write(&path, "{ not valid json !!!").unwrap();
+
+        let prefs = ConnectionPrefs::load(&path);
+        assert!(prefs.last_device.is_none());
+    }
+}
