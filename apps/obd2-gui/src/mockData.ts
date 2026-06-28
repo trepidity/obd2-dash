@@ -1,0 +1,52 @@
+import type { DiagnosticSnapshot } from "./types";
+
+export const fallbackSnapshot: DiagnosticSnapshot = {
+  vehicle: "2004 GMC Sierra",
+  vin: "1GTHK29294E391526",
+  protocol: "J1850 VPW",
+  connection: "browser mock",
+  voltage: 13.8,
+  rpm: 685,
+  speed_mph: 0,
+  poll_ms: 250,
+  units: "US",
+  statuses: [
+    { label: "DTCs", value: "0", state: "ok" },
+    { label: "ECUs", value: "5", state: "ok" },
+    { label: "MIL", value: "OFF", state: "ok" },
+    { label: "Record", value: "armed", state: "warn" },
+  ],
+  alerts: [
+    "Desired fuel rail PID not verified on this ECM",
+    "TCM enhanced DTC decoder pending live 59 payload",
+  ],
+  modules: [
+    { module: "ECM", stored: "empty", pending: "empty", permanent: "unsup" },
+    { module: "TCM", stored: "unsup", pending: "unsup", permanent: "unsup" },
+    { module: "EBCM", stored: "no data", pending: "no data", permanent: "no data" },
+    { module: "BCM", stored: "unsup", pending: "unsup", permanent: "unsup" },
+    { module: "IPC", stored: "probe", pending: "probe", permanent: "probe" },
+  ],
+  cylinders: [
+    { cylinder: 1, mm3: 0.3 },
+    { cylinder: 2, mm3: -0.3 },
+    { cylinder: 3, mm3: -1.3 },
+    { cylinder: 4, mm3: -0.4 },
+    { cylinder: 5, mm3: -0.3 },
+    { cylinder: 6, mm3: 0.2 },
+    { cylinder: 7, mm3: 1.0 },
+    { cylinder: 8, mm3: 0.5 },
+  ],
+  vgt: { actual_pct: 88.2, desired_pct: 88.2, error_pct: 0.0 },
+  fuel_rail: { actual_psi: 4260, desired_psi: null, delta_psi: null },
+  temperatures: {
+    coolant_f: 170.6,
+    intake_air_f: 91.4,
+    oil_f: null,
+    trans_f: null,
+    ambient_f: null,
+  },
+  map_psi: 13.9,
+  boost_psi: 0,
+  maf_lb_min: 5.2,
+};

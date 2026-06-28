@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/obd2-db",
     "crates/obd2-dash",
+    "apps/obd2-gui/src-tauri",
 ]
 
 [workspace.dependencies]

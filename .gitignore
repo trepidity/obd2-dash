@@ -1,6 +1,7 @@
 # Rust build artifacts
 /target/
 **/*.rs.bk
+apps/obd2-gui/src-tauri/target/
 
 # Runtime data
 /logs/
@@ -20,6 +21,12 @@ connection.json
 
 # Python
 emulator/__pycache__/
+
+# Frontend build artifacts
+apps/obd2-gui/node_modules/
+apps/obd2-gui/dist/
+apps/obd2-gui/src-tauri/gen/
+apps/obd2-gui/test-results/
 
 # Worktrees
 .worktrees/
