@@ -1,5 +1,5 @@
-mod analysis;
 mod ai;
+mod analysis;
 mod app;
 mod connection_prefs;
 mod debug_log;
@@ -25,13 +25,13 @@ use tokio::sync::mpsc;
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use app::{AppState, DashboardLayout, Message, PopupState, ScanMode};
 use ai::{AiClient, AiConfig};
+use app::{AppState, DashboardLayout, Message, PopupState, ScanMode};
 use connection_prefs::ConnectionPrefs;
 use domain::{ConnectionState, SpeedUnit, TemperatureUnit};
 use mock_profile::mock_vin;
-use recording::RecordingState;
 use recording::storage::{StorageConfig, StorageManager};
+use recording::RecordingState;
 use scanner::{DeviceKind, ScanEvent};
 use tui::{
     event::{key_to_message, Event, EventHandler},
@@ -41,10 +41,10 @@ use widget::config::DashboardConfig;
 use widget::edit_mode::{EditModeState, EditPhase};
 
 // New obd2-core imports
-use obd2_core::protocol::pid::Pid;
-use obd2_core::protocol::enhanced::Reading;
 use obd2_core::adapter::elm327::Elm327Adapter;
 use obd2_core::adapter::mock::MockAdapter;
+use obd2_core::protocol::enhanced::Reading;
+use obd2_core::protocol::pid::Pid;
 use obd2_core::session::Session;
 use session_runner::{
     build_mock_capture_handle, prepare_session, run_prepared_session, run_session_task,
@@ -196,7 +196,12 @@ async fn main() -> Result<()> {
     let poll_ms = cli.poll_ms;
     let obd_handle: Option<tokio::task::JoinHandle<()>> = if cli.mock {
         let _tx_clone = obd_tx.clone();
-        let handle = spawn_mock_poll(mock_vehicle_vin, Arc::clone(&dtc_scenario), poll_ms, obd_tx.clone());
+        let handle = spawn_mock_poll(
+            mock_vehicle_vin,
+            Arc::clone(&dtc_scenario),
+            poll_ms,
+            obd_tx.clone(),
+        );
         Some(handle)
     } else if cli.ble {
         let name = cli.ble_name.clone().unwrap_or_default();
@@ -221,16 +226,20 @@ async fn main() -> Result<()> {
                     let _ = tx.send(Message::ConnectionStatus(ConnectionState::Connecting));
 
                     // Open PTY transport
-                    let transport = match obd2_core::transport::serial::SerialTransport::new(&port_path, 38400) {
-                        Ok(t) => t,
-                        Err(e) => {
-                            let msg = format!("Failed to open PTY {}: {}", port_path, e);
-                            tracing::error!("{}", msg);
-                            let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(msg.clone())));
-                            let _ = tx.send(Message::Error(msg));
-                            return;
-                        }
-                    };
+                    let transport =
+                        match obd2_core::transport::serial::SerialTransport::new(&port_path, 38400)
+                        {
+                            Ok(t) => t,
+                            Err(e) => {
+                                let msg = format!("Failed to open PTY {}: {}", port_path, e);
+                                tracing::error!("{}", msg);
+                                let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                                    msg.clone(),
+                                )));
+                                let _ = tx.send(Message::Error(msg));
+                                return;
+                            }
+                        };
                     tracing::info!("Emulator transport opened: {}", port_path);
 
                     let logging = obd2_core::transport::LoggingTransport::new(transport);
@@ -240,7 +249,11 @@ async fn main() -> Result<()> {
                     // Set up raw capture channel
                     let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
                     let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
-                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: Some(38400) });
+                    let _ = tx.send(Message::CaptureReady {
+                        handle: cap_handle.clone(),
+                        tx: cap_tx,
+                        baud_rate: Some(38400),
+                    });
 
                     let (diag_tx, diag_rx) = tokio::sync::mpsc::unbounded_channel();
                     let _ = tx.send(Message::DiagnosticReady(diag_tx));
@@ -434,7 +447,10 @@ fn spawn_connect_and_poll(
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
 
-                    let transport = match obd2_core::transport::serial::SerialTransport::new(port_path, actual_baud) {
+                    let transport = match obd2_core::transport::serial::SerialTransport::new(
+                        port_path,
+                        actual_baud,
+                    ) {
                         Ok(t) => t,
                         Err(e) => {
                             last_error = format!("Failed to open {}: {}", port_path, e);
@@ -453,7 +469,11 @@ fn spawn_connect_and_poll(
                     // Set up raw capture channel
                     let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
                     let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
-                    let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: Some(actual_baud) });
+                    let _ = tx.send(Message::CaptureReady {
+                        handle: cap_handle.clone(),
+                        tx: cap_tx,
+                        baud_rate: Some(actual_baud),
+                    });
 
                     let (diag_tx, diag_rx) = tokio::sync::mpsc::unbounded_channel();
                     let _ = tx.send(Message::DiagnosticReady(diag_tx));
@@ -479,26 +499,27 @@ fn spawn_connect_and_poll(
                         tracing::warn!("Failed to save connection prefs: {}", e);
                     }
 
-                    run_prepared_session(
-                        &mut session,
-                        prepared,
-                        &tx,
-                        cap_rx,
-                        cap_handle,
-                        diag_rx,
-                    )
-                    .await;
+                    run_prepared_session(&mut session, prepared, &tx, cap_rx, cap_handle, diag_rx)
+                        .await;
                     return;
                 }
 
-                let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(last_error.clone())));
+                let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                    last_error.clone(),
+                )));
                 let _ = tx.send(Message::Error(last_error));
             }
             DeviceKind::Ble { name } => {
                 tracing::info!("Scanning for BLE adapter: {}", name);
-                let filter = if name.is_empty() { None } else { Some(name.as_str()) };
+                let filter = if name.is_empty() {
+                    None
+                } else {
+                    Some(name.as_str())
+                };
                 let scan_dur = std::time::Duration::from_secs(ble_scan_secs);
-                match obd2_core::transport::ble::BleTransport::scan_and_connect(filter, scan_dur).await {
+                match obd2_core::transport::ble::BleTransport::scan_and_connect(filter, scan_dur)
+                    .await
+                {
                     Ok(ble_transport) => {
                         let logging = obd2_core::transport::LoggingTransport::new(ble_transport);
                         let adapter = Elm327Adapter::new(Box::new(logging));
@@ -508,7 +529,11 @@ fn spawn_connect_and_poll(
                         // Set up raw capture channel
                         let (cap_tx, cap_rx) = tokio::sync::mpsc::unbounded_channel();
                         let cap_handle = app::CaptureHandle::new(PathBuf::from(&recordings_dir));
-                        let _ = tx.send(Message::CaptureReady { handle: cap_handle.clone(), tx: cap_tx, baud_rate: None });
+                        let _ = tx.send(Message::CaptureReady {
+                            handle: cap_handle.clone(),
+                            tx: cap_tx,
+                            baud_rate: None,
+                        });
 
                         let (diag_tx, diag_rx) = tokio::sync::mpsc::unbounded_channel();
                         let _ = tx.send(Message::DiagnosticReady(diag_tx));
@@ -528,7 +553,9 @@ fn spawn_connect_and_poll(
                     }
                     Err(e) => {
                         let msg = format!("BLE connection failed: {}", e);
-                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(msg.clone())));
+                        let _ = tx.send(Message::ConnectionStatus(ConnectionState::Error(
+                            msg.clone(),
+                        )));
                         let _ = tx.send(Message::Error(msg));
                     }
                 }
@@ -795,12 +822,20 @@ async fn run_headless(
                 };
 
                 // Primary line: core engine data
+                let (speed, speed_unit) = state.domain
+                    .display_speed()
+                    .unwrap_or((0.0, if state.domain.speed_unit == SpeedUnit::Mph { "mph" } else { "km/h" }));
+                let (coolant, coolant_unit) = state.domain
+                    .display_temp()
+                    .unwrap_or((0.0, if state.domain.temp_unit == TemperatureUnit::Fahrenheit { "\u{00B0}F" } else { "\u{00B0}C" }));
                 println!(
-                    "[{:>4}] RPM:{:>6.0}  Spd:{:>4.0}km/h  Cool:{:>5.1}°C  Load:{:>5.1}%  Batt:{:.1}V  [{}]",
+                    "[{:>4}] RPM:{:>6.0}  Spd:{:>4.0}{}  Cool:{:>5.1}{}  Load:{:>5.1}%  Batt:{:.1}V  [{}]",
                     cycles,
                     v.rpm.unwrap_or(0.0),
-                    v.speed.unwrap_or(0.0),
-                    v.coolant_temp.unwrap_or(0.0),
+                    speed,
+                    speed_unit,
+                    coolant,
+                    coolant_unit,
                     v.engine_load.unwrap_or(0.0),
                     v.battery_voltage.unwrap_or(0.0),
                     conn,
@@ -809,12 +844,27 @@ async fn run_headless(
                 // Secondary line: fuel, intake, temps (only if we have data)
                 let mut extras = Vec::new();
                 if let Some(tp) = v.throttle_position { extras.push(format!("Thr:{:.0}%", tp)); }
-                if let Some(maf) = v.maf { extras.push(format!("MAF:{:.1}g/s", maf)); }
-                if let Some(map) = v.intake_map { extras.push(format!("MAP:{:.0}kPa", map)); }
-                if let Some(iat) = v.intake_air_temp { extras.push(format!("IAT:{:.0}°C", iat)); }
-                if let Some(fr) = v.engine_fuel_rate { extras.push(format!("Fuel:{:.1}L/h", fr)); }
+                if let Some(maf) = v.maf {
+                    let (value, unit) = state.domain.display_mass_air_flow_value(maf);
+                    extras.push(format!("MAF:{:.1}{}", value, unit));
+                }
+                if let Some(map) = v.intake_map {
+                    let (value, unit) = state.domain.display_pressure_value(map);
+                    extras.push(format!("MAP:{:.1}{}", value, unit));
+                }
+                if let Some(iat) = v.intake_air_temp {
+                    let (value, unit) = state.domain.display_temp_value(iat);
+                    extras.push(format!("IAT:{:.0}{}", value, unit));
+                }
+                if let Some(fr) = v.engine_fuel_rate {
+                    let (value, unit) = state.domain.display_fuel_rate_value(fr);
+                    extras.push(format!("Fuel:{:.1}{}", value, unit));
+                }
                 if let Some(ft) = v.fuel_tank_level { extras.push(format!("Tank:{:.0}%", ft)); }
-                if let Some(ot) = v.engine_oil_temp { extras.push(format!("Oil:{:.0}°C", ot)); }
+                if let Some(ot) = v.engine_oil_temp {
+                    let (value, unit) = state.domain.display_temp_value(ot);
+                    extras.push(format!("Oil:{:.0}{}", value, unit));
+                }
                 if let Some(ta) = v.timing_advance { extras.push(format!("Tim:{:.1}°", ta)); }
                 if let Some(stft) = v.short_fuel_trim_b1 { extras.push(format!("STFT1:{:.1}%", stft)); }
                 if let Some(ltft) = v.long_fuel_trim_b1 { extras.push(format!("LTFT1:{:.1}%", ltft)); }
@@ -1010,7 +1060,10 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
     if state.clear_dtc_confirm.is_some() {
         match key.code {
             KeyCode::Enter => {
-                if matches!(state.clear_dtc_confirm, Some(app::ClearDtcConfirm::BroadcastPopup)) {
+                if matches!(
+                    state.clear_dtc_confirm,
+                    Some(app::ClearDtcConfirm::BroadcastPopup)
+                ) {
                     state.send_diagnostic(app::DiagnosticCommand::ClearAll);
                     state.clear_dtc_confirm = None;
                 }
@@ -1238,16 +1291,23 @@ fn handle_key(state: &mut AppState, key: crossterm::event::KeyEvent, dtc_scenari
                             if slot.kind == widget::WidgetKind::DtcPanel {
                                 if let Some(dtc) = state.domain.stored_dtcs.get(item_idx) {
                                     let correlated_pids = vec![
-                                        Pid::ENGINE_RPM, Pid::VEHICLE_SPEED, Pid::COOLANT_TEMP,
-                                        Pid::ENGINE_LOAD, Pid::SHORT_FUEL_TRIM_B1, Pid::LONG_FUEL_TRIM_B1,
-                                        Pid::THROTTLE_POSITION, Pid::MAF,
+                                        Pid::ENGINE_RPM,
+                                        Pid::VEHICLE_SPEED,
+                                        Pid::COOLANT_TEMP,
+                                        Pid::ENGINE_LOAD,
+                                        Pid::SHORT_FUEL_TRIM_B1,
+                                        Pid::LONG_FUEL_TRIM_B1,
+                                        Pid::THROTTLE_POSITION,
+                                        Pid::MAF,
                                     ];
                                     state.domain.freeze_frame_pending = true;
                                     state.domain.freeze_frame_data = None;
-                                    state.send_diagnostic(app::DiagnosticCommand::FetchFreezeFrame {
-                                        dtc_code: dtc.code.clone(),
-                                        pids: correlated_pids,
-                                    });
+                                    state.send_diagnostic(
+                                        app::DiagnosticCommand::FetchFreezeFrame {
+                                            dtc_code: dtc.code.clone(),
+                                            pids: correlated_pids,
+                                        },
+                                    );
                                 }
                             }
                         }
@@ -1548,13 +1608,19 @@ fn handle_toggle_raw_capture(state: &mut AppState) {
             }
         } else {
             let session_id = uuid::Uuid::new_v4().to_string();
-            let path = handle.recordings_dir().join(format!("{}.obd2raw", session_id));
+            let path = handle
+                .recordings_dir()
+                .join(format!("{}.obd2raw", session_id));
             let metadata = obd2_core::transport::CaptureMetadata {
-                transport_type: state.domain.adapter_info
+                transport_type: state
+                    .domain
+                    .adapter_info
                     .as_ref()
                     .map(|i| format!("{:?}", i.chipset))
                     .unwrap_or_else(|| "unknown".to_string()),
-                port_or_device: state.domain.adapter_info
+                port_or_device: state
+                    .domain
+                    .adapter_info
                     .as_ref()
                     .map(|i| i.firmware.clone())
                     .unwrap_or_else(|| "unknown".to_string()),

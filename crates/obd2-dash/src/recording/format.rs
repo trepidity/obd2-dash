@@ -67,7 +67,14 @@ impl RecordingFrame {
     }
 
     /// Create an enhanced PID frame. Metadata (DID, module, name, unit) is packed into raw_bytes.
-    pub fn enhanced(offset_ms: u32, did: u16, module: &str, name: &str, unit: &str, value: f64) -> Self {
+    pub fn enhanced(
+        offset_ms: u32,
+        did: u16,
+        module: &str,
+        name: &str,
+        unit: &str,
+        value: f64,
+    ) -> Self {
         let mut raw = Vec::new();
         raw.extend_from_slice(&did.to_le_bytes());
         // Pack strings as: len(u8) + bytes
@@ -95,10 +102,14 @@ impl RecordingFrame {
         let mut pos = 2;
         let mut strings = Vec::new();
         for _ in 0..3 {
-            if pos >= self.raw_bytes.len() { return None; }
+            if pos >= self.raw_bytes.len() {
+                return None;
+            }
             let len = self.raw_bytes[pos] as usize;
             pos += 1;
-            if pos + len > self.raw_bytes.len() { return None; }
+            if pos + len > self.raw_bytes.len() {
+                return None;
+            }
             strings.push(String::from_utf8_lossy(&self.raw_bytes[pos..pos + len]).into_owned());
             pos += len;
         }
@@ -131,10 +142,14 @@ impl RecordingFrame {
         let mut pos = 0;
         let mut strings = Vec::new();
         for _ in 0..3 {
-            if pos >= self.raw_bytes.len() { return None; }
+            if pos >= self.raw_bytes.len() {
+                return None;
+            }
             let len = self.raw_bytes[pos] as usize;
             pos += 1;
-            if pos + len > self.raw_bytes.len() { return None; }
+            if pos + len > self.raw_bytes.len() {
+                return None;
+            }
             strings.push(String::from_utf8_lossy(&self.raw_bytes[pos..pos + len]).into_owned());
             pos += len;
         }
@@ -416,14 +431,33 @@ mod tests {
     #[test]
     fn test_mixed_frame_stream_ordering() {
         let mut buf = Vec::new();
-        RecordingFrame::pid_with_raw(100, 0x0C, 680.0, &[0x0A, 0xA0]).write_to(&mut buf).unwrap();
-        RecordingFrame::voltage(200, 14.4).write_to(&mut buf).unwrap();
-        RecordingFrame::enhanced(300, 0xABCD, "tcm", "Trans Temp", "°C", 85.0).write_to(&mut buf).unwrap();
-        RecordingFrame::dtc(400, "P0420").write_to(&mut buf).unwrap();
-        RecordingFrame::o2(500, "O2 Monitor", "B1S1", "V", 0.72).write_to(&mut buf).unwrap();
-        RecordingFrame { frame_type: 0xFE, offset_ms: 600, pid_code: 0, value: 0.0, raw_bytes: vec![1,2,3] }
-            .write_to(&mut buf).unwrap();
-        RecordingFrame::pid(700, 0x0D, 60.0).write_to(&mut buf).unwrap();
+        RecordingFrame::pid_with_raw(100, 0x0C, 680.0, &[0x0A, 0xA0])
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::voltage(200, 14.4)
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::enhanced(300, 0xABCD, "tcm", "Trans Temp", "°C", 85.0)
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::dtc(400, "P0420")
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::o2(500, "O2 Monitor", "B1S1", "V", 0.72)
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame {
+            frame_type: 0xFE,
+            offset_ms: 600,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![1, 2, 3],
+        }
+        .write_to(&mut buf)
+        .unwrap();
+        RecordingFrame::pid(700, 0x0D, 60.0)
+            .write_to(&mut buf)
+            .unwrap();
 
         let mut cursor = io::Cursor::new(buf);
         let mut offsets = Vec::new();
@@ -446,11 +480,21 @@ mod tests {
         };
         write_file_header(&mut buf, &header).unwrap();
 
-        RecordingFrame::pid_with_raw(100, 0x0C, 680.0, &[0x0A, 0xA0]).write_to(&mut buf).unwrap();
-        RecordingFrame::voltage(200, 14.4).write_to(&mut buf).unwrap();
-        RecordingFrame::dtc(300, "P0420").write_to(&mut buf).unwrap();
-        RecordingFrame::enhanced(400, 0x1234, "ecm", "Boost", "kPa", 15.0).write_to(&mut buf).unwrap();
-        RecordingFrame::o2(500, "Cat Mon", "B1S1", "V", 0.45).write_to(&mut buf).unwrap();
+        RecordingFrame::pid_with_raw(100, 0x0C, 680.0, &[0x0A, 0xA0])
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::voltage(200, 14.4)
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::dtc(300, "P0420")
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::enhanced(400, 0x1234, "ecm", "Boost", "kPa", 15.0)
+            .write_to(&mut buf)
+            .unwrap();
+        RecordingFrame::o2(500, "Cat Mon", "B1S1", "V", 0.45)
+            .write_to(&mut buf)
+            .unwrap();
 
         let mut cursor = io::Cursor::new(buf);
         let (decoded_header, version) = read_file_header(&mut cursor).unwrap();

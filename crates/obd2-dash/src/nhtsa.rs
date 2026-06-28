@@ -117,27 +117,20 @@ pub async fn decode_vin(vin: &str) -> Result<Option<NhtsaVehicle>, String> {
             format!("HTTP client error: {e}")
         })?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| {
-            tracing::warn!(target: "obd2::nhtsa", "NHTSA request failed for {}: {}", vin, e);
-            format!("NHTSA request failed: {e}")
-        })?;
+    let resp = client.get(&url).send().await.map_err(|e| {
+        tracing::warn!(target: "obd2::nhtsa", "NHTSA request failed for {}: {}", vin, e);
+        format!("NHTSA request failed: {e}")
+    })?;
 
     if !resp.status().is_success() {
         tracing::warn!(target: "obd2::nhtsa", "NHTSA returned status {} for VIN {}", resp.status(), vin);
         return Err(format!("NHTSA returned status {}", resp.status()));
     }
 
-    let body: NhtsaResponse = resp
-        .json()
-        .await
-        .map_err(|e| {
-            tracing::warn!(target: "obd2::nhtsa", "Failed to parse NHTSA response for {}: {}", vin, e);
-            format!("NHTSA parse error: {e}")
-        })?;
+    let body: NhtsaResponse = resp.json().await.map_err(|e| {
+        tracing::warn!(target: "obd2::nhtsa", "Failed to parse NHTSA response for {}: {}", vin, e);
+        format!("NHTSA parse error: {e}")
+    })?;
 
     let vehicle = parse_nhtsa_results(&body.results);
 
@@ -326,10 +319,7 @@ mod tests {
     #[test]
     fn test_normalize_fuel_type() {
         assert_eq!(normalize_fuel_type("Diesel").as_deref(), Some("Diesel"));
-        assert_eq!(
-            normalize_fuel_type("Gasoline").as_deref(),
-            Some("Gasoline")
-        );
+        assert_eq!(normalize_fuel_type("Gasoline").as_deref(), Some("Gasoline"));
         assert_eq!(
             normalize_fuel_type("Flexible Fuel Vehicle (FFV)").as_deref(),
             Some("E85/Flex")

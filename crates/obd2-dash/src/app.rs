@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
+use crate::ai::{AiConfig, AiInsights};
+use crate::domain::{
+    ConnectionState, DiagnosticScanEntry, DiscoveryState, DomainMessage, DomainState, O2Reading,
+};
+use crate::nhtsa::NhtsaVehicle;
+use crate::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
 use crate::widget::config::DashboardConfig;
 use crate::widget::edit_mode::EditModeState;
-use crate::ai::{AiConfig, AiInsights};
-use crate::nhtsa::NhtsaVehicle;
-use crate::domain::{ConnectionState, DiscoveryState, DomainMessage, DomainState, O2Reading};
 use obd2_core::protocol::service::ReadinessStatus;
-use crate::scanner::{DeviceKind, DiscoveredDevice, ScanEvent};
 
 use obd2_core::adapter::AdapterInfo;
 use obd2_core::protocol::dtc::Dtc;
@@ -22,7 +24,10 @@ use obd2_core::vehicle::ModuleId;
 
 /// Commands sent from the UI thread to the session task for raw capture control.
 pub enum CaptureCommand {
-    Start { path: PathBuf, metadata: CaptureMetadata },
+    Start {
+        path: PathBuf,
+        metadata: CaptureMetadata,
+    },
     Stop,
 }
 
@@ -69,6 +74,7 @@ pub enum Message {
     PidUpdate(Pid, Reading),
     VoltageUpdate(f64),
     DtcUpdate(Vec<Dtc>),
+    DiagnosticScanUpdate(Vec<DiagnosticScanEntry>),
     ConnectionStatus(ConnectionState),
     DiscoveryUpdated(DiscoveryState),
     AdapterDetected(AdapterInfo),
@@ -92,6 +98,19 @@ pub enum Message {
         name: String,
         value: f64,
         unit: String,
+    },
+    EnhancedPidTarget {
+        did: u16,
+        module: String,
+        name: String,
+        unit: String,
+    },
+    EnhancedPidError {
+        did: u16,
+        module: String,
+        name: String,
+        unit: String,
+        error: String,
     },
     // O2 sensor monitoring
     O2MonitoringUpdate(Vec<O2Reading>),
@@ -148,7 +167,10 @@ pub enum ClearDtcConfirm {
     /// Popup asking "Clear all DTCs?"
     BroadcastPopup,
     /// Two-key: waiting for second C press within 2 seconds
-    ModulePending { module_id: ModuleId, expires: std::time::Instant },
+    ModulePending {
+        module_id: ModuleId,
+        expires: std::time::Instant,
+    },
 }
 
 pub struct AppState {
@@ -253,9 +275,12 @@ impl AppState {
             Message::DtcUpdate(dtcs) => {
                 self.domain.update(DomainMessage::DtcUpdate(dtcs));
             }
-            Message::ConnectionStatus(state) => {
+            Message::DiagnosticScanUpdate(entries) => {
                 self.domain
-                    .update(DomainMessage::ConnectionStatus(state));
+                    .update(DomainMessage::DiagnosticScanUpdate(entries));
+            }
+            Message::ConnectionStatus(state) => {
+                self.domain.update(DomainMessage::ConnectionStatus(state));
             }
             Message::DiscoveryUpdated(discovery) => {
                 self.domain
@@ -312,13 +337,40 @@ impl AppState {
                     unit,
                 });
             }
+            Message::EnhancedPidTarget {
+                did,
+                module,
+                name,
+                unit,
+            } => {
+                self.domain.update(DomainMessage::EnhancedPidTarget {
+                    did,
+                    module,
+                    name,
+                    unit,
+                });
+            }
+            Message::EnhancedPidError {
+                did,
+                module,
+                name,
+                unit,
+                error,
+            } => {
+                self.domain.update(DomainMessage::EnhancedPidError {
+                    did,
+                    module,
+                    name,
+                    unit,
+                    error,
+                });
+            }
             Message::O2MonitoringUpdate(readings) => {
                 self.domain
                     .update(DomainMessage::O2MonitoringUpdate(readings));
             }
             Message::ReadinessUpdate(status) => {
-                self.domain
-                    .update(DomainMessage::ReadinessUpdate(status));
+                self.domain.update(DomainMessage::ReadinessUpdate(status));
             }
             Message::DiagnosticReady(tx) => {
                 self.diagnostic_tx = Some(tx);
@@ -344,7 +396,11 @@ impl AppState {
             Message::Tick => {
                 // UI tick -- nothing to do here
             }
-            Message::CaptureReady { handle, tx, baud_rate } => {
+            Message::CaptureReady {
+                handle,
+                tx,
+                baud_rate,
+            } => {
                 self.capture_handle = Some(handle);
                 self.capture_tx = Some(tx);
                 self.serial_baud_rate = baud_rate;
@@ -360,7 +416,11 @@ impl AppState {
                     handle.set_active(false);
                 }
                 let file_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                tracing::info!("Raw capture saved: {} ({} bytes)", path.display(), file_size);
+                tracing::info!(
+                    "Raw capture saved: {} ({} bytes)",
+                    path.display(),
+                    file_size
+                );
             }
             Message::RawCaptureError(e) => {
                 if let Some(ref handle) = self.capture_handle {

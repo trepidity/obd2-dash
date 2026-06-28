@@ -1,0 +1,87 @@
+{
+  "rows": [
+    {
+      "widgets": [
+        {
+          "kind": "DtcPanel",
+          "size": "Half"
+        },
+        {
+          "kind": "AlertsPanel",
+          "size": "Half"
+        }
+      ],
+      "height": {
+        "Fixed": 8
+      }
+    },
+    {
+      "widgets": [
+        {
+          "kind": "DiagnosticScanPanel",
+          "size": "Full"
+        }
+      ],
+      "height": {
+        "Fixed": 8
+      }
+    },
+    {
+      "widgets": [
+        {
+          "kind": "EnhancedPidsPanel",
+          "size": "Full"
+        }
+      ],
+      "height": {
+        "Fixed": 16
+      }
+    },
+    {
+      "widgets": [
+        {
+          "kind": "SystemInfoPanel",
+          "size": "Full"
+        }
+      ],
+      "height": {
+        "Fixed": 7
+      }
+    },
+    {
+      "widgets": [
+        {
+          "kind": "IntakeMapDisplay",
+          "size": "Half"
+        },
+        {
+          "kind": "BoostPressureDisplay",
+          "size": "Half"
+        }
+      ],
+      "height": {
+        "Fixed": 7
+      }
+    },
+    {
+      "widgets": [
+        {
+          "kind": "TemperaturesPanel",
+          "size": "Half"
+        },
+        {
+          "kind": "MafDisplay",
+          "size": "Half"
+        },
+        {
+          "kind": "FuelSystemPanel",
+          "size": "Half"
+        }
+      ],
+      "height": {
+        "Fixed": 8
+      }
+    }
+  ],
+  "version": 1
+}

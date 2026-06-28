@@ -165,7 +165,10 @@ mod tests {
 
         assert!(index.sessions[0].compressed);
         assert_eq!(index.sessions[0].file_size_bytes, 3000);
-        assert_eq!(index.sessions[0].file_path, PathBuf::from("recordings/aaa.obd2rec.gz"));
+        assert_eq!(
+            index.sessions[0].file_path,
+            PathBuf::from("recordings/aaa.obd2rec.gz")
+        );
     }
 
     #[test]

@@ -3,9 +3,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use obd2_core::protocol::pid::Pid;
 use crate::domain::DomainState;
 use crate::recording::format::FRAME_PID;
+use obd2_core::protocol::pid::Pid;
 
 /// Per-PID statistical summary.
 #[derive(Debug, Clone, Serialize, Deserialize)]

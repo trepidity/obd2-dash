@@ -174,15 +174,22 @@ mod tests {
     fn test_steady_speed_is_smooth() {
         let mut db = DrivingBehavior::new();
         // Steady 60 km/h for several samples — should remain very smooth
-        feed_updates(&mut db, &[
-            (60.0, 30.0),
-            (60.0, 30.0),
-            (60.0, 30.0),
-            (60.0, 30.0),
-            (60.0, 30.0),
-        ]);
+        feed_updates(
+            &mut db,
+            &[
+                (60.0, 30.0),
+                (60.0, 30.0),
+                (60.0, 30.0),
+                (60.0, 30.0),
+                (60.0, 30.0),
+            ],
+        );
 
-        assert!(db.smoothness_score > 90.0, "steady speed should score high, got {}", db.smoothness_score);
+        assert!(
+            db.smoothness_score > 90.0,
+            "steady speed should score high, got {}",
+            db.smoothness_score
+        );
         assert_eq!(db.hard_brake_count, 0);
         assert_eq!(db.jackrabbit_count, 0);
     }
@@ -197,7 +204,11 @@ mod tests {
         // This far exceeds the -2.8 m/s² threshold
         db.update(0.0, 0.0);
 
-        assert!(db.hard_brake_count >= 1, "should detect a hard brake, got {}", db.hard_brake_count);
+        assert!(
+            db.hard_brake_count >= 1,
+            "should detect a hard brake, got {}",
+            db.hard_brake_count
+        );
     }
 
     #[test]
@@ -212,7 +223,10 @@ mod tests {
         // Still decelerating, but shouldn't count twice (hysteresis)
         std::thread::sleep(std::time::Duration::from_millis(50));
         db.update(0.0, 0.0);
-        assert_eq!(db.hard_brake_count, 1, "hysteresis should prevent double-counting");
+        assert_eq!(
+            db.hard_brake_count, 1,
+            "hysteresis should prevent double-counting"
+        );
     }
 
     #[test]
@@ -224,7 +238,11 @@ mod tests {
         // Jump to 40 km/h in 50ms → 11.1 m/s in 0.05s = 222 m/s² (well above 2.8)
         db.update(40.0, 70.0);
 
-        assert!(db.jackrabbit_count >= 1, "should detect jackrabbit start, got {}", db.jackrabbit_count);
+        assert!(
+            db.jackrabbit_count >= 1,
+            "should detect jackrabbit start, got {}",
+            db.jackrabbit_count
+        );
     }
 
     #[test]
@@ -235,7 +253,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         db.update(120.0, 80.0);
 
-        assert_eq!(db.jackrabbit_count, 0, "jackrabbit shouldn't trigger at highway speed");
+        assert_eq!(
+            db.jackrabbit_count, 0,
+            "jackrabbit shouldn't trigger at highway speed"
+        );
     }
 
     #[test]
@@ -246,7 +267,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         db.update(40.0, 20.0);
 
-        assert_eq!(db.jackrabbit_count, 0, "jackrabbit shouldn't trigger with low throttle");
+        assert_eq!(
+            db.jackrabbit_count, 0,
+            "jackrabbit shouldn't trigger with low throttle"
+        );
     }
 
     #[test]
@@ -276,7 +300,11 @@ mod tests {
             db.update(i as f64, 30.0);
             std::thread::sleep(std::time::Duration::from_millis(15));
         }
-        assert!(db.accel_history.len() <= ACCEL_HISTORY_CAP,
-            "history should be capped at {}, got {}", ACCEL_HISTORY_CAP, db.accel_history.len());
+        assert!(
+            db.accel_history.len() <= ACCEL_HISTORY_CAP,
+            "history should be capped at {}, got {}",
+            ACCEL_HISTORY_CAP,
+            db.accel_history.len()
+        );
     }
 }

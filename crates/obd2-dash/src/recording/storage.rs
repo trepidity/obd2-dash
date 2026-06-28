@@ -142,7 +142,8 @@ impl StorageManager {
         }
 
         // Trim oldest sessions if over total limit (including .obd2raw sidecars)
-        while self.index.total_size_bytes() + self.raw_capture_bytes() > self.config.max_total_bytes {
+        while self.index.total_size_bytes() + self.raw_capture_bytes() > self.config.max_total_bytes
+        {
             // Find oldest session
             let oldest = self
                 .index
@@ -244,8 +245,8 @@ impl StorageStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use crate::recording::index::SessionEntry;
+    use chrono::Utc;
 
     fn sample_entry(id: &str, size: u64, recordings_dir: &Path) -> SessionEntry {
         let file_path = recordings_dir.join(format!("{}.obd2rec", id));
@@ -310,8 +311,10 @@ mod tests {
             ..StorageConfig::default()
         };
         let mut mgr = StorageManager::new(config);
-        mgr.register_session(sample_entry("a", 1000, dir.path())).unwrap();
-        mgr.register_session(sample_entry("b", 2000, dir.path())).unwrap();
+        mgr.register_session(sample_entry("a", 1000, dir.path()))
+            .unwrap();
+        mgr.register_session(sample_entry("b", 2000, dir.path()))
+            .unwrap();
 
         let stats = mgr.storage_stats();
         assert_eq!(stats.session_count, 2);
@@ -334,7 +337,8 @@ mod tests {
         let mut old = sample_entry("old", 3000, dir.path());
         old.start_time = Utc::now() - chrono::Duration::hours(2);
         mgr.register_session(old).unwrap();
-        mgr.register_session(sample_entry("new", 3000, dir.path())).unwrap();
+        mgr.register_session(sample_entry("new", 3000, dir.path()))
+            .unwrap();
 
         mgr.run_maintenance().unwrap();
 
@@ -368,7 +372,8 @@ mod tests {
             ..StorageConfig::default()
         };
         let mut mgr = StorageManager::new(config);
-        mgr.register_session(sample_entry("a", 100, dir.path())).unwrap();
+        mgr.register_session(sample_entry("a", 100, dir.path()))
+            .unwrap();
 
         let mut external = SessionIndex::load(mgr.index_path());
         external.add_session(sample_entry("b", 200, dir.path()));

@@ -585,7 +585,10 @@ mod tests {
         assert_eq!(FuelType::from_str_hint("E85"), FuelType::E85);
         assert_eq!(FuelType::from_str_hint("Flex Fuel"), FuelType::E85);
         assert_eq!(FuelType::from_str_hint("Gasoline"), FuelType::Gasoline);
-        assert_eq!(FuelType::from_str_hint("Premium Unleaded"), FuelType::Gasoline);
+        assert_eq!(
+            FuelType::from_str_hint("Premium Unleaded"),
+            FuelType::Gasoline
+        );
         assert_eq!(FuelType::from_str_hint(""), FuelType::Gasoline);
     }
 
@@ -648,7 +651,10 @@ mod tests {
         snap.maf_gs = None;
         state.recalculate(&snap, 0.25);
 
-        assert!(state.gold.is_none(), "gold should be None without fuel rate or MAF");
+        assert!(
+            state.gold.is_none(),
+            "gold should be None without fuel rate or MAF"
+        );
     }
 
     // ── Advanced calculation ─────────────────────────────────────────
@@ -659,7 +665,10 @@ mod tests {
         let snap = empty_snapshot();
         state.recalculate(&snap, 0.25);
 
-        assert!(state.advanced.is_none(), "advanced should be None without RPM/MAP");
+        assert!(
+            state.advanced.is_none(),
+            "advanced should be None without RPM/MAP"
+        );
     }
 
     #[test]
@@ -668,7 +677,10 @@ mod tests {
         let snap = cruising_snapshot();
         state.recalculate(&snap, 0.25);
 
-        let adv = state.advanced.as_ref().expect("advanced should be available");
+        let adv = state
+            .advanced
+            .as_ref()
+            .expect("advanced should be available");
         assert!(adv.base_maf_gs > 0.0);
         assert!(adv.base_fuel_rate_lph > 0.0);
         assert!(adv.corrected_fuel_rate_lph > 0.0);
@@ -708,8 +720,16 @@ mod tests {
         snap.coolant_temp_c = Some(20.0);
         state.recalculate(&snap, 0.25);
         let cold = state.advanced.as_ref().unwrap().corrections.cold_engine;
-        assert!(cold > 1.0, "cold engine correction should be > 1.0, got {}", cold);
-        assert!(cold <= 1.2, "cold engine correction should be <= 1.2, got {}", cold);
+        assert!(
+            cold > 1.0,
+            "cold engine correction should be > 1.0, got {}",
+            cold
+        );
+        assert!(
+            cold <= 1.2,
+            "cold engine correction should be <= 1.2, got {}",
+            cold
+        );
     }
 
     #[test]
@@ -738,7 +758,10 @@ mod tests {
             ..empty_snapshot()
         };
         let correction = calc_catalyst_correction(&snap);
-        assert!((correction - 1.0).abs() < 0.001, "warm catalyst should give 1.0");
+        assert!(
+            (correction - 1.0).abs() < 0.001,
+            "warm catalyst should give 1.0"
+        );
     }
 
     #[test]
@@ -748,8 +771,16 @@ mod tests {
             ..empty_snapshot()
         };
         let correction = calc_catalyst_correction(&snap);
-        assert!(correction > 1.0, "cold catalyst should give > 1.0, got {}", correction);
-        assert!(correction <= 1.1, "cold catalyst should give <= 1.1, got {}", correction);
+        assert!(
+            correction > 1.0,
+            "cold catalyst should give > 1.0, got {}",
+            correction
+        );
+        assert!(
+            correction <= 1.1,
+            "cold catalyst should give <= 1.1, got {}",
+            correction
+        );
     }
 
     // ── Sparkline history ────────────────────────────────────────────
@@ -793,6 +824,10 @@ mod tests {
         }
 
         let gold = state.gold.as_ref().unwrap();
-        assert!(gold.avg_mpg > 0.0, "average MPG should accumulate, got {}", gold.avg_mpg);
+        assert!(
+            gold.avg_mpg > 0.0,
+            "average MPG should accumulate, got {}",
+            gold.avg_mpg
+        );
     }
 }

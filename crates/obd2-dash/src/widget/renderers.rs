@@ -8,7 +8,9 @@ use ratatui::{
 
 use super::WidgetKind;
 use crate::app::AppState;
+use crate::domain::{DiagnosticScanResult, DiagnosticScanScope, DtcService};
 use crate::tui::ui;
+use obd2_core::protocol::pid::Pid;
 
 /// Render a widget of the given kind into the provided area.
 pub fn render_widget(
@@ -86,11 +88,7 @@ pub fn render_widget(
             state,
             block,
             "Fuel Rate",
-            state
-                .domain
-                .vehicle
-                .engine_fuel_rate
-                .map(|r| r),
+            state.domain.vehicle.engine_fuel_rate.map(|r| r),
             "L/h",
             0x5E,
         ),
@@ -145,6 +143,7 @@ pub fn render_widget(
         WidgetKind::RecordingStatus => render_recording_status(frame, area, state, block),
         WidgetKind::DrivingBehavior => render_driving_behavior(frame, area, state, block),
         WidgetKind::AlertsPanel => render_alerts_panel(frame, area, state, block),
+        WidgetKind::DiagnosticScanPanel => render_diagnostic_scan_panel(frame, area, state, block),
         WidgetKind::EnhancedPidsPanel => {
             ui::render_full_enhanced(frame, area, state, block, selected_item);
         }
@@ -175,6 +174,15 @@ fn make_widget_block(kind: WidgetKind, focused: bool, state: &AppState) -> Block
                 None if state.domain.last_error.is_some() => Color::Red,
                 None => Color::DarkGray,
             },
+            WidgetKind::DiagnosticScanPanel
+                if state
+                    .domain
+                    .diagnostic_scan
+                    .iter()
+                    .any(|entry| matches!(entry.result, DiagnosticScanResult::Error(_))) =>
+            {
+                Color::Red
+            }
             _ => Color::DarkGray,
         };
         (BorderType::Plain, color)
@@ -224,6 +232,7 @@ fn widget_title(kind: WidgetKind, state: &AppState) -> String {
         WidgetKind::DrivingBehavior => " DRIVING BEHAVIOR ".to_string(),
         WidgetKind::AlertsPanel => {
             let count = state.domain.active_alerts.len()
+                + state.domain.stored_dtcs.len()
                 + if state.domain.last_error.is_some() {
                     1
                 } else {
@@ -233,6 +242,14 @@ fn widget_title(kind: WidgetKind, state: &AppState) -> String {
                 " ALERTS ".to_string()
             } else {
                 format!(" ALERTS ({}) ", count)
+            }
+        }
+        WidgetKind::DiagnosticScanPanel => {
+            if state.domain.diagnostic_scan.is_empty() {
+                " MODULE SCAN ".to_string()
+            } else {
+                let targets = count_diagnostic_scan_targets(state);
+                format!(" MODULE SCAN ({targets}) ")
             }
         }
         WidgetKind::EnhancedPidsPanel => {
@@ -254,7 +271,11 @@ fn widget_title(kind: WidgetKind, state: &AppState) -> String {
         WidgetKind::ReadinessPanel => {
             if let Some(ref status) = state.domain.readiness {
                 let supported = status.monitors.iter().filter(|m| m.supported).count();
-                let complete = status.monitors.iter().filter(|m| m.supported && m.complete).count();
+                let complete = status
+                    .monitors
+                    .iter()
+                    .filter(|m| m.supported && m.complete)
+                    .count();
                 format!(" READINESS ({}/{}) ", complete, supported)
             } else {
                 " READINESS ".to_string()
@@ -269,12 +290,7 @@ fn render_single_rpm(frame: &mut Frame, area: Rect, state: &AppState, block: Blo
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rpm_val = state
-        .domain
-        .vehicle
-        .rpm
-        .map(|r| r)
-        .unwrap_or(0.0);
+    let rpm_val = state.domain.vehicle.rpm.map(|r| r).unwrap_or(0.0);
     let color =
         ui::threshold_color_for_pid(state, 0x0C, rpm_val, || ui::rpm_color_default(rpm_val));
     let max_rpm = state
@@ -321,7 +337,15 @@ fn render_single_speed(frame: &mut Frame, area: Rect, state: &AppState, block: B
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let (speed_val, speed_unit) = state.domain.display_speed().unwrap_or((0.0, "km/h"));
+    let speed_unit_fallback = if state.domain.uses_us_customary_units() {
+        "mph"
+    } else {
+        "km/h"
+    };
+    let (speed_val, speed_unit) = state
+        .domain
+        .display_speed()
+        .unwrap_or((0.0, speed_unit_fallback));
     let color = ui::threshold_color_for_pid(state, 0x0D, speed_val, || Color::Blue);
 
     let chunks = Layout::default()
@@ -360,12 +384,7 @@ fn render_single_load(frame: &mut Frame, area: Rect, state: &AppState, block: Bl
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let load_val = state
-        .domain
-        .vehicle
-        .engine_load
-        .map(|r| r)
-        .unwrap_or(0.0);
+    let load_val = state.domain.vehicle.engine_load.map(|r| r).unwrap_or(0.0);
     let has_data = state.domain.vehicle.engine_load.is_some();
 
     let chunks = Layout::default()
@@ -510,9 +529,16 @@ fn render_single_value(
     let color = ui::threshold_color_for_pid(state, pid_code, val, || Color::White);
 
     let text = if value.is_some() {
-        format!("{:.1} {}", val, unit)
+        let (display_val, display_unit) = state.domain.display_pid_value(Pid(pid_code), val);
+        format!("{:.1} {}", display_val, display_unit)
     } else {
-        format!("-- {}", unit)
+        let display_unit = state.domain.display_pid_value(Pid(pid_code), 0.0).1;
+        let fallback_unit = if display_unit.is_empty() {
+            unit
+        } else {
+            display_unit
+        };
+        format!("-- {}", fallback_unit)
     };
 
     let paragraph = Paragraph::new(Line::from(vec![Span::styled(
@@ -526,14 +552,21 @@ fn render_single_value(
 }
 
 fn render_single_boost(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
-    let val = state.domain.vehicle.boost_pressure.unwrap_or(0.0);
-    let color = if val > 0.5 {
-        Color::Green
-    } else {
-        Color::DarkGray
+    let (text, color) = match state.domain.vehicle.boost_pressure {
+        Some(val) => {
+            let color = if val > 0.5 {
+                Color::Green
+            } else {
+                Color::DarkGray
+            };
+            let (display_val, unit) = state.domain.display_pressure_value(val);
+            (format!("{:.1} {}", display_val, unit), color)
+        }
+        None => {
+            let unit = state.domain.display_pressure_value(0.0).1;
+            (format!("-- {}", unit), Color::DarkGray)
+        }
     };
-
-    let text = format!("{:.1} kPa", val);
     let paragraph = Paragraph::new(Line::from(vec![Span::styled(
         text,
         Style::default().fg(color).add_modifier(Modifier::BOLD),
@@ -560,8 +593,14 @@ fn render_single_oil_pressure(frame: &mut Frame, area: Rect, state: &AppState, b
     };
 
     let text = val
-        .map(|v| format!("{:.0} kPa", v))
-        .unwrap_or_else(|| "-- kPa".to_string());
+        .map(|v| {
+            let (display_val, unit) = state.domain.display_pressure_value(v);
+            format!("{:.1} {}", display_val, unit)
+        })
+        .unwrap_or_else(|| {
+            let unit = state.domain.display_pressure_value(0.0).1;
+            format!("-- {}", unit)
+        });
 
     let paragraph = Paragraph::new(Line::from(vec![Span::styled(
         text,
@@ -779,10 +818,7 @@ fn make_trim_display<'a>(
                 format!(" {:<6}", label),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(
-                format!("{}{:.1}%", sign, r),
-                Style::default().fg(color),
-            ),
+            Span::styled(format!("{}{:.1}%", sign, r), Style::default().fg(color)),
         ])
     } else {
         Line::from(vec![
@@ -806,9 +842,7 @@ fn render_single_temp(
 ) {
     let (text, color) = if let Some(r) = reading {
         let (val, unit) = state.domain.display_temp_value(*r);
-        let c = ui::threshold_color_for_pid(state, pid_code, *r, || {
-            ui::temp_color_default(*r)
-        });
+        let c = ui::threshold_color_for_pid(state, pid_code, *r, || ui::temp_color_default(*r));
         (format!("{:.1}{}", val, unit), c)
     } else {
         ("--".to_string(), Color::DarkGray)
@@ -1060,6 +1094,124 @@ fn render_alerts_panel(frame: &mut Frame, area: Rect, state: &AppState, block: B
     frame.render_widget(paragraph, inner);
 }
 
+fn render_diagnostic_scan_panel(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if state.domain.diagnostic_scan.is_empty() {
+        let paragraph = Paragraph::new(vec![
+            Line::from(Span::styled(
+                " No DTC scan yet",
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(Span::styled(
+                " Console messages require decoded Class 2 frames",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ]);
+        frame.render_widget(paragraph, inner);
+        return;
+    }
+
+    let mut lines = Vec::new();
+    let entries = &state.domain.diagnostic_scan;
+    let mut idx = 0;
+    while idx < entries.len() {
+        let scope = entries[idx].scope.clone();
+        let mut stored = None;
+        let mut pending = None;
+        let mut permanent = None;
+
+        while idx < entries.len() && entries[idx].scope == scope {
+            let result = &entries[idx].result;
+            match entries[idx].service {
+                DtcService::Stored => stored = Some(result),
+                DtcService::Pending => pending = Some(result),
+                DtcService::Permanent => permanent = Some(result),
+            }
+            idx += 1;
+        }
+
+        let mut spans = vec![Span::styled(
+            format!(" {:<9}", diagnostic_scan_scope_label(&scope)),
+            Style::default().fg(Color::White),
+        )];
+        push_scan_result_span(&mut spans, DtcService::Stored, stored);
+        push_scan_result_span(&mut spans, DtcService::Pending, pending);
+        push_scan_result_span(&mut spans, DtcService::Permanent, permanent);
+        lines.push(Line::from(spans));
+    }
+
+    let body_height = inner.height as usize;
+    let start = lines.len().saturating_sub(body_height);
+    let visible = lines.into_iter().skip(start).collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(visible), inner);
+}
+
+fn push_scan_result_span<'a>(
+    spans: &mut Vec<Span<'a>>,
+    service: DtcService,
+    result: Option<&DiagnosticScanResult>,
+) {
+    let (text, style) = match result {
+        Some(result) => (
+            diagnostic_scan_result_label(result),
+            Style::default().fg(diagnostic_scan_result_color(result)),
+        ),
+        None => ("--".to_string(), Style::default().fg(Color::DarkGray)),
+    };
+
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        format!("{:02X}:{:<7}", service.service_id(), text),
+        style,
+    ));
+}
+
+fn diagnostic_scan_scope_label(scope: &DiagnosticScanScope) -> String {
+    let raw = match scope {
+        DiagnosticScanScope::Broadcast => "broadcast",
+        DiagnosticScanScope::Module(module) => module.as_str(),
+    };
+    if raw.len() <= 9 {
+        raw.to_string()
+    } else {
+        raw[..9].to_string()
+    }
+}
+
+fn diagnostic_scan_result_label(result: &DiagnosticScanResult) -> String {
+    match result {
+        DiagnosticScanResult::Codes(count) => format!("{count} dtc"),
+        DiagnosticScanResult::Empty => "empty".to_string(),
+        DiagnosticScanResult::NoData => "no data".to_string(),
+        DiagnosticScanResult::Unsupported(_) => "unsup".to_string(),
+        DiagnosticScanResult::Error(_) => "error".to_string(),
+    }
+}
+
+fn diagnostic_scan_result_color(result: &DiagnosticScanResult) -> Color {
+    match result {
+        DiagnosticScanResult::Codes(_) => Color::Red,
+        DiagnosticScanResult::Empty => Color::Green,
+        DiagnosticScanResult::NoData => Color::DarkGray,
+        DiagnosticScanResult::Unsupported(_) => Color::Yellow,
+        DiagnosticScanResult::Error(_) => Color::Red,
+    }
+}
+
+fn count_diagnostic_scan_targets(state: &AppState) -> usize {
+    let mut count = 0;
+    let mut last_scope: Option<&DiagnosticScanScope> = None;
+    for entry in &state.domain.diagnostic_scan {
+        if last_scope != Some(&entry.scope) {
+            count += 1;
+            last_scope = Some(&entry.scope);
+        }
+    }
+    count
+}
+
 fn render_readiness_panel(frame: &mut Frame, area: Rect, state: &AppState, block: Block<'_>) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1078,7 +1230,7 @@ fn render_readiness_panel(frame: &mut Frame, area: Rect, state: &AppState, block
                 Span::raw("  MIL: "),
                 Span::styled(mil_text, mil_style),
                 Span::raw(format!("  DTCs: {}  ", status.dtc_count)),
-                Span::raw(if status.compression_ignition { "Diesel" } else { "Spark" }),
+                Span::raw(state.domain.readiness_ignition_label(status)),
             ]));
             lines.push(Line::from(""));
 

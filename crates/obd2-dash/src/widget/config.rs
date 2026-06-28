@@ -37,36 +37,13 @@ pub struct DashboardConfig {
 }
 
 impl DashboardConfig {
-    /// Returns the default layout matching the current hardcoded 6-panel grid exactly.
+    /// Returns the default full dashboard layout.
     pub fn default_layout() -> Self {
         DashboardConfig {
             version: 1,
             rows: vec![
-                // Row 0: Gauges+Engine (60%) | Temperatures (40%) — Min(10)
                 WidgetRow {
                     widgets: vec![
-                        WidgetSlot {
-                            kind: WidgetKind::GaugesAndEngine,
-                            size: WidgetSize::Half,
-                        },
-                        WidgetSlot {
-                            kind: WidgetKind::TemperaturesPanel,
-                            size: WidgetSize::Half,
-                        },
-                    ],
-                    height: RowHeight::Min(10),
-                },
-                // Row 1: FuelSystem | SystemInfo | DTCs | Alerts — Fixed(12)
-                WidgetRow {
-                    widgets: vec![
-                        WidgetSlot {
-                            kind: WidgetKind::FuelSystemPanel,
-                            size: WidgetSize::Half,
-                        },
-                        WidgetSlot {
-                            kind: WidgetKind::SystemInfoPanel,
-                            size: WidgetSize::Half,
-                        },
                         WidgetSlot {
                             kind: WidgetKind::DtcPanel,
                             size: WidgetSize::Half,
@@ -76,15 +53,61 @@ impl DashboardConfig {
                             size: WidgetSize::Half,
                         },
                     ],
-                    height: RowHeight::Fixed(12),
+                    height: RowHeight::Fixed(8),
                 },
-                // Row 2: FuelEconomy (full width) — Fixed(10)
                 WidgetRow {
                     widgets: vec![WidgetSlot {
-                        kind: WidgetKind::FuelEconomyPanel,
+                        kind: WidgetKind::DiagnosticScanPanel,
                         size: WidgetSize::Full,
                     }],
-                    height: RowHeight::Fixed(10),
+                    height: RowHeight::Fixed(8),
+                },
+                WidgetRow {
+                    widgets: vec![WidgetSlot {
+                        kind: WidgetKind::EnhancedPidsPanel,
+                        size: WidgetSize::Full,
+                    }],
+                    height: RowHeight::Fixed(16),
+                },
+                WidgetRow {
+                    widgets: vec![WidgetSlot {
+                        kind: WidgetKind::SystemInfoPanel,
+                        size: WidgetSize::Full,
+                    }],
+                    height: RowHeight::Fixed(7),
+                },
+                WidgetRow {
+                    widgets: vec![
+                        WidgetSlot {
+                            kind: WidgetKind::IntakeMapDisplay,
+                            size: WidgetSize::Half,
+                        },
+                        WidgetSlot {
+                            kind: WidgetKind::BoostPressureDisplay,
+                            size: WidgetSize::Half,
+                        },
+                    ],
+                    height: RowHeight::Fixed(7),
+                },
+                WidgetRow {
+                    widgets: vec![
+                        WidgetSlot {
+                            kind: WidgetKind::TemperaturesPanel,
+                            size: WidgetSize::Half,
+                        },
+                        WidgetSlot {
+                            kind: WidgetKind::MafDisplay,
+                            size: WidgetSize::Half,
+                        },
+                    ],
+                    height: RowHeight::Fixed(8),
+                },
+                WidgetRow {
+                    widgets: vec![WidgetSlot {
+                        kind: WidgetKind::ReadinessPanel,
+                        size: WidgetSize::Full,
+                    }],
+                    height: RowHeight::Fixed(8),
                 },
             ],
         }
@@ -188,11 +211,17 @@ impl DashboardConfig {
                     .collect()
             }
             _ => {
-                // Default proportions based on the original layout
+                // Default proportions based on widget density.
                 match (row_idx, n) {
-                    (0, 2) => vec![60, 40],
+                    (_, 2)
+                        if row.widgets[0].kind == WidgetKind::GaugesAndEngine
+                            && row.widgets[1].kind == WidgetKind::TemperaturesPanel =>
+                    {
+                        vec![60, 40]
+                    }
                     (1, 4) => vec![27, 27, 23, 23],
                     (1, 3) => vec![35, 35, 30],
+                    (_, 2) => vec![50, 50],
                     _ => {
                         let each = 100 / n as u16;
                         let mut pcts: Vec<u16> = vec![each; n];

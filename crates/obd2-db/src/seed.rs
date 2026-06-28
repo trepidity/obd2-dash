@@ -238,7 +238,7 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         redline_rpm: Some(3400),
         idle_rpm_cold: Some(800),
         idle_rpm_warm: Some(600),
-        max_power_kw: Some(354.0),  // 475 hp (2024+)
+        max_power_kw: Some(354.0),   // 475 hp (2024+)
         max_torque_nm: Some(1424.0), // 1050 lb-ft
     })?;
 
@@ -327,7 +327,7 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         redline_rpm: Some(3200),
         idle_rpm_cold: Some(900),
         idle_rpm_warm: Some(650),
-        max_power_kw: Some(296.0),  // 397 hp
+        max_power_kw: Some(296.0),   // 397 hp
         max_torque_nm: Some(1037.0), // 765 lb-ft
     })?;
 
@@ -344,7 +344,7 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         redline_rpm: Some(3200),
         idle_rpm_cold: Some(850),
         idle_rpm_warm: Some(625),
-        max_power_kw: Some(350.0),  // 470 hp (2024+)
+        max_power_kw: Some(350.0),   // 470 hp (2024+)
         max_torque_nm: Some(1234.0), // 910 lb-ft
     })?;
 
@@ -414,7 +414,7 @@ fn seed_engine_families(db: &Database) -> Result<()> {
         redline_rpm: Some(3200),
         idle_rpm_cold: Some(850),
         idle_rpm_warm: Some(625),
-        max_power_kw: Some(313.0),  // 420 hp (2024+)
+        max_power_kw: Some(313.0),   // 420 hp (2024+)
         max_torque_nm: Some(1356.0), // 1000 lb-ft
     })?;
 
@@ -1214,8 +1214,11 @@ fn seed_engine_family_overrides(db: &Database) -> Result<()> {
 
 /// Look up an engine family ID by code, returning a descriptive error instead of panicking.
 fn require_engine_family(db: &Database, code: &str) -> Result<i64> {
-    db.get_engine_family_code_id(code)?
-        .ok_or_else(|| anyhow::anyhow!("engine family '{code}' not found — was seed_engine_families() called first?"))
+    db.get_engine_family_code_id(code)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "engine family '{code}' not found — was seed_engine_families() called first?"
+        )
+    })
 }
 
 /// Generate RPM + coolant threshold overrides for an engine family.

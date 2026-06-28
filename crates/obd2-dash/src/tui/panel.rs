@@ -6,6 +6,7 @@ use ratatui::{
 };
 
 use crate::app::{AppState, PopupState};
+use crate::domain::EnhancedReading;
 use obd2_core::protocol::pid::Pid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,13 +233,17 @@ fn pid_value_from_vehicle(v: &crate::vehicle_data::VehicleData, pid: Pid) -> Opt
 
 fn pid_item(state: &AppState, pid: Pid) -> PanelItem {
     let reading_val = pid_value_from_vehicle(&state.domain.vehicle, pid);
+    let display = reading_val.map(|value| state.domain.display_pid_value(pid, value));
+    let display_unit = display
+        .map(|(_, unit)| unit)
+        .unwrap_or_else(|| state.domain.display_pid_value(pid, 0.0).1);
 
     PanelItem {
         label: pid.name().to_string(),
         detail: PanelItemDetail::Pid {
             pid_code: pid.0,
-            current_value: reading_val,
-            unit: pid.unit(),
+            current_value: display.map(|(value, _)| value),
+            unit: display_unit,
             name: pid.name(),
         },
     }
@@ -267,8 +272,12 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
                     label: "Boost".to_string(),
                     detail: PanelItemDetail::DerivedValue {
                         label: "Boost Pressure",
-                        value: state.domain.vehicle.boost_pressure,
-                        unit: "kPa",
+                        value: state
+                            .domain
+                            .vehicle
+                            .boost_pressure
+                            .map(|value| state.domain.display_pressure_value(value).0),
+                        unit: state.domain.display_pressure_value(0.0).1,
                         description: "Derived: MAP - Barometric Pressure",
                     },
                 });
@@ -414,45 +423,45 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             }
             items
         }
-        PanelKind::Enhanced => {
-            state
-                .domain
-                .enhanced_readings
-                .iter()
-                .map(|r| PanelItem {
+        PanelKind::Enhanced => state
+            .domain
+            .enhanced_readings
+            .iter()
+            .map(|r| {
+                let display = r
+                    .value
+                    .map(|value| state.domain.display_unit_value(value, &r.unit));
+                let value = display.as_ref().map(|(value, _)| *value);
+                let unit = display
+                    .map(|(_, unit)| unit.into_owned())
+                    .unwrap_or_else(|| r.unit.clone());
+                PanelItem {
                     label: r.name.clone(),
                     detail: PanelItemDetail::DerivedValue {
                         label: Box::leak(r.name.clone().into_boxed_str()),
-                        value: Some(r.value),
-                        unit: Box::leak(r.unit.clone().into_boxed_str()),
-                        description: Box::leak(
-                            format!("Enhanced DID 0x{:04X} [{}]", r.did, r.module)
-                                .into_boxed_str(),
-                        ),
+                        value,
+                        unit: Box::leak(unit.into_boxed_str()),
+                        description: Box::leak(enhanced_description(r).into_boxed_str()),
                     },
-                })
-                .collect()
-        }
-        PanelKind::O2Sensors => {
-            state
-                .domain
-                .o2_readings
-                .iter()
-                .map(|r| PanelItem {
-                    label: format!("{} {}", r.sensor, r.test_name),
-                    detail: PanelItemDetail::DerivedValue {
-                        label: Box::leak(
-                            format!("{} {}", r.sensor, r.test_name).into_boxed_str(),
-                        ),
-                        value: Some(r.value),
-                        unit: Box::leak(r.unit.clone().into_boxed_str()),
-                        description: Box::leak(
-                            format!("O2 {} - {}", r.sensor, r.test_name).into_boxed_str(),
-                        ),
-                    },
-                })
-                .collect()
-        }
+                }
+            })
+            .collect(),
+        PanelKind::O2Sensors => state
+            .domain
+            .o2_readings
+            .iter()
+            .map(|r| PanelItem {
+                label: format!("{} {}", r.sensor, r.test_name),
+                detail: PanelItemDetail::DerivedValue {
+                    label: Box::leak(format!("{} {}", r.sensor, r.test_name).into_boxed_str()),
+                    value: Some(r.value),
+                    unit: Box::leak(r.unit.clone().into_boxed_str()),
+                    description: Box::leak(
+                        format!("O2 {} - {}", r.sensor, r.test_name).into_boxed_str(),
+                    ),
+                },
+            })
+            .collect(),
         PanelKind::Dtcs => state
             .domain
             .stored_dtcs
@@ -512,12 +521,14 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             });
 
             let gold_rate = fe.gold.as_ref().map(|g| g.fuel_rate_lph);
+            let gold_rate_display =
+                gold_rate.map(|value| state.domain.display_fuel_rate_value(value).0);
             items.push(PanelItem {
                 label: "Gold Fuel Rate".to_string(),
                 detail: PanelItemDetail::DerivedValue {
                     label: "ECU Fuel Rate",
-                    value: gold_rate,
-                    unit: "L/h",
+                    value: gold_rate_display,
+                    unit: state.domain.display_fuel_rate_value(0.0).1,
                     description: "Gold standard fuel consumption rate",
                 },
             });
@@ -554,12 +565,14 @@ pub fn panel_items(kind: PanelKind, state: &AppState) -> Vec<PanelItem> {
             });
 
             let adv_rate = fe.advanced.as_ref().map(|a| a.corrected_fuel_rate_lph);
+            let adv_rate_display =
+                adv_rate.map(|value| state.domain.display_fuel_rate_value(value).0);
             items.push(PanelItem {
                 label: "Adv Fuel Rate".to_string(),
                 detail: PanelItemDetail::DerivedValue {
                     label: "Calc Fuel Rate",
-                    value: adv_rate,
-                    unit: "L/h",
+                    value: adv_rate_display,
+                    unit: state.domain.display_fuel_rate_value(0.0).1,
                     description: "Speed-density corrected fuel consumption rate",
                 },
             });
@@ -589,6 +602,14 @@ pub fn panel_item_count(panel_index: usize, state: &AppState) -> usize {
         .unwrap_or(0)
 }
 
+fn enhanced_description(reading: &EnhancedReading) -> String {
+    let source = format!("Enhanced DID 0x{:04X} [{}]", reading.did, reading.module);
+    match &reading.last_error {
+        Some(error) => format!("{source}; last error: {error}"),
+        None => source,
+    }
+}
+
 pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> Option<PopupState> {
     let kind = panel_kind_for_index(panel_index)?;
     let items = panel_items(kind, state);
@@ -616,20 +637,35 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
             if let Some(threshold) = state.domain.thresholds_cache.get(pid_code) {
                 lines.push("Thresholds:".to_string());
                 if let Some(lc) = threshold.low_critical {
-                    lines.push(format!("  Low Critical:  {:.1} {}", lc, threshold.unit));
+                    let (value, unit) = state.domain.display_pid_value(Pid(*pid_code), lc);
+                    lines.push(format!("  Low Critical:  {:.1} {}", value, unit));
                 }
                 if let Some(lw) = threshold.low_warning {
-                    lines.push(format!("  Low Warning:   {:.1} {}", lw, threshold.unit));
+                    let (value, unit) = state.domain.display_pid_value(Pid(*pid_code), lw);
+                    lines.push(format!("  Low Warning:   {:.1} {}", value, unit));
                 }
                 if let Some(hw) = threshold.high_warning {
-                    lines.push(format!("  High Warning:  {:.1} {}", hw, threshold.unit));
+                    let (value, unit) = state.domain.display_pid_value(Pid(*pid_code), hw);
+                    lines.push(format!("  High Warning:  {:.1} {}", value, unit));
                 }
                 if let Some(hc) = threshold.high_critical {
-                    lines.push(format!("  High Critical: {:.1} {}", hc, threshold.unit));
+                    let (value, unit) = state.domain.display_pid_value(Pid(*pid_code), hc);
+                    lines.push(format!("  High Critical: {:.1} {}", value, unit));
                 }
+                let (min_value, min_unit) = state
+                    .domain
+                    .display_pid_value(Pid(*pid_code), threshold.min_value);
+                let (max_value, max_unit) = state
+                    .domain
+                    .display_pid_value(Pid(*pid_code), threshold.max_value);
+                let unit = if min_unit == max_unit {
+                    min_unit
+                } else {
+                    threshold.unit.as_str()
+                };
                 lines.push(format!(
                     "  Range: {:.1} - {:.1} {}",
-                    threshold.min_value, threshold.max_value, threshold.unit
+                    min_value, max_value, unit
                 ));
             } else {
                 lines.push("No thresholds configured".to_string());
@@ -662,10 +698,7 @@ pub fn build_popup(panel_index: usize, item_index: usize, state: &AppState) -> O
             severity,
             notes,
         } => {
-            let mut lines = vec![
-                format!("Code: {}", code),
-                format!("Category: {}", category),
-            ];
+            let mut lines = vec![format!("Code: {}", code), format!("Category: {}", category)];
             if let Some(sev) = severity {
                 lines.push(format!("Severity: {}", sev));
             }
@@ -771,9 +804,7 @@ pub fn render_panel(
         PanelKind::FuelEconomy => {
             super::ui::render_full_fuel_economy(frame, area, state, block, selected)
         }
-        PanelKind::Enhanced => {
-            super::ui::render_full_enhanced(frame, area, state, block, selected)
-        }
+        PanelKind::Enhanced => super::ui::render_full_enhanced(frame, area, state, block, selected),
         PanelKind::O2Sensors => {
             super::ui::render_full_o2_sensors(frame, area, state, block, selected)
         }

@@ -8,11 +8,11 @@ use ratatui::{
 
 use crate::app::{AppState, DashboardLayout, PopupState, ScanMode};
 use crate::debug_log::LogBuffer;
+use crate::domain::{ConnectionState, EnhancedReading};
 use crate::widget::config::RowHeight;
 use crate::widget::edit_mode::EditPhase;
 use crate::widget::renderers;
 use obd2_core::protocol::dtc::DtcCategory;
-use crate::domain::ConnectionState;
 
 use crate::recording::RecordingState;
 
@@ -564,7 +564,9 @@ fn render_full_header(frame: &mut Frame, area: Rect, state: &AppState) {
         spans.push(Span::styled(" ", Style::default()));
         spans.push(Span::styled(
             "RAW",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -617,12 +619,7 @@ pub(crate) fn render_full_gauges_and_engine(
         .split(inner);
 
     // RPM gauge — item 0
-    let rpm_val = state
-        .domain
-        .vehicle
-        .rpm
-        
-        .unwrap_or(0.0);
+    let rpm_val = state.domain.vehicle.rpm.unwrap_or(0.0);
     let rpm_color = threshold_color_for_pid(state, 0x0C, rpm_val, || rpm_color_default(rpm_val));
     let max_rpm = state
         .domain
@@ -666,7 +663,15 @@ pub(crate) fn render_full_gauges_and_engine(
     frame.render_widget(sparkline, chunks[1]);
 
     // Speed gauge — item 1
-    let (speed_val, speed_unit_str) = state.domain.display_speed().unwrap_or((0.0, "km/h"));
+    let speed_unit_fallback = if state.domain.uses_us_customary_units() {
+        "mph"
+    } else {
+        "km/h"
+    };
+    let (speed_val, speed_unit_str) = state
+        .domain
+        .display_speed()
+        .unwrap_or((0.0, speed_unit_fallback));
     let speed_color = threshold_color_for_pid(state, 0x0D, speed_val, || Color::Blue);
 
     let speed_border = if selected_item == Some(1) {
@@ -707,12 +712,7 @@ pub(crate) fn render_full_gauges_and_engine(
     let engine_item_start = 2; // Items 0=RPM, 1=Speed, 2+=engine lines
 
     // Load gauge line
-    let load_val = state
-        .domain
-        .vehicle
-        .engine_load
-        
-        .unwrap_or(0.0);
+    let load_val = state.domain.vehicle.engine_load.unwrap_or(0.0);
     let load_color = threshold_color_for_pid(state, 0x04, load_val, || Color::Magenta);
     lines.push(make_engine_line(
         "Load",
@@ -724,12 +724,7 @@ pub(crate) fn render_full_gauges_and_engine(
     ));
 
     // Throttle
-    let throttle_val = state
-        .domain
-        .vehicle
-        .throttle_position
-        
-        .unwrap_or(0.0);
+    let throttle_val = state.domain.vehicle.throttle_position.unwrap_or(0.0);
     let throttle_color = threshold_color_for_pid(state, 0x11, throttle_val, || Color::Cyan);
     lines.push(make_engine_line(
         "Thrtl",
@@ -746,9 +741,10 @@ pub(crate) fn render_full_gauges_and_engine(
     // MAP
     if let Some(r) = state.domain.vehicle.intake_map {
         let color = threshold_color_for_pid(state, 0x0B, r, || Color::White);
+        let (value, unit) = state.domain.display_pressure_value(r);
         lines.push(make_engine_line(
             "MAP",
-            &format!("{:.0} kPa", r),
+            &format!("{:.1} {}", value, unit),
             color,
             selected_item,
             engine_item_start,
@@ -760,9 +756,10 @@ pub(crate) fn render_full_gauges_and_engine(
     // MAF
     if let Some(r) = state.domain.vehicle.maf {
         let color = threshold_color_for_pid(state, 0x10, r, || Color::White);
+        let (value, unit) = state.domain.display_mass_air_flow_value(r);
         lines.push(make_engine_line(
             "MAF",
-            &format!("{:.1} g/s", r),
+            &format!("{:.1} {}", value, unit),
             color,
             selected_item,
             engine_item_start,
@@ -774,9 +771,10 @@ pub(crate) fn render_full_gauges_and_engine(
     // Fuel pressure
     if let Some(r) = state.domain.vehicle.fuel_pressure {
         let color = threshold_color_for_pid(state, 0x0A, r, || Color::White);
+        let (value, unit) = state.domain.display_pressure_value(r);
         lines.push(make_engine_line(
             "Fuel P",
-            &format!("{:.0} kPa", r),
+            &format!("{:.1} {}", value, unit),
             color,
             selected_item,
             engine_item_start,
@@ -792,9 +790,10 @@ pub(crate) fn render_full_gauges_and_engine(
         } else {
             Color::DarkGray
         };
+        let (value, unit) = state.domain.display_pressure_value(boost);
         lines.push(make_engine_line(
             "Boost",
-            &format!("{:.1} kPa", boost),
+            &format!("{:.1} {}", value, unit),
             color,
             selected_item,
             engine_item_start,
@@ -814,9 +813,10 @@ pub(crate) fn render_full_gauges_and_engine(
                 Color::Green
             }
         });
+        let (value, unit) = state.domain.display_pressure_value(r);
         lines.push(make_engine_line(
             "Oil P",
-            &format!("{:.0} kPa", r),
+            &format!("{:.1} {}", value, unit),
             color,
             selected_item,
             engine_item_start,
@@ -852,8 +852,7 @@ pub(crate) fn render_full_temperatures(
                     sel: Option<usize>| {
         let line = if let Some(v) = reading {
             let (val, unit) = state.domain.display_temp_value(*v);
-            let color =
-                threshold_color_for_pid(state, pid_code, *v, || temp_color_default(*v));
+            let color = threshold_color_for_pid(state, pid_code, *v, || temp_color_default(*v));
             make_value_line(label, &format!("{:.1}{}", val, unit), color)
         } else {
             make_value_line(label, "--", Color::DarkGray)
@@ -978,7 +977,8 @@ pub(crate) fn render_full_fuel_system(
     // Fuel rate — conditional
     if let Some(r) = state.domain.vehicle.engine_fuel_rate {
         let color = threshold_color_for_pid(state, 0x5E, r, || Color::White);
-        let line = make_value_line("Rate", &format!("{:.1} L/h", r), color);
+        let (value, unit) = state.domain.display_fuel_rate_value(r);
+        let line = make_value_line("Rate", &format!("{:.1} {}", value, unit), color);
         lines.push(maybe_highlight(line, selected_item, item_idx));
         item_idx += 1;
     }
@@ -1050,12 +1050,20 @@ pub(crate) fn render_full_system_info(
     }
 
     // Barometric
-    if let Some(r) = state.domain.vehicle.barometric_pressure {
-        let color = threshold_color_for_pid(state, 0x33, r, || Color::White);
-        let line = make_value_line("Barometric", &format!("{:.1} kPa", r), color);
-        lines.push(maybe_highlight(line, selected_item, item_idx));
-        item_idx += 1;
-    }
+    let (baro_text, baro_color) = match state.domain.vehicle.barometric_pressure {
+        Some(r) => {
+            let color = threshold_color_for_pid(state, 0x33, r, || Color::White);
+            let (value, unit) = state.domain.display_pressure_value(r);
+            (format!("{:.1} {}", value, unit), color)
+        }
+        None => (
+            format!("-- {}", state.domain.display_pressure_value(0.0).1),
+            Color::DarkGray,
+        ),
+    };
+    let line = make_value_line("Barometric", &baro_text, baro_color);
+    lines.push(maybe_highlight(line, selected_item, item_idx));
+    item_idx += 1;
 
     // Blank separator line (not selectable)
     lines.push(Line::from(""));
@@ -1118,7 +1126,7 @@ pub(crate) fn render_full_dtcs(
 
     if dtcs.is_empty() {
         lines.push(Line::from(Span::styled(
-            " No stored codes",
+            " No diagnostic codes",
             Style::default().fg(Color::Green),
         )));
     } else {
@@ -1217,10 +1225,11 @@ fn render_gold_side(frame: &mut Frame, area: Rect, state: &AppState, selected_it
     lines.push(maybe_highlight(avg_line, selected_item, 2));
 
     let rate = fe.gold.as_ref().map(|g| g.fuel_rate_lph).unwrap_or(0.0);
+    let (rate_display, rate_unit) = state.domain.display_fuel_rate_value(rate);
     let rate_line = Line::from(vec![
         Span::styled(" Rate:    ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{:.1} L/h", rate),
+            format!("{:.1} {}", rate_display, rate_unit),
             Style::default().fg(Color::White),
         ),
     ]);
@@ -1306,14 +1315,16 @@ fn render_advanced_side(
         .as_ref()
         .map(|a| a.base_fuel_rate_lph)
         .unwrap_or(0.0);
+    let (rate_display, rate_unit) = state.domain.display_fuel_rate_value(rate);
+    let (base_rate_display, _) = state.domain.display_fuel_rate_value(base_rate);
     let rate_line = Line::from(vec![
         Span::styled(" Rate:    ", Style::default().fg(Color::DarkGray)),
         Span::styled(
-            format!("{:.1} L/h", rate),
+            format!("{:.1} {}", rate_display, rate_unit),
             Style::default().fg(Color::White),
         ),
         Span::styled(
-            format!(" (base {:.1})", base_rate),
+            format!(" (base {:.1})", base_rate_display),
             Style::default().fg(Color::DarkGray),
         ),
     ]);
@@ -1867,12 +1878,7 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 // ─── Shared widget helpers ───────────────────────────────────────────────────
 
 fn render_rpm(frame: &mut Frame, area: Rect, state: &AppState) {
-    let rpm_val = state
-        .domain
-        .vehicle
-        .rpm
-        
-        .unwrap_or(0.0);
+    let rpm_val = state.domain.vehicle.rpm.unwrap_or(0.0);
 
     let color = threshold_color_for_pid(state, 0x0C, rpm_val, || rpm_color_default(rpm_val));
 
@@ -1920,7 +1926,15 @@ fn render_rpm(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_speed(frame: &mut Frame, area: Rect, state: &AppState) {
-    let (speed_val, speed_unit) = state.domain.display_speed().unwrap_or((0.0, "km/h"));
+    let speed_unit_fallback = if state.domain.uses_us_customary_units() {
+        "mph"
+    } else {
+        "km/h"
+    };
+    let (speed_val, speed_unit) = state
+        .domain
+        .display_speed()
+        .unwrap_or((0.0, speed_unit_fallback));
 
     let color = threshold_color_for_pid(state, 0x0D, speed_val, || Color::Blue);
 
@@ -1960,14 +1974,13 @@ fn render_speed(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_coolant(frame: &mut Frame, area: Rect, state: &AppState) {
-    let (temp_val, temp_unit) = state.domain.display_temp().unwrap_or((0.0, "°C"));
-
-    let raw_celsius = state
+    let temp_unit_fallback = state.domain.display_temp_value(0.0).1;
+    let (temp_val, temp_unit) = state
         .domain
-        .vehicle
-        .coolant_temp
-        
-        .unwrap_or(0.0);
+        .display_temp()
+        .unwrap_or((0.0, temp_unit_fallback));
+
+    let raw_celsius = state.domain.vehicle.coolant_temp.unwrap_or(0.0);
     let color =
         threshold_color_for_pid(state, 0x05, raw_celsius, || temp_color_default(raw_celsius));
 
@@ -2148,7 +2161,13 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         };
         format!(
             "Poll: {}ms{} | {} | q/p/u/d/+/-/Tab/l:log{}{}{}{}",
-            state.domain.poll_interval_ms, paused, layout_toggle, edit_hint, rec_hint, cap_hint, scan_hint
+            state.domain.poll_interval_ms,
+            paused,
+            layout_toggle,
+            edit_hint,
+            rec_hint,
+            cap_hint,
+            scan_hint
         )
     };
 
@@ -2211,10 +2230,7 @@ fn make_trim_line<'a>(
                 format!(" {:<12}", label),
                 Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(
-                format!("{}{:.1}%", sign, r),
-                Style::default().fg(color),
-            ),
+            Span::styled(format!("{}{:.1}%", sign, r), Style::default().fg(color)),
         ])
     } else {
         make_value_line(label, "--", Color::DarkGray)
@@ -2258,6 +2274,10 @@ pub(crate) fn threshold_color_for_pid(
     value: f64,
     default_color: impl FnOnce() -> Color,
 ) -> Color {
+    if pid_code == 0x0C && value < 300.0 && state.domain.vehicle.speed.unwrap_or(0.0).abs() < 0.5 {
+        return default_color();
+    }
+
     if let Some(threshold) = state.domain.thresholds_cache.get(&pid_code) {
         if let Some(hc) = threshold.high_critical {
             if value > hc {
@@ -2326,16 +2346,27 @@ pub(crate) fn render_full_enhanced(
             Style::default().fg(Color::DarkGray),
         )));
     } else {
+        let has_fuel_rail_summary = append_fuel_rail_summary(&mut lines, readings, state);
+        let has_vgt_summary = append_vgt_summary(&mut lines, readings, state);
+        let has_injector_summary =
+            append_injector_balance_summary(&mut lines, readings, area.width);
+
         for (i, r) in readings.iter().enumerate() {
+            if summarized_enhanced_did(
+                r.did,
+                has_fuel_rail_summary,
+                has_vgt_summary,
+                has_injector_summary,
+            ) {
+                continue;
+            }
+            let (value, value_style) = enhanced_value_text(r, state);
             let line = Line::from(vec![
                 Span::styled(
                     format!(" {:<20}", r.name),
                     Style::default().fg(Color::DarkGray),
                 ),
-                Span::styled(
-                    format!("{:.2} {}", r.value, r.unit),
-                    Style::default().fg(Color::Cyan),
-                ),
+                Span::styled(value, value_style),
                 Span::styled(
                     format!("  [{}]", r.module),
                     Style::default().fg(Color::DarkGray),
@@ -2347,6 +2378,294 @@ pub(crate) fn render_full_enhanced(
 
     let panel = Paragraph::new(lines).block(block);
     frame.render_widget(panel, area);
+}
+
+fn summarized_enhanced_did(
+    did: u16,
+    has_fuel_rail_summary: bool,
+    has_vgt_summary: bool,
+    has_injector_summary: bool,
+) -> bool {
+    (has_fuel_rail_summary && matches!(did, 0x1170 | 0x1171))
+        || (has_vgt_summary && matches!(did, 0x1540 | 0x1543))
+        || (has_injector_summary && injector_balance_cylinder(did).is_some())
+}
+
+fn append_fuel_rail_summary(
+    lines: &mut Vec<Line>,
+    readings: &[EnhancedReading],
+    state: &AppState,
+) -> bool {
+    let actual_enhanced = enhanced_reading(readings, 0x1170);
+    let desired = enhanced_reading(readings, 0x1171);
+    let actual = state
+        .domain
+        .vehicle
+        .fuel_rail_gauge_pressure
+        .or_else(|| actual_enhanced.and_then(|reading| reading.value));
+
+    if actual.is_none() && actual_enhanced.is_none() && desired.is_none() {
+        return false;
+    }
+
+    let actual_error = actual.is_none() && actual_enhanced.is_some_and(|r| r.last_error.is_some());
+    let desired_error = desired.is_some_and(|r| r.last_error.is_some());
+    let desired_value = desired.and_then(|reading| reading.value);
+    let delta = actual
+        .zip(desired_value)
+        .map(|(actual, desired)| actual - desired);
+
+    let mut spans = vec![Span::styled(
+        " Fuel Rail ",
+        Style::default().fg(Color::DarkGray),
+    )];
+    spans.push(Span::styled(
+        "actual ",
+        Style::default().fg(Color::DarkGray),
+    ));
+    push_pressure_span(&mut spans, state, actual, actual_error, Color::Cyan);
+    spans.push(Span::styled(
+        " / desired ",
+        Style::default().fg(Color::DarkGray),
+    ));
+    push_pressure_span(&mut spans, state, desired_value, desired_error, Color::Cyan);
+    spans.push(Span::styled(
+        " / delta ",
+        Style::default().fg(Color::DarkGray),
+    ));
+    push_delta_pressure_span(&mut spans, state, delta);
+
+    lines.push(Line::from(spans));
+    true
+}
+
+fn push_pressure_span(
+    spans: &mut Vec<Span<'static>>,
+    state: &AppState,
+    value: Option<f64>,
+    has_error: bool,
+    ok_color: Color,
+) {
+    if has_error {
+        spans.push(Span::styled(
+            "ERR",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ));
+    } else if let Some(value) = value {
+        let (value, unit) = state.domain.display_pressure_value(value);
+        spans.push(Span::styled(
+            format!("{:.0} {}", value, unit),
+            Style::default().fg(ok_color),
+        ));
+    } else {
+        let unit = state.domain.display_pressure_value(0.0).1;
+        spans.push(Span::styled(
+            format!("-- {}", unit),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+}
+
+fn push_delta_pressure_span(spans: &mut Vec<Span<'static>>, state: &AppState, value: Option<f64>) {
+    if let Some(value) = value {
+        let color = if value.abs() >= 5_000.0 {
+            Color::Red
+        } else if value.abs() >= 2_000.0 {
+            Color::Yellow
+        } else {
+            Color::Green
+        };
+        let (value, unit) = state.domain.display_pressure_value(value);
+        spans.push(Span::styled(
+            format!("{:+.0} {}", value, unit),
+            Style::default().fg(color),
+        ));
+    } else {
+        let unit = state.domain.display_pressure_value(0.0).1;
+        spans.push(Span::styled(
+            format!("-- {}", unit),
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
+}
+
+fn append_vgt_summary(
+    lines: &mut Vec<Line>,
+    readings: &[EnhancedReading],
+    _state: &AppState,
+) -> bool {
+    let actual = enhanced_reading(readings, 0x1543);
+    let desired = enhanced_reading(readings, 0x1540);
+
+    let mut appended = false;
+    if let (Some(actual), Some(desired)) =
+        (actual.and_then(|r| r.value), desired.and_then(|r| r.value))
+    {
+        let err = actual - desired;
+        let error_style = if err.abs() >= 15.0 {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else if err.abs() > 5.0 {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Green)
+        };
+        lines.push(Line::from(vec![
+            Span::styled(" VGT ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("actual {:.1}% / desired {:.1}% / error ", actual, desired),
+                Style::default().fg(Color::Cyan),
+            ),
+            Span::styled(format!("{:+.1}%", err), error_style),
+        ]));
+        appended = true;
+    }
+
+    appended
+}
+
+fn append_injector_balance_summary(
+    lines: &mut Vec<Line>,
+    readings: &[EnhancedReading],
+    width: u16,
+) -> bool {
+    if !(1..=8).any(|cyl| injector_balance_reading(readings, cyl).is_some()) {
+        return false;
+    }
+
+    if width >= 74 {
+        lines.push(Line::from(Span::styled(
+            " Injector Balance (mm3)",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(injector_balance_header_line(1..=8, " Cyl  "));
+        lines.push(injector_balance_value_line(readings, 1..=8, " mm3  "));
+    } else {
+        lines.push(Line::from(Span::styled(
+            " Injector Balance (mm3)",
+            Style::default().fg(Color::DarkGray),
+        )));
+        lines.push(injector_balance_header_line(1..=4, " Cyl  "));
+        lines.push(injector_balance_value_line(readings, 1..=4, " mm3  "));
+        lines.push(injector_balance_header_line(5..=8, " Cyl  "));
+        lines.push(injector_balance_value_line(readings, 5..=8, " mm3  "));
+    }
+    true
+}
+
+fn injector_balance_header_line(
+    cylinders: std::ops::RangeInclusive<u8>,
+    prefix: &'static str,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.push(Span::styled(prefix, Style::default().fg(Color::DarkGray)));
+    for cyl in cylinders {
+        spans.push(Span::styled("|", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            format!("  C{cyl}  "),
+            Style::default().fg(Color::White),
+        ));
+    }
+    Line::from(spans)
+}
+
+fn injector_balance_value_line(
+    readings: &[EnhancedReading],
+    cylinders: std::ops::RangeInclusive<u8>,
+    prefix: &'static str,
+) -> Line<'static> {
+    let mut spans = Vec::new();
+    spans.push(Span::styled(prefix, Style::default().fg(Color::DarkGray)));
+    for cyl in cylinders {
+        spans.push(Span::styled("|", Style::default().fg(Color::DarkGray)));
+        match injector_balance_reading(readings, cyl) {
+            Some(reading) if reading.last_error.is_some() => {
+                spans.push(Span::styled(
+                    format!("{:^6}", "ERR"),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ));
+            }
+            Some(reading) => match reading.value {
+                Some(value) => {
+                    let style = injector_balance_style(value);
+                    spans.push(Span::styled(format!("{value:+6.1}"), style));
+                }
+                None => {
+                    spans.push(Span::styled(
+                        format!("{:^6}", "--"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+            },
+            None => {
+                spans.push(Span::styled(
+                    format!("{:^6}", "--"),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+        }
+    }
+    Line::from(spans)
+}
+
+fn injector_balance_style(value: f64) -> Style {
+    let abs = value.abs();
+    if abs >= 6.0 {
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+    } else if abs > 4.0 {
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Cyan)
+    }
+}
+
+fn injector_balance_reading(
+    readings: &[EnhancedReading],
+    cylinder: u8,
+) -> Option<&EnhancedReading> {
+    if !(1..=8).contains(&cylinder) {
+        return None;
+    }
+    let did = 0x162E + u16::from(cylinder);
+    readings.iter().find(|reading| reading.did == did)
+}
+
+fn injector_balance_cylinder(did: u16) -> Option<u8> {
+    match did {
+        0x162F..=0x1636 => Some((did - 0x162E) as u8),
+        _ => None,
+    }
+}
+
+fn enhanced_reading(readings: &[EnhancedReading], did: u16) -> Option<&EnhancedReading> {
+    readings.iter().find(|reading| reading.did == did)
+}
+
+fn enhanced_value_text(reading: &EnhancedReading, state: &AppState) -> (String, Style) {
+    if reading.last_error.is_some() {
+        return (
+            "ERR".to_string(),
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        );
+    }
+
+    match reading.value {
+        Some(value) => {
+            let (value, unit) = state.domain.display_unit_value(value, &reading.unit);
+            (
+                format!("{:.2} {}", value, unit),
+                Style::default().fg(Color::Cyan),
+            )
+        }
+        None if reading.unit.is_empty() => ("--".to_string(), Style::default().fg(Color::DarkGray)),
+        None => (
+            format!("-- {}", reading.unit),
+            Style::default().fg(Color::DarkGray),
+        ),
+    }
 }
 
 // ─── O2 Sensors panel ────────────────────────────────────────────────────────

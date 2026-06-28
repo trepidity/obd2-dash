@@ -53,6 +53,7 @@ pub enum WidgetKind {
 
     // Alerts
     AlertsPanel,
+    DiagnosticScanPanel,
 
     // Enhanced & O2
     EnhancedPidsPanel,
@@ -341,6 +342,13 @@ pub fn widget_registry() -> Vec<WidgetMeta> {
             category: WidgetCategory::Diagnostics,
             default_size: WidgetSize::Half,
             description: "Active threshold alerts and errors",
+        },
+        WidgetMeta {
+            kind: WidgetKind::DiagnosticScanPanel,
+            title: "Diagnostic Scan",
+            category: WidgetCategory::Diagnostics,
+            default_size: WidgetSize::Full,
+            description: "Latest DTC scan coverage by service and module",
         },
         // Enhanced & O2
         WidgetMeta {

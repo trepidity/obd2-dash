@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
-use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::enhanced::Reading;
+use obd2_core::protocol::pid::Pid;
 
 /// Ring-buffer history for sparkline display.
 const HISTORY_CAPACITY: usize = 120; // 30s at 4 Hz
@@ -259,8 +259,8 @@ impl VehicleData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
     use obd2_core::protocol::enhanced::{ReadingSource, Value};
+    use std::time::Instant;
 
     fn make_reading(value: f64) -> Reading {
         Reading {

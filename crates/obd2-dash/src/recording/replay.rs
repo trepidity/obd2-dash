@@ -1,6 +1,8 @@
 use std::time::Instant;
 
-use super::format::{RecordingFrame, FRAME_DTC, FRAME_ENHANCED, FRAME_O2, FRAME_PID, FRAME_VOLTAGE};
+use super::format::{
+    RecordingFrame, FRAME_DTC, FRAME_ENHANCED, FRAME_O2, FRAME_PID, FRAME_VOLTAGE,
+};
 use super::index::SessionEntry;
 
 /// Playback speed options.
@@ -274,7 +276,10 @@ mod tests {
         ctrl.toggle_pause(); // Pause immediately
 
         let frames = ctrl.next_frames();
-        assert!(frames.is_empty(), "paused controller should return no frames");
+        assert!(
+            frames.is_empty(),
+            "paused controller should return no frames"
+        );
     }
 
     #[test]
@@ -368,29 +373,48 @@ mod tests {
         let mut ctrl = ReplayController::new(sample_entry(), sample_frames());
         ctrl.toggle_pause();
         let text = ctrl.progress_text();
-        assert!(text.contains("/"), "progress text should contain '/', got '{}'", text);
+        assert!(
+            text.contains("/"),
+            "progress text should contain '/', got '{}'",
+            text
+        );
     }
 
     #[test]
     fn test_frame_type_checks() {
         let pid_frame = RecordingFrame {
-            frame_type: FRAME_PID, offset_ms: 0, pid_code: 0, value: 0.0,
+            frame_type: FRAME_PID,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
             raw_bytes: vec![],
         };
         let voltage_frame = RecordingFrame {
-            frame_type: FRAME_VOLTAGE, offset_ms: 0, pid_code: 0, value: 0.0,
+            frame_type: FRAME_VOLTAGE,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
             raw_bytes: vec![],
         };
         let dtc_frame = RecordingFrame {
-            frame_type: FRAME_DTC, offset_ms: 0, pid_code: 0, value: 0.0,
+            frame_type: FRAME_DTC,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
             raw_bytes: vec![],
         };
         let enhanced_frame = RecordingFrame {
-            frame_type: FRAME_ENHANCED, offset_ms: 0, pid_code: 0, value: 0.0,
+            frame_type: FRAME_ENHANCED,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
             raw_bytes: vec![],
         };
         let o2_frame = RecordingFrame {
-            frame_type: FRAME_O2, offset_ms: 0, pid_code: 0, value: 0.0,
+            frame_type: FRAME_O2,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
             raw_bytes: vec![],
         };
 
