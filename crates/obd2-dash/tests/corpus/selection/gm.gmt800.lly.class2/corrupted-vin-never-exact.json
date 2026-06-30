@@ -1,0 +1,12 @@
+{
+  "name": "corrupted LLY-shaped VIN remains partial",
+  "protocol": "J1850Vpw",
+  "vin": "1GCHK232I4F000001",
+  "vin_confidence": "Corrupted",
+  "use_embedded_spec": true,
+  "expected": {
+    "selected": false,
+    "exact": [],
+    "partial": ["gm.gmt800.lly.class2"]
+  }
+}

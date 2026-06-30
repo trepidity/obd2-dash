@@ -43,9 +43,11 @@ use widget::edit_mode::{EditModeState, EditPhase};
 // New obd2-core imports
 use obd2_core::adapter::elm327::Elm327Adapter;
 use obd2_core::adapter::mock::MockAdapter;
+use obd2_core::protocol::dtc::Dtc;
 use obd2_core::protocol::enhanced::Reading;
 use obd2_core::protocol::pid::Pid;
 use obd2_core::session::Session;
+use obd2_dash::profiles::{dtc_status_from_label, ProfileDecodedEvidence};
 use session_runner::{
     build_mock_capture_handle, prepare_session, run_prepared_session, run_session_task,
     SessionRunnerConfig,
@@ -683,6 +685,8 @@ async fn run_tui(
                                 name,
                                 value: frame.value,
                                 unit,
+                                confidence: None,
+                                evidence: None,
                             });
                         }
                     } else if recording::replay::ReplayController::is_o2_frame(&frame) {
@@ -695,6 +699,47 @@ async fn run_tui(
                                     unit,
                                 },
                             ]));
+                        }
+                    } else if recording::replay::ReplayController::is_profile_value_frame(&frame) {
+                        if let Some(record) = frame.decode_profile_evidence() {
+                            if let Some(ProfileDecodedEvidence::Signal {
+                                label,
+                                did,
+                                value,
+                                unit,
+                                confidence,
+                                ..
+                            }) = record.decoded
+                            {
+                                state.update(Message::EnhancedPidUpdate {
+                                    did: did.unwrap_or(0),
+                                    module: record.module,
+                                    name: label,
+                                    value,
+                                    unit,
+                                    confidence: Some(confidence),
+                                    evidence: Some(format!(
+                                        "{}:{}",
+                                        record.profile_id, record.capability_id
+                                    )),
+                                });
+                            }
+                        }
+                    } else if recording::replay::ReplayController::is_profile_dtc_frame(&frame) {
+                        if let Some(record) = frame.decode_profile_evidence() {
+                            if let Some(ProfileDecodedEvidence::Dtcs { records }) = record.decoded {
+                                let dtcs = records
+                                    .into_iter()
+                                    .map(|record| {
+                                        let mut dtc = Dtc::from_code(&record.code);
+                                        dtc.status = dtc_status_from_label(&record.status);
+                                        dtc.source_module = record.module;
+                                        dtc.notes = record.notes;
+                                        dtc
+                                    })
+                                    .collect();
+                                state.update(Message::DtcUpdate(dtcs));
+                            }
                         }
                     }
                 }

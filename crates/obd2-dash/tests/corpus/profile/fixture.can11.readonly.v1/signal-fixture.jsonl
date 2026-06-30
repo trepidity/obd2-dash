@@ -1,0 +1,1 @@
+{"capture":"synthetic-fixture-can11","profile_id":"fixture.can11.readonly.v1","service_id":34,"did":61441,"signal_key":"fixture.coolant_c","module":"ecm","request_hex":"22F001","request_header_hex":"7E0","payload_hex":"1388","expected":{"selected_raw":5000,"value":50.0,"unit":"C"}}

@@ -1,0 +1,12 @@
+{
+  "name": "confirmed LLY identity selects profile",
+  "protocol": "J1850Vpw",
+  "vin": "1GCHK23224F000001",
+  "vin_confidence": "Confirmed",
+  "use_embedded_spec": true,
+  "expected": {
+    "selected": true,
+    "exact": ["gm.gmt800.lly.class2"],
+    "partial": []
+  }
+}

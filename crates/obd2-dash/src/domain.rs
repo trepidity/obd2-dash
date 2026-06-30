@@ -9,6 +9,8 @@ use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::service::ReadinessStatus;
 use obd2_core::session::discovery::{DiscoveryProfile, VisibleEcu};
 use obd2_core::vehicle::{ModuleId, Protocol};
+use obd2_dash::gm_evidence::GmEvidenceRecord;
+use obd2_dash::profiles::ProfileEvidenceRecord;
 
 use crate::analysis::driving::DrivingBehavior;
 use crate::analysis::fuel_economy::{FuelEconomyState, SensorSnapshot};
@@ -16,8 +18,6 @@ use crate::recording::storage::StorageManager;
 use crate::recording::RecordingState;
 use crate::vehicle_data::VehicleData;
 use obd2_db::models::{Alert, AlertLevel, ResolvedThreshold, VehicleInfo};
-
-const LB_PER_MIN_PER_GRAM_PER_SEC: f64 = 0.132_277_357_3;
 
 /// A snapshot of an enhanced (manufacturer-specific) PID reading.
 #[derive(Debug, Clone)]
@@ -28,6 +28,8 @@ pub struct EnhancedReading {
     pub value: Option<f64>,
     pub unit: String,
     pub last_error: Option<String>,
+    pub confidence: Option<String>,
+    pub evidence: Option<String>,
 }
 
 /// A snapshot of an O2 sensor monitoring test result.
@@ -60,11 +62,13 @@ pub enum DiagnosticScanScope {
     Module(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DtcService {
     Stored,
     Pending,
     Permanent,
+    GmClass2All,
+    GmClass2Active,
 }
 
 impl DtcService {
@@ -73,6 +77,17 @@ impl DtcService {
             Self::Stored => 0x03,
             Self::Pending => 0x07,
             Self::Permanent => 0x0A,
+            Self::GmClass2All | Self::GmClass2Active => 0x19,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stored => "03",
+            Self::Pending => "07",
+            Self::Permanent => "0A",
+            Self::GmClass2All => "19ff",
+            Self::GmClass2Active => "1992",
         }
     }
 }
@@ -139,12 +154,16 @@ pub enum DomainMessage {
         name: String,
         value: f64,
         unit: String,
+        confidence: Option<String>,
+        evidence: Option<String>,
     },
     EnhancedPidTarget {
         did: u16,
         module: String,
         name: String,
         unit: String,
+        confidence: Option<String>,
+        evidence: Option<String>,
     },
     EnhancedPidError {
         did: u16,
@@ -152,9 +171,13 @@ pub enum DomainMessage {
         name: String,
         unit: String,
         error: String,
+        confidence: Option<String>,
+        evidence: Option<String>,
     },
     O2MonitoringUpdate(Vec<O2Reading>),
     ReadinessUpdate(ReadinessStatus),
+    ProfileEvidence(Box<ProfileEvidenceRecord>),
+    ActiveTestAttempt(Box<GmEvidenceRecord>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -296,6 +319,7 @@ impl DomainState {
                     ref name,
                     value,
                     ref unit,
+                    ..
                 } => {
                     let _ = writer.write_enhanced(offset_ms, *did, module, name, unit, *value);
                 }
@@ -306,6 +330,12 @@ impl DomainState {
                         let _ =
                             writer.write_o2(offset_ms, &r.test_name, &r.sensor, &r.unit, r.value);
                     }
+                }
+                DomainMessage::ProfileEvidence(record) => {
+                    let _ = writer.write_profile_evidence(offset_ms, record);
+                }
+                DomainMessage::ActiveTestAttempt(record) => {
+                    let _ = writer.write_active_test_attempt(offset_ms, record);
                 }
                 _ => {}
             }
@@ -390,6 +420,8 @@ impl DomainState {
                 name,
                 value,
                 unit,
+                confidence,
+                evidence,
             } => {
                 // Upsert: find existing by (did, module) or insert
                 if let Some(existing) = self
@@ -401,6 +433,8 @@ impl DomainState {
                     existing.name = name;
                     existing.unit = unit;
                     existing.last_error = None;
+                    existing.confidence = confidence;
+                    existing.evidence = evidence;
                 } else {
                     self.enhanced_readings.push(EnhancedReading {
                         did,
@@ -409,6 +443,8 @@ impl DomainState {
                         value: Some(value),
                         unit,
                         last_error: None,
+                        confidence,
+                        evidence,
                     });
                 }
             }
@@ -417,6 +453,8 @@ impl DomainState {
                 module,
                 name,
                 unit,
+                confidence,
+                evidence,
             } => {
                 if let Some(existing) = self
                     .enhanced_readings
@@ -425,6 +463,8 @@ impl DomainState {
                 {
                     existing.name = name;
                     existing.unit = unit;
+                    existing.confidence = confidence;
+                    existing.evidence = evidence;
                 } else {
                     self.enhanced_readings.push(EnhancedReading {
                         did,
@@ -433,6 +473,8 @@ impl DomainState {
                         value: None,
                         unit,
                         last_error: None,
+                        confidence,
+                        evidence,
                     });
                 }
             }
@@ -442,6 +484,8 @@ impl DomainState {
                 name,
                 unit,
                 error,
+                confidence,
+                evidence,
             } => {
                 if let Some(existing) = self
                     .enhanced_readings
@@ -452,6 +496,8 @@ impl DomainState {
                     existing.name = name;
                     existing.unit = unit;
                     existing.last_error = Some(error);
+                    existing.confidence = confidence;
+                    existing.evidence = evidence;
                 } else {
                     self.enhanced_readings.push(EnhancedReading {
                         did,
@@ -460,6 +506,8 @@ impl DomainState {
                         value: None,
                         unit,
                         last_error: Some(error),
+                        confidence,
+                        evidence,
                     });
                 }
             }
@@ -469,6 +517,8 @@ impl DomainState {
             DomainMessage::ReadinessUpdate(status) => {
                 self.readiness = Some(status);
             }
+            DomainMessage::ProfileEvidence(_) => {}
+            DomainMessage::ActiveTestAttempt(_) => {}
         }
     }
 
@@ -587,6 +637,14 @@ impl DomainState {
         }
     }
 
+    pub fn display_psi_value(&self, psi: f64) -> (f64, &'static str) {
+        if self.uses_us_customary_units() {
+            (psi, "psi")
+        } else {
+            (psi / 0.145_037_737_7, "kPa")
+        }
+    }
+
     pub fn display_fuel_rate_value(&self, liters_per_hour: f64) -> (f64, &'static str) {
         if self.uses_us_customary_units() {
             (liters_per_hour * 0.264_172_052_4, "gal/h")
@@ -596,11 +654,7 @@ impl DomainState {
     }
 
     pub fn display_mass_air_flow_value(&self, grams_per_sec: f64) -> (f64, &'static str) {
-        if self.uses_us_customary_units() {
-            (grams_per_sec * LB_PER_MIN_PER_GRAM_PER_SEC, "lb/min")
-        } else {
-            (grams_per_sec, "g/s")
-        }
+        (grams_per_sec, "g/s")
     }
 
     pub fn display_distance_value(&self, km: f64) -> (f64, &'static str) {
@@ -647,6 +701,17 @@ impl DomainState {
             },
             "kPa" => {
                 let (value, unit) = self.display_pressure_value(value);
+                (value, Cow::Borrowed(unit))
+            }
+            "kPa abs" => {
+                if self.uses_us_customary_units() {
+                    (value * 0.145_037_737_7, Cow::Borrowed("psi abs"))
+                } else {
+                    (value, Cow::Borrowed("kPa abs"))
+                }
+            }
+            "psi" => {
+                let (value, unit) = self.display_psi_value(value);
                 (value, Cow::Borrowed(unit))
             }
             "L/h" => {
@@ -797,25 +862,47 @@ mod tests {
     }
 
     #[test]
-    fn test_display_pid_value_converts_maf_for_us_units() {
+    fn test_display_unit_value_converts_abs_pressure_for_us_units() {
+        let mut domain = DomainState::new(250);
+        domain.speed_unit = SpeedUnit::Mph;
+
+        let (value, unit) = domain.display_unit_value(100.0, "kPa abs");
+
+        assert!((value - 14.503_773_77).abs() < 0.000_001);
+        assert_eq!(unit, "psi abs");
+    }
+
+    #[test]
+    fn test_display_unit_value_keeps_psi_for_us_units() {
+        let mut domain = DomainState::new(250);
+        domain.speed_unit = SpeedUnit::Mph;
+
+        let (value, unit) = domain.display_unit_value(551.0, "psi");
+
+        assert!((value - 551.0).abs() < 0.000_001);
+        assert_eq!(unit, "psi");
+    }
+
+    #[test]
+    fn test_display_pid_value_keeps_maf_metric_for_us_units() {
         let mut domain = DomainState::new(250);
         domain.speed_unit = SpeedUnit::Mph;
 
         let (value, unit) = domain.display_pid_value(Pid::MAF, 39.0);
 
-        assert!((value - 5.158_816_934_7).abs() < 0.000_001);
-        assert_eq!(unit, "lb/min");
+        assert!((value - 39.0).abs() < 0.000_001);
+        assert_eq!(unit, "g/s");
     }
 
     #[test]
-    fn test_display_unit_value_converts_maf_for_us_units() {
+    fn test_display_unit_value_keeps_maf_metric_for_us_units() {
         let mut domain = DomainState::new(250);
         domain.speed_unit = SpeedUnit::Mph;
 
         let (value, unit) = domain.display_unit_value(39.0, "g/s");
 
-        assert!((value - 5.158_816_934_7).abs() < 0.000_001);
-        assert_eq!(unit, "lb/min");
+        assert!((value - 39.0).abs() < 0.000_001);
+        assert_eq!(unit, "g/s");
     }
 
     #[test]
@@ -878,6 +965,8 @@ mod tests {
             module: "ecm".into(),
             name: "VGT Vane Position Actual".into(),
             unit: "%".into(),
+            confidence: None,
+            evidence: None,
         });
 
         assert_eq!(domain.enhanced_readings.len(), 1);
@@ -897,6 +986,8 @@ mod tests {
             module: "ecm".into(),
             name: "VGT Vane Position Actual".into(),
             unit: "%".into(),
+            confidence: None,
+            evidence: None,
         });
         domain.update(DomainMessage::EnhancedPidUpdate {
             did: 0x1543,
@@ -904,6 +995,8 @@ mod tests {
             name: "VGT Vane Position Actual".into(),
             value: 72.5,
             unit: "%".into(),
+            confidence: None,
+            evidence: None,
         });
 
         assert_eq!(domain.enhanced_readings.len(), 1);
@@ -920,6 +1013,8 @@ mod tests {
             module: "ecm".into(),
             name: "VGT Vane Position Actual".into(),
             unit: "%".into(),
+            confidence: None,
+            evidence: None,
         });
         domain.update(DomainMessage::EnhancedPidError {
             did: 0x1543,
@@ -927,6 +1022,8 @@ mod tests {
             name: "VGT Vane Position Actual".into(),
             unit: "%".into(),
             error: "parse error: no valid enhanced response payload".into(),
+            confidence: None,
+            evidence: None,
         });
 
         assert_eq!(domain.enhanced_readings.len(), 1);
@@ -1055,6 +1152,8 @@ mod tests {
             value: Some(1.0),
             unit: "u".into(),
             last_error: None,
+            confidence: None,
+            evidence: None,
         });
         domain.o2_readings.push(O2Reading {
             test_name: "TID".into(),

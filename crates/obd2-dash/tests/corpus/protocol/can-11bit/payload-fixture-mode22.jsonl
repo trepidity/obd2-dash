@@ -1,0 +1,1 @@
+{"capture":"synthetic-fixture-can11","raw_response_text":"7E8 05 62 F0 01 13 88\r\r>","family":"CAN","skip_bytes":3,"echo_command":"22F001","expected_payload_hex":"1388"}

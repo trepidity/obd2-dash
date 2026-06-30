@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -2371,6 +2373,7 @@ pub(crate) fn render_full_enhanced(
                     format!("  [{}]", r.module),
                     Style::default().fg(Color::DarkGray),
                 ),
+                enhanced_metadata_span(r),
             ]);
             lines.push(maybe_highlight(line, selected_item, i));
         }
@@ -2386,7 +2389,7 @@ fn summarized_enhanced_did(
     has_vgt_summary: bool,
     has_injector_summary: bool,
 ) -> bool {
-    (has_fuel_rail_summary && matches!(did, 0x1170 | 0x1171))
+    (has_fuel_rail_summary && matches!(did, 0x1170 | 0x1171 | 0x163D | 0x163E))
         || (has_vgt_summary && matches!(did, 0x1540 | 0x1543))
         || (has_injector_summary && injector_balance_cylinder(did).is_some())
 }
@@ -2396,13 +2399,15 @@ fn append_fuel_rail_summary(
     readings: &[EnhancedReading],
     state: &AppState,
 ) -> bool {
-    let actual_enhanced = enhanced_reading(readings, 0x1170);
-    let desired = enhanced_reading(readings, 0x1171);
+    let actual_enhanced =
+        enhanced_reading(readings, 0x163E).or_else(|| enhanced_reading(readings, 0x1170));
+    let desired = enhanced_reading(readings, 0x163D).or_else(|| enhanced_reading(readings, 0x1171));
     let actual = state
         .domain
         .vehicle
         .fuel_rail_gauge_pressure
-        .or_else(|| actual_enhanced.and_then(|reading| reading.value));
+        .map(|value| (value, "kPa"))
+        .or_else(|| enhanced_pressure_value(actual_enhanced));
 
     if actual.is_none() && actual_enhanced.is_none() && desired.is_none() {
         return false;
@@ -2410,9 +2415,13 @@ fn append_fuel_rail_summary(
 
     let actual_error = actual.is_none() && actual_enhanced.is_some_and(|r| r.last_error.is_some());
     let desired_error = desired.is_some_and(|r| r.last_error.is_some());
-    let desired_value = desired.and_then(|reading| reading.value);
-    let delta = actual
-        .zip(desired_value)
+    let desired_value = enhanced_pressure_value(desired);
+    let delta_psi = actual
+        .and_then(|(actual, actual_unit)| pressure_as_psi(actual, actual_unit))
+        .zip(
+            desired_value
+                .and_then(|(desired, desired_unit)| pressure_as_psi(desired, desired_unit)),
+        )
         .map(|(actual, desired)| actual - desired);
 
     let mut spans = vec![Span::styled(
@@ -2433,7 +2442,7 @@ fn append_fuel_rail_summary(
         " / delta ",
         Style::default().fg(Color::DarkGray),
     ));
-    push_delta_pressure_span(&mut spans, state, delta);
+    push_delta_pressure_span(&mut spans, state, delta_psi);
 
     lines.push(Line::from(spans));
     true
@@ -2442,7 +2451,7 @@ fn append_fuel_rail_summary(
 fn push_pressure_span(
     spans: &mut Vec<Span<'static>>,
     state: &AppState,
-    value: Option<f64>,
+    value: Option<(f64, &str)>,
     has_error: bool,
     ok_color: Color,
 ) {
@@ -2451,8 +2460,8 @@ fn push_pressure_span(
             "ERR",
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
         ));
-    } else if let Some(value) = value {
-        let (value, unit) = state.domain.display_pressure_value(value);
+    } else if let Some((value, source_unit)) = value {
+        let (value, unit) = display_pressure_from_unit(state, value, source_unit);
         spans.push(Span::styled(
             format!("{:.0} {}", value, unit),
             Style::default().fg(ok_color),
@@ -2466,16 +2475,17 @@ fn push_pressure_span(
     }
 }
 
-fn push_delta_pressure_span(spans: &mut Vec<Span<'static>>, state: &AppState, value: Option<f64>) {
-    if let Some(value) = value {
-        let color = if value.abs() >= 5_000.0 {
+fn push_delta_pressure_span(spans: &mut Vec<Span<'static>>, state: &AppState, psi: Option<f64>) {
+    if let Some(psi) = psi {
+        let abs = psi.abs();
+        let color = if abs >= 725.0 {
             Color::Red
-        } else if value.abs() >= 2_000.0 {
+        } else if abs >= 290.0 {
             Color::Yellow
         } else {
             Color::Green
         };
-        let (value, unit) = state.domain.display_pressure_value(value);
+        let (value, unit) = state.domain.display_psi_value(psi);
         spans.push(Span::styled(
             format!("{:+.0} {}", value, unit),
             Style::default().fg(color),
@@ -2486,6 +2496,43 @@ fn push_delta_pressure_span(spans: &mut Vec<Span<'static>>, state: &AppState, va
             format!("-- {}", unit),
             Style::default().fg(Color::DarkGray),
         ));
+    }
+}
+
+fn enhanced_pressure_value(reading: Option<&EnhancedReading>) -> Option<(f64, &str)> {
+    reading.and_then(|reading| reading.value.map(|value| (value, reading.unit.as_str())))
+}
+
+fn display_pressure_from_unit<'a>(
+    state: &AppState,
+    value: f64,
+    unit: &'a str,
+) -> (f64, Cow<'a, str>) {
+    match unit {
+        "kPa" => {
+            let (value, unit) = state.domain.display_pressure_value(value);
+            (value, Cow::Borrowed(unit))
+        }
+        "kPa abs" => {
+            if state.domain.uses_us_customary_units() {
+                (value * 0.145_037_737_7, Cow::Borrowed("psi abs"))
+            } else {
+                (value, Cow::Borrowed("kPa abs"))
+            }
+        }
+        "psi" => {
+            let (value, unit) = state.domain.display_psi_value(value);
+            (value, Cow::Borrowed(unit))
+        }
+        _ => (value, Cow::Borrowed(unit)),
+    }
+}
+
+fn pressure_as_psi(value: f64, unit: &str) -> Option<f64> {
+    match unit {
+        "kPa" | "kPa abs" => Some(value * 0.145_037_737_7),
+        "psi" => Some(value),
+        _ => None,
     }
 }
 
@@ -2642,6 +2689,17 @@ fn injector_balance_cylinder(did: u16) -> Option<u8> {
 
 fn enhanced_reading(readings: &[EnhancedReading], did: u16) -> Option<&EnhancedReading> {
     readings.iter().find(|reading| reading.did == did)
+}
+
+fn enhanced_metadata_span(reading: &EnhancedReading) -> Span<'static> {
+    if let Some(confidence) = reading.confidence.as_deref() {
+        Span::styled(
+            format!("  {confidence}"),
+            Style::default().fg(Color::DarkGray),
+        )
+    } else {
+        Span::raw("")
+    }
 }
 
 fn enhanced_value_text(reading: &EnhancedReading, state: &AppState) -> (String, Style) {

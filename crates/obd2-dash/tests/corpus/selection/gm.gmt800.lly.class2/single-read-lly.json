@@ -1,0 +1,12 @@
+{
+  "name": "single clean LLY VIN remains partial",
+  "protocol": "J1850Vpw",
+  "vin": "1GCHK23224F000001",
+  "vin_confidence": "Single",
+  "use_embedded_spec": true,
+  "expected": {
+    "selected": false,
+    "exact": [],
+    "partial": ["gm.gmt800.lly.class2"]
+  }
+}

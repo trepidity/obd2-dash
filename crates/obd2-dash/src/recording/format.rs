@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub const MAGIC: &[u8; 8] = b"OBD2REC\x01";
 /// Magic bytes for v2 format (includes raw hex bytes per frame).
 pub const MAGIC_V2: &[u8; 8] = b"OBD2REC\x02";
+/// Magic bytes for v3 format (large payload profile/evidence frames).
+pub const MAGIC_V3: &[u8; 8] = b"OBD2REC\x03";
 
 /// Frame type markers.
 pub const FRAME_PID: u8 = 0x01;
@@ -14,6 +16,12 @@ pub const FRAME_VOLTAGE: u8 = 0x02;
 pub const FRAME_DTC: u8 = 0x03;
 pub const FRAME_ENHANCED: u8 = 0x04;
 pub const FRAME_O2: u8 = 0x05;
+pub const FRAME_PROFILE_VALUE: u8 = 0x20;
+pub const FRAME_PROFILE_DTC: u8 = 0x21;
+pub const FRAME_PROFILE_DISPATCH: u8 = 0x22;
+pub const FRAME_ACTIVE_TEST_ATTEMPT: u8 = 0x23;
+
+const MAX_V3_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
 /// Session header stored as JSON after the magic bytes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,6 +181,61 @@ impl RecordingFrame {
         }
     }
 
+    /// Create a v3 profile-evidence frame. The payload is JSON and may exceed
+    /// the v2 one-byte raw payload limit.
+    pub fn profile_evidence(
+        offset_ms: u32,
+        record: &obd2_dash::profiles::ProfileEvidenceRecord,
+    ) -> io::Result<Self> {
+        let payload = serde_json::to_vec(record).map_err(io::Error::other)?;
+        let frame_type = match &record.decoded {
+            Some(obd2_dash::profiles::ProfileDecodedEvidence::Signal { .. }) => FRAME_PROFILE_VALUE,
+            Some(obd2_dash::profiles::ProfileDecodedEvidence::Dtcs { .. }) => FRAME_PROFILE_DTC,
+            None => FRAME_PROFILE_DISPATCH,
+        };
+        Ok(Self {
+            frame_type,
+            offset_ms,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: payload,
+        })
+    }
+
+    pub fn decode_profile_evidence(&self) -> Option<obd2_dash::profiles::ProfileEvidenceRecord> {
+        if !matches!(
+            self.frame_type,
+            FRAME_PROFILE_VALUE | FRAME_PROFILE_DTC | FRAME_PROFILE_DISPATCH
+        ) {
+            return None;
+        }
+        serde_json::from_slice(&self.raw_bytes).ok()
+    }
+
+    /// Create a v3 active-test attempt frame. The payload is JSON and stores
+    /// the refused or accepted command attempt with raw request/response bytes
+    /// when they exist.
+    pub fn active_test_attempt(
+        offset_ms: u32,
+        record: &obd2_dash::gm_evidence::GmEvidenceRecord,
+    ) -> io::Result<Self> {
+        let payload = serde_json::to_vec(record).map_err(io::Error::other)?;
+        Ok(Self {
+            frame_type: FRAME_ACTIVE_TEST_ATTEMPT,
+            offset_ms,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: payload,
+        })
+    }
+
+    pub fn decode_active_test_attempt(&self) -> Option<obd2_dash::gm_evidence::GmEvidenceRecord> {
+        if self.frame_type != FRAME_ACTIVE_TEST_ATTEMPT {
+            return None;
+        }
+        serde_json::from_slice(&self.raw_bytes).ok()
+    }
+
     /// Decode DTC code from a DTC frame's value field.
     pub fn decode_dtc_code(&self) -> Option<String> {
         if self.frame_type != FRAME_DTC {
@@ -199,9 +262,29 @@ impl RecordingFrame {
         Ok(())
     }
 
+    /// Write a v3 frame to a binary stream.
+    /// Layout: type + offset + pid_code + value + u32 payload length + payload.
+    pub fn write_v3_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        writer.write_all(&[self.frame_type])?;
+        writer.write_all(&self.offset_ms.to_le_bytes())?;
+        writer.write_all(&[self.pid_code])?;
+        writer.write_all(&self.value.to_le_bytes())?;
+        let len = u32::try_from(self.raw_bytes.len()).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "v3 frame payload too large")
+        })?;
+        writer.write_all(&len.to_le_bytes())?;
+        writer.write_all(&self.raw_bytes)?;
+        Ok(())
+    }
+
     /// Read a frame from a binary stream.
-    /// `version`: 1 = v1 (14 bytes only), 2 = v2 (14 bytes + raw bytes).
+    /// `version`: 1 = v1 (14 bytes only), 2 = v2 (14 bytes + raw bytes),
+    /// 3 = v3 (large payload envelope).
     pub fn read_from<R: Read>(reader: &mut R, version: u8) -> io::Result<Option<Self>> {
+        if version >= 3 {
+            return Self::read_v3_from(reader);
+        }
+
         let mut buf = [0u8; 14];
         match reader.read_exact(&mut buf) {
             Ok(()) => {}
@@ -239,11 +322,70 @@ impl RecordingFrame {
             raw_bytes,
         }))
     }
+
+    fn read_v3_from<R: Read>(reader: &mut R) -> io::Result<Option<Self>> {
+        let mut header = [0u8; 18];
+        match reader.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(e),
+        }
+
+        let frame_type = header[0];
+        let offset_ms = u32::from_le_bytes([header[1], header[2], header[3], header[4]]);
+        let pid_code = header[5];
+        let value = f64::from_le_bytes([
+            header[6], header[7], header[8], header[9], header[10], header[11], header[12],
+            header[13],
+        ]);
+        let len = u32::from_le_bytes([header[14], header[15], header[16], header[17]]) as usize;
+        if len > MAX_V3_PAYLOAD_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "v3 frame payload exceeds safety limit",
+            ));
+        }
+
+        let mut raw_bytes = vec![0u8; len];
+        if len > 0 {
+            reader.read_exact(&mut raw_bytes)?;
+        }
+
+        Ok(Some(RecordingFrame {
+            frame_type,
+            offset_ms,
+            pid_code,
+            value,
+            raw_bytes,
+        }))
+    }
 }
 
 /// Write the file header (v2 magic + JSON session header).
 pub fn write_file_header<W: Write>(writer: &mut W, header: &SessionHeader) -> io::Result<()> {
-    writer.write_all(MAGIC_V2)?;
+    write_file_header_with_version(writer, header, 2)
+}
+
+/// Write the file header using the v3 magic.
+pub fn write_file_header_v3<W: Write>(writer: &mut W, header: &SessionHeader) -> io::Result<()> {
+    write_file_header_with_version(writer, header, 3)
+}
+
+fn write_file_header_with_version<W: Write>(
+    writer: &mut W,
+    header: &SessionHeader,
+    version: u8,
+) -> io::Result<()> {
+    match version {
+        2 => writer.write_all(MAGIC_V2)?,
+        3 => writer.write_all(MAGIC_V3)?,
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported recording version",
+            ))
+        }
+    }
     let json = serde_json::to_vec(header).map_err(io::Error::other)?;
     let len = json.len() as u32;
     writer.write_all(&len.to_le_bytes())?;
@@ -260,6 +402,8 @@ pub fn read_file_header<R: Read>(reader: &mut R) -> io::Result<(SessionHeader, u
         1
     } else if &magic == MAGIC_V2 {
         2
+    } else if &magic == MAGIC_V3 {
+        3
     } else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -367,6 +511,25 @@ mod tests {
     }
 
     #[test]
+    fn test_v3_header_roundtrip() {
+        let header = SessionHeader {
+            session_id: "test-v3".to_string(),
+            start_time: Utc::now(),
+            vin: None,
+            vehicle_name: None,
+            poll_interval_ms: 250,
+        };
+
+        let mut buf = Vec::new();
+        write_file_header_v3(&mut buf, &header).unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let (decoded, version) = read_file_header(&mut cursor).unwrap();
+        assert_eq!(version, 3);
+        assert_eq!(decoded.session_id, "test-v3");
+    }
+
+    #[test]
     fn test_unknown_frame_type_roundtrip() {
         let frame = RecordingFrame {
             frame_type: 0xFF,
@@ -391,6 +554,26 @@ mod tests {
         assert_eq!(second.frame_type, FRAME_PID);
         assert_eq!(second.pid_code, 0x0C);
         assert!((second.value - 3500.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_v3_large_payload_roundtrip() {
+        let frame = RecordingFrame {
+            frame_type: FRAME_PROFILE_DISPATCH,
+            offset_ms: 123,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![0xAB; 512],
+        };
+        let mut buf = Vec::new();
+        frame.write_v3_to(&mut buf).unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let decoded = RecordingFrame::read_from(&mut cursor, 3).unwrap().unwrap();
+        assert_eq!(decoded.frame_type, FRAME_PROFILE_DISPATCH);
+        assert_eq!(decoded.offset_ms, 123);
+        assert_eq!(decoded.raw_bytes.len(), 512);
+        assert_eq!(decoded.raw_bytes[0], 0xAB);
     }
 
     #[test]

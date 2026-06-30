@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -6,18 +7,37 @@ use tokio::sync::mpsc;
 use obd2_core::adapter::Adapter;
 use obd2_core::error::{NegativeResponse, Obd2Error};
 use obd2_core::protocol::dtc::{Dtc, DtcStatus};
-use obd2_core::protocol::enhanced::EnhancedPid;
+use obd2_core::protocol::enhanced::{Confidence as CoreConfidence, EnhancedPid};
 use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::service::Target;
 use obd2_core::session::poller::{execute_poll_cycle, PollConfig, PollEvent};
 use obd2_core::session::Session;
-use obd2_core::vehicle::ModuleId;
+use obd2_core::vehicle::{ModuleId, Protocol};
 
 use crate::app::{CaptureCommand, CaptureHandle, DiagnosticCommand, Message};
 use crate::domain::{ConnectionState, DiscoveryState, O2Reading};
 use crate::domain::{
     DiagnosticScanEntry, DiagnosticScanResult, DiagnosticScanScope, DtcService, FreezeFrameSnapshot,
 };
+use obd2_dash::gm_active::{
+    active_test_evidence_record, blocked_active_test_result, write_active_test_evidence,
+    GmActiveTestCommand,
+};
+use obd2_dash::gm_enhanced::{is_lly_spec_identity, lly_profile_matches};
+use obd2_dash::gm_evidence::GmEvidenceRecord;
+use obd2_dash::profiles::{
+    acquire_identity, build_vehicle_context, confidence_warning, next_generation,
+    select_into_state, validate_vin_charset, CapabilityId, Confidence as ProfileConfidence,
+    CoverageMap, DecodedDtc, DispatchError, DispatchEvidence, IdentityConfidence, IdentityOutcome,
+    PlannedRequest, ProfileDecodeError, ProfileEvidenceRecord, ProfileEvidenceSink,
+    ProfileRegistry, ProfileResponse, ProfileRuntime, ProfileState,
+    Provenance as ProfileProvenance, RequestId, SelectedProfile, SignalDefinition, VehicleContext,
+};
+
+#[cfg(feature = "profile-selection")]
+const EXTRA_VIN_READS: u8 = 2;
+#[cfg(not(feature = "profile-selection"))]
+const EXTRA_VIN_READS: u8 = 0;
 
 #[derive(Debug, Clone)]
 pub struct SessionRunnerConfig {
@@ -30,8 +50,22 @@ pub struct PreparedSession {
     poll_ms: u64,
     poll_config: PollConfig,
     enhanced_targets: Vec<EnhancedPollTarget>,
+    gm_class2_backoff: GmClass2Backoff,
     last_connection: Option<ConnectionState>,
     last_discovery: Option<DiscoveryState>,
+    profile_state: ProfileState,
+    identity: IdentityOutcome,
+    profile_context: ProfileContextFingerprint,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct ProfileContextFingerprint {
+    protocol: Protocol,
+    vin: Option<String>,
+    vin_confidence: IdentityConfidence,
+    spec_identity: Option<String>,
+    active_bus: Option<String>,
+    discovered_modules: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +75,59 @@ struct EnhancedPollTarget {
     module_label: String,
     name: String,
     unit: String,
+    profile_request: Option<ProfileEnhancedPollTarget>,
+    confidence: Option<String>,
+    evidence: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ProfileEnhancedPollTarget {
+    context: VehicleContext,
+    selected: SelectedProfile,
+    capability: CapabilityId,
+    request: RequestId,
+}
+
+struct ChannelProfileEvidenceSink<'a> {
+    tx: &'a mpsc::UnboundedSender<Message>,
+    identity_confidence: IdentityConfidence,
+    manual_confirmation: bool,
+}
+
+impl<'a> ChannelProfileEvidenceSink<'a> {
+    fn new(
+        tx: &'a mpsc::UnboundedSender<Message>,
+        identity_confidence: IdentityConfidence,
+        manual_confirmation: bool,
+    ) -> Self {
+        Self {
+            tx,
+            identity_confidence,
+            manual_confirmation,
+        }
+    }
+}
+
+impl ProfileEvidenceSink for ChannelProfileEvidenceSink<'_> {
+    fn record(&mut self, evidence: &DispatchEvidence<'_>) {
+        let record = ProfileEvidenceRecord::from_dispatch(
+            evidence,
+            Some(identity_confidence_label(self.identity_confidence)),
+            self.manual_confirmation,
+        );
+        let _ = self.tx.send(Message::ProfileEvidence(Box::new(record)));
+    }
+}
+
+#[derive(Debug, Default)]
+struct GmClass2Backoff {
+    cached: HashMap<(String, DtcService), GmClass2BackoffEntry>,
+}
+
+#[derive(Debug, Clone)]
+struct GmClass2BackoffEntry {
+    skips_remaining: u8,
+    result: DiagnosticScanResult,
 }
 
 pub async fn prepare_session<A: Adapter>(
@@ -73,27 +160,17 @@ pub async fn prepare_session<A: Adapter>(
     emit_session_state(session, tx, &mut last_connection);
     emit_discovery(session, tx, &mut last_discovery);
 
-    let enhanced_targets = match session.identify_vehicle().await {
-        Ok(profile) => {
-            let _ = tx.send(Message::VinDetected(profile.vin.clone()));
-            emit_discovery(session, tx, &mut last_discovery);
-            build_enhanced_targets(session)
-        }
-        Err(e) => {
-            tracing::warn!("Could not identify vehicle: {e}");
-            match session.read_vin().await {
-                Ok(vin) => {
-                    let _ = tx.send(Message::VinDetected(vin));
-                }
-                Err(vin_err) => {
-                    tracing::warn!("Could not read VIN: {vin_err}");
-                }
-            }
-            emit_session_state(session, tx, &mut last_connection);
-            emit_discovery(session, tx, &mut last_discovery);
-            build_enhanced_targets(session)
-        }
-    };
+    let generation = next_generation();
+    let identity = acquire_identity(session, EXTRA_VIN_READS).await;
+    if let Some(vin) = identity.vin.as_ref() {
+        let _ = tx.send(Message::VinDetected(vin.clone()));
+    }
+    emit_session_state(session, tx, &mut last_connection);
+    emit_discovery(session, tx, &mut last_discovery);
+    let (profile_state, profile_context) = compute_profile_state(session, generation, &identity);
+    publish_profile_state(&profile_state, tx);
+
+    let enhanced_targets = build_enhanced_targets(session, &profile_state);
     publish_enhanced_targets(&enhanced_targets, tx);
 
     let pids_to_poll = match session.supported_pids().await {
@@ -114,8 +191,12 @@ pub async fn prepare_session<A: Adapter>(
         poll_ms: config.poll_ms,
         poll_config,
         enhanced_targets,
+        gm_class2_backoff: GmClass2Backoff::default(),
         last_connection,
         last_discovery,
+        profile_state,
+        identity,
+        profile_context,
     })
 }
 
@@ -169,8 +250,10 @@ pub async fn run_prepared_session<A: Adapter>(
         execute_poll_cycle(session, &prepared.poll_config, &poll_tx, None).await;
         drain_poll_events(&mut poll_rx, tx).await;
         emit_session_state(session, tx, &mut prepared.last_connection);
-        if emit_discovery(session, tx, &mut prepared.last_discovery) {
-            prepared.enhanced_targets = build_enhanced_targets(session);
+        let discovery_changed = emit_discovery(session, tx, &mut prepared.last_discovery);
+        let profile_changed = refresh_profile_selection_if_needed(session, &mut prepared, tx);
+        if discovery_changed || profile_changed {
+            prepared.enhanced_targets = build_enhanced_targets(session, &prepared.profile_state);
             publish_enhanced_targets(&prepared.enhanced_targets, tx);
         }
 
@@ -179,17 +262,31 @@ pub async fn run_prepared_session<A: Adapter>(
         if !prepared.enhanced_targets.is_empty() && cycle % 5 == 0 {
             poll_enhanced(session, &prepared.enhanced_targets, tx).await;
             emit_session_state(session, tx, &mut prepared.last_connection);
-            if emit_discovery(session, tx, &mut prepared.last_discovery) {
-                prepared.enhanced_targets = build_enhanced_targets(session);
+            let discovery_changed = emit_discovery(session, tx, &mut prepared.last_discovery);
+            let profile_changed = refresh_profile_selection_if_needed(session, &mut prepared, tx);
+            if discovery_changed || profile_changed {
+                prepared.enhanced_targets =
+                    build_enhanced_targets(session, &prepared.profile_state);
                 publish_enhanced_targets(&prepared.enhanced_targets, tx);
             }
         }
 
         if cycle % 10 == 0 {
-            poll_dtcs(session, tx).await;
+            poll_dtcs(
+                session,
+                tx,
+                cycle.into(),
+                &prepared.profile_state,
+                &prepared.identity,
+                &mut prepared.gm_class2_backoff,
+            )
+            .await;
             emit_session_state(session, tx, &mut prepared.last_connection);
-            if emit_discovery(session, tx, &mut prepared.last_discovery) {
-                prepared.enhanced_targets = build_enhanced_targets(session);
+            let discovery_changed = emit_discovery(session, tx, &mut prepared.last_discovery);
+            let profile_changed = refresh_profile_selection_if_needed(session, &mut prepared, tx);
+            if discovery_changed || profile_changed {
+                prepared.enhanced_targets =
+                    build_enhanced_targets(session, &prepared.profile_state);
                 publish_enhanced_targets(&prepared.enhanced_targets, tx);
             }
         }
@@ -198,8 +295,11 @@ pub async fn run_prepared_session<A: Adapter>(
             poll_o2_monitoring(session, tx).await;
             poll_readiness(session, tx).await;
             emit_session_state(session, tx, &mut prepared.last_connection);
-            if emit_discovery(session, tx, &mut prepared.last_discovery) {
-                prepared.enhanced_targets = build_enhanced_targets(session);
+            let discovery_changed = emit_discovery(session, tx, &mut prepared.last_discovery);
+            let profile_changed = refresh_profile_selection_if_needed(session, &mut prepared, tx);
+            if discovery_changed || profile_changed {
+                prepared.enhanced_targets =
+                    build_enhanced_targets(session, &prepared.profile_state);
                 publish_enhanced_targets(&prepared.enhanced_targets, tx);
             }
         }
@@ -323,18 +423,16 @@ async fn poll_enhanced<A: Adapter>(
     tx: &mpsc::UnboundedSender<Message>,
 ) {
     for target in targets {
-        match session
-            .read_enhanced(target.did, target.module_id.clone())
-            .await
-        {
+        match read_enhanced_target(session, target, tx).await {
             Ok(reading) => {
-                let value = reading.value.as_f64().unwrap_or(0.0);
                 let _ = tx.send(Message::EnhancedPidUpdate {
                     did: target.did,
                     module: target.module_label.clone(),
                     name: target.name.clone(),
-                    value,
+                    value: reading,
                     unit: target.unit.clone(),
+                    confidence: target.confidence.clone(),
+                    evidence: target.evidence.clone(),
                 });
             }
             Err(e) => {
@@ -350,16 +448,83 @@ async fn poll_enhanced<A: Adapter>(
                     name: target.name.clone(),
                     unit: target.unit.clone(),
                     error: e.to_string(),
+                    confidence: target.confidence.clone(),
+                    evidence: target.evidence.clone(),
                 });
             }
         }
     }
 }
 
-async fn poll_dtcs<A: Adapter>(session: &mut Session<A>, tx: &mpsc::UnboundedSender<Message>) {
+async fn read_enhanced_target<A: Adapter>(
+    session: &mut Session<A>,
+    target: &EnhancedPollTarget,
+    tx: &mpsc::UnboundedSender<Message>,
+) -> Result<f64, Obd2Error> {
+    if let Some(profile_request) = target.profile_request.as_ref() {
+        let registry = ProfileRegistry::with_builtins();
+        let runtime = ProfileRuntime::new(&registry);
+        let mut evidence = ChannelProfileEvidenceSink::new(
+            tx,
+            profile_request.context.vin_confidence,
+            profile_request.selected.manual_confirmed(),
+        );
+        let response = runtime
+            .execute_request(
+                session,
+                &profile_request.context,
+                &profile_request.selected,
+                profile_request.capability,
+                profile_request.request,
+                &mut evidence,
+            )
+            .await
+            .map_err(dispatch_to_obd_error)?;
+
+        return match response {
+            ProfileResponse::Signal(signal) => Ok(signal.value),
+            ProfileResponse::Dtcs(_) => Err(Obd2Error::ParseError(format!(
+                "profile capability {:?} returned DTCs for enhanced target {:04X}",
+                profile_request.capability, target.did
+            ))),
+        };
+    }
+
+    session
+        .read_enhanced(target.did, target.module_id.clone())
+        .await
+        .and_then(|reading| reading.value.as_f64())
+}
+
+fn dispatch_to_obd_error(error: DispatchError) -> Obd2Error {
+    match error {
+        DispatchError::Transport(error) => error,
+        other => Obd2Error::ParseError(format!("profile dispatch failed: {other:?}")),
+    }
+}
+
+async fn poll_dtcs<A: Adapter>(
+    session: &mut Session<A>,
+    tx: &mpsc::UnboundedSender<Message>,
+    cycle: u64,
+    profile_state: &ProfileState,
+    identity: &IdentityOutcome,
+    gm_backoff: &mut GmClass2Backoff,
+) {
     let mut scan = scan_standard_dtcs(session).await;
+    append_profile_dtcs(
+        session,
+        &mut scan,
+        tx,
+        cycle,
+        profile_state,
+        identity,
+        gm_backoff,
+    )
+    .await;
     enrich_dtcs(session, &mut scan.dtcs);
     obd2_core::session::diagnostics::dedup_dtcs(&mut scan.dtcs);
+    apply_profile_dtc_notes(&mut scan.dtcs, &scan.profile_notes);
 
     let _ = tx.send(Message::DtcUpdate(scan.dtcs));
     let _ = tx.send(Message::DiagnosticScanUpdate(scan.entries));
@@ -368,12 +533,22 @@ async fn poll_dtcs<A: Adapter>(session: &mut Session<A>, tx: &mpsc::UnboundedSen
 struct DtcScan {
     dtcs: Vec<Dtc>,
     entries: Vec<DiagnosticScanEntry>,
+    profile_notes: Vec<DtcProfileNote>,
+}
+
+#[derive(Debug, Clone)]
+struct DtcProfileNote {
+    code: String,
+    source_module: Option<String>,
+    status: DtcStatus,
+    note: String,
 }
 
 async fn scan_standard_dtcs<A: Adapter>(session: &mut Session<A>) -> DtcScan {
     let mut scan = DtcScan {
         dtcs: Vec::new(),
         entries: Vec::new(),
+        profile_notes: Vec::new(),
     };
 
     for service in [
@@ -412,6 +587,215 @@ async fn scan_standard_dtcs<A: Adapter>(session: &mut Session<A>) -> DtcScan {
     }
 
     scan
+}
+
+async fn append_profile_dtcs<A: Adapter>(
+    session: &mut Session<A>,
+    scan: &mut DtcScan,
+    tx: &mpsc::UnboundedSender<Message>,
+    cycle: u64,
+    profile_state: &ProfileState,
+    identity: &IdentityOutcome,
+    backoff: &mut GmClass2Backoff,
+) {
+    let Some(selected) = profile_state.selected.as_ref() else {
+        return;
+    };
+
+    let mut context = build_vehicle_context(session, profile_state.generation, identity);
+    context.discovered_modules = dtc_scan_modules(session);
+    let coverage = CoverageMap::new(Vec::new()).with_discovered_modules(
+        context
+            .discovered_modules
+            .iter()
+            .filter_map(profile_module_key)
+            .collect(),
+    );
+    let registry = ProfileRegistry::with_builtins();
+    let runtime = ProfileRuntime::new(&registry);
+    let plan = runtime.plan_poll_cycle(Some(selected), cycle, &coverage);
+
+    for planned in plan.requests {
+        let CapabilityId::DtcService(key) = planned.capability else {
+            continue;
+        };
+        let Some(service) = profile_dtc_service_for_key(key) else {
+            tracing::debug!("Skipping profile DTC service without scan-panel mapping: {key}");
+            continue;
+        };
+
+        let module = planned.route.module.to_core_module_id();
+        let scope = DiagnosticScanScope::Module(module.0.clone());
+        if let Some(result) = backoff.cached_result(&module, service) {
+            scan.entries.push(DiagnosticScanEntry {
+                scope,
+                service,
+                result,
+            });
+            continue;
+        }
+
+        let result = execute_profile_dtc_request(
+            session, scan, tx, &runtime, &context, selected, planned, service, &module,
+        )
+        .await;
+
+        backoff.observe(&module, service, &result);
+        scan.entries.push(DiagnosticScanEntry {
+            scope,
+            service,
+            result,
+        });
+    }
+}
+
+async fn execute_profile_dtc_request<A: Adapter>(
+    session: &mut Session<A>,
+    scan: &mut DtcScan,
+    tx: &mpsc::UnboundedSender<Message>,
+    runtime: &ProfileRuntime<'_>,
+    context: &VehicleContext,
+    selected: &SelectedProfile,
+    planned: PlannedRequest,
+    service: DtcService,
+    module: &ModuleId,
+) -> DiagnosticScanResult {
+    let mut evidence =
+        ChannelProfileEvidenceSink::new(tx, context.vin_confidence, selected.manual_confirmed());
+    match runtime
+        .execute_request(
+            session,
+            context,
+            selected,
+            planned.capability,
+            planned.request,
+            &mut evidence,
+        )
+        .await
+    {
+        Ok(ProfileResponse::Dtcs(decoded)) => {
+            let count = decoded.len();
+            for decoded in decoded {
+                let (dtc, note) = profile_decoded_dtc_to_core(decoded, module);
+                if let Some(note) = note {
+                    scan.profile_notes.push(note);
+                }
+                scan.dtcs.push(dtc);
+            }
+            if count == 0 {
+                DiagnosticScanResult::Empty
+            } else {
+                DiagnosticScanResult::Codes(count)
+            }
+        }
+        Ok(ProfileResponse::Signal(_)) => DiagnosticScanResult::Error(format!(
+            "profile capability {:?} returned a signal for {}",
+            planned.capability,
+            service.label()
+        )),
+        Err(err) => profile_dispatch_scan_result(err),
+    }
+}
+
+fn profile_dtc_service_for_key(key: &str) -> Option<DtcService> {
+    match key {
+        "lly.class2.dtc.all" => Some(DtcService::GmClass2All),
+        "lly.class2.dtc.active" => Some(DtcService::GmClass2Active),
+        _ => None,
+    }
+}
+
+fn profile_decoded_dtc_to_core(
+    decoded: DecodedDtc,
+    fallback_module: &ModuleId,
+) -> (Dtc, Option<DtcProfileNote>) {
+    let mut dtc = Dtc::from_code(&decoded.code);
+    dtc.status = decoded.status;
+    let source_module = decoded
+        .module
+        .map(|module| module.0)
+        .unwrap_or_else(|| fallback_module.0.clone());
+    dtc.source_module = Some(source_module.clone());
+    if let Some(note) = decoded.notes.clone() {
+        dtc.notes = Some(note.clone());
+        let annotation = DtcProfileNote {
+            code: dtc.code.clone(),
+            source_module: Some(source_module),
+            status: dtc.status,
+            note,
+        };
+        (dtc, Some(annotation))
+    } else {
+        (dtc, None)
+    }
+}
+
+fn profile_dispatch_scan_result(error: DispatchError) -> DiagnosticScanResult {
+    match error {
+        DispatchError::Transport(Obd2Error::NoData) => DiagnosticScanResult::NoData,
+        DispatchError::Transport(Obd2Error::NegativeResponse { nrc, .. })
+            if is_unsupported_nrc(nrc) =>
+        {
+            DiagnosticScanResult::Unsupported(nrc.to_string())
+        }
+        DispatchError::Decode(ProfileDecodeError::NegativeResponse { nrc, .. })
+            if is_unsupported_nrc_byte(nrc) =>
+        {
+            DiagnosticScanResult::Unsupported(negative_response_label(nrc))
+        }
+        DispatchError::Decode(ProfileDecodeError::NegativeResponse { service, nrc }) => {
+            DiagnosticScanResult::Error(format!(
+                "negative response: service 0x{service:02X}, {}",
+                negative_response_label(nrc)
+            ))
+        }
+        DispatchError::Decode(ProfileDecodeError::Decode(message))
+        | DispatchError::Decode(ProfileDecodeError::Other(message)) => {
+            DiagnosticScanResult::Error(message)
+        }
+        other => DiagnosticScanResult::Error(format!("{other:?}")),
+    }
+}
+
+fn is_unsupported_nrc(nrc: NegativeResponse) -> bool {
+    matches!(
+        nrc,
+        NegativeResponse::ServiceNotSupported | NegativeResponse::SubFunctionNotSupported
+    )
+}
+
+fn is_unsupported_nrc_byte(nrc: u8) -> bool {
+    matches!(
+        NegativeResponse::from_byte(nrc),
+        Some(NegativeResponse::ServiceNotSupported | NegativeResponse::SubFunctionNotSupported)
+    )
+}
+
+fn negative_response_label(nrc: u8) -> String {
+    NegativeResponse::from_byte(nrc)
+        .map(|nrc| nrc.to_string())
+        .unwrap_or_else(|| format!("NRC 0x{nrc:02X}"))
+}
+
+fn apply_profile_dtc_notes(dtcs: &mut [Dtc], notes: &[DtcProfileNote]) {
+    for dtc in dtcs {
+        let Some(note) = notes.iter().find(|note| {
+            note.code == dtc.code
+                && note.source_module == dtc.source_module
+                && note.status == dtc.status
+        }) else {
+            continue;
+        };
+
+        match dtc.notes.as_mut() {
+            Some(existing) if existing.contains(&note.note) => {}
+            Some(existing) => {
+                existing.push_str("; ");
+                existing.push_str(&note.note);
+            }
+            None => dtc.notes = Some(note.note.clone()),
+        }
+    }
 }
 
 async fn append_dtc_probe<A: Adapter>(
@@ -481,11 +865,47 @@ fn dtc_scan_modules<A: Adapter>(session: &Session<A>) -> Vec<ModuleId> {
     modules
 }
 
+impl GmClass2Backoff {
+    fn cached_result(
+        &mut self,
+        module: &ModuleId,
+        service: DtcService,
+    ) -> Option<DiagnosticScanResult> {
+        let key = (module.0.clone(), service);
+        let entry = self.cached.get_mut(&key)?;
+        if entry.skips_remaining == 0 {
+            self.cached.remove(&key);
+            return None;
+        }
+        entry.skips_remaining -= 1;
+        Some(entry.result.clone())
+    }
+
+    fn observe(&mut self, module: &ModuleId, service: DtcService, result: &DiagnosticScanResult) {
+        let key = (module.0.clone(), service);
+        if matches!(
+            result,
+            DiagnosticScanResult::NoData | DiagnosticScanResult::Unsupported(_)
+        ) {
+            self.cached.insert(
+                key,
+                GmClass2BackoffEntry {
+                    skips_remaining: 3,
+                    result: result.clone(),
+                },
+            );
+        } else {
+            self.cached.remove(&key);
+        }
+    }
+}
+
 fn dtc_status_for_service(service: DtcService) -> DtcStatus {
     match service {
         DtcService::Stored => DtcStatus::Stored,
         DtcService::Pending => DtcStatus::Pending,
         DtcService::Permanent => DtcStatus::Permanent,
+        DtcService::GmClass2All | DtcService::GmClass2Active => DtcStatus::Stored,
     }
 }
 
@@ -577,7 +997,28 @@ async fn handle_diagnostic_command<A: Adapter>(
                 ));
             }
         }
+        DiagnosticCommand::GmActiveTest(command) => {
+            let (result, record) = handle_gm_active_test(command);
+            let _ = tx.send(Message::ActiveTestAttempt(Box::new(record)));
+            let _ = tx.send(Message::ActiveTestResult(result));
+        }
     }
+}
+
+fn handle_gm_active_test(
+    command: GmActiveTestCommand,
+) -> (obd2_dash::gm_active::GmActiveTestResult, GmEvidenceRecord) {
+    let mut result = blocked_active_test_result(&command);
+    let record = active_test_evidence_record(&command, &result);
+    match write_active_test_evidence(&command, &result) {
+        Ok(path) => {
+            result.evidence_path = Some(path.display().to_string());
+        }
+        Err(error) => {
+            tracing::warn!("failed to write GM active-test evidence: {error}");
+        }
+    }
+    (result, record)
 }
 
 async fn poll_readiness<A: Adapter>(session: &mut Session<A>, tx: &mpsc::UnboundedSender<Message>) {
@@ -641,7 +1082,10 @@ fn should_force_standard_poll(pid: Pid) -> bool {
     )
 }
 
-fn build_enhanced_targets<A: Adapter>(session: &Session<A>) -> Vec<EnhancedPollTarget> {
+fn build_enhanced_targets<A: Adapter>(
+    session: &Session<A>,
+    profile_state: &ProfileState,
+) -> Vec<EnhancedPollTarget> {
     let Some(discovery) = session.discovery() else {
         return Vec::new();
     };
@@ -649,16 +1093,163 @@ fn build_enhanced_targets<A: Adapter>(session: &Session<A>) -> Vec<EnhancedPollT
     let mut targets = Vec::new();
     let mut module_ids: Vec<ModuleId> = discovery.modules.keys().cloned().collect();
     module_ids.sort_by(|a, b| a.0.cmp(&b.0));
+    let profile_matches_lly = session_matches_lly_profile(session);
+    let loaded_lly_spec = session.spec().is_some_and(is_lly_spec_identity);
 
     for module_id in module_ids {
         let module_label = module_id.0.clone();
         let pids = session.module_pids(module_id.clone());
         for pid in pids {
+            if loaded_lly_spec && !profile_matches_lly {
+                continue;
+            }
             targets.push(enhanced_target(&module_label, &module_id, pid));
         }
     }
 
+    append_profile_enhanced_targets(session, profile_state, &mut targets);
+
     targets
+}
+
+fn append_profile_enhanced_targets<A: Adapter>(
+    session: &Session<A>,
+    profile_state: &ProfileState,
+    targets: &mut Vec<EnhancedPollTarget>,
+) {
+    let Some(selected) = profile_state.selected.as_ref() else {
+        return;
+    };
+
+    let identity = profile_identity(session);
+    let context = build_vehicle_context(session, profile_state.generation, &identity);
+    let registry = ProfileRegistry::with_builtins();
+    let runtime = ProfileRuntime::new(&registry);
+    let coverage = CoverageMap::new(Vec::new()).with_discovered_modules(
+        context
+            .discovered_modules
+            .iter()
+            .filter_map(profile_module_key)
+            .collect(),
+    );
+    let plan = runtime.plan_poll_cycle(Some(selected), 5, &coverage);
+    let Some(profile) = registry.get(selected.profile_id()) else {
+        return;
+    };
+
+    for planned in plan.requests {
+        let CapabilityId::Signal(key) = planned.capability else {
+            continue;
+        };
+        let Some(signal) = profile.signals().iter().find(|signal| signal.key == key) else {
+            continue;
+        };
+        push_profile_enhanced_target(targets, &context, selected, planned, signal);
+    }
+}
+
+fn push_profile_enhanced_target(
+    targets: &mut Vec<EnhancedPollTarget>,
+    context: &VehicleContext,
+    selected: &SelectedProfile,
+    planned: PlannedRequest,
+    signal: &SignalDefinition,
+) {
+    let did = signal_did(signal);
+    let module_id = planned.route.module.to_core_module_id();
+    if targets
+        .iter()
+        .any(|target| target.did == did && target.module_id == module_id)
+    {
+        return;
+    }
+
+    targets.push(EnhancedPollTarget {
+        did,
+        module_id,
+        module_label: planned.route.module.canonical().to_string(),
+        name: signal.label.to_string(),
+        unit: signal.unit.to_string(),
+        profile_request: Some(ProfileEnhancedPollTarget {
+            context: context.clone(),
+            selected: selected.clone(),
+            capability: planned.capability,
+            request: planned.request,
+        }),
+        confidence: Some(profile_confidence_label(signal.confidence).to_string()),
+        evidence: Some(profile_provenance_label(signal.provenance)),
+    });
+}
+
+fn session_matches_lly_profile<A: Adapter>(session: &Session<A>) -> bool {
+    let vin = session
+        .vehicle()
+        .map(|profile| profile.vin.as_str())
+        .unwrap_or_default();
+    let protocol = session
+        .discovery()
+        .map(|discovery| discovery.selected_protocol)
+        .unwrap_or(session.adapter_info().protocol);
+
+    lly_profile_matches(vin, session.spec(), protocol)
+}
+
+fn profile_identity<A: Adapter>(session: &Session<A>) -> IdentityOutcome {
+    let vin = session.vehicle().map(|profile| profile.vin.clone());
+    let confidence = if vin.as_deref().is_some_and(validate_vin_charset) {
+        IdentityConfidence::Confirmed
+    } else {
+        IdentityConfidence::Unread
+    };
+    IdentityOutcome { vin, confidence }
+}
+
+fn profile_module_key(module: &ModuleId) -> Option<obd2_dash::profiles::ModuleKey> {
+    match module.0.as_str() {
+        "ecm" => Some(obd2_dash::profiles::ModuleKey::Ecm),
+        "tcm" => Some(obd2_dash::profiles::ModuleKey::Tcm),
+        "ficm" => Some(obd2_dash::profiles::ModuleKey::Ficm),
+        "bcm" => Some(obd2_dash::profiles::ModuleKey::Bcm),
+        "abs" => Some(obd2_dash::profiles::ModuleKey::Ebcm),
+        "ipc" => Some(obd2_dash::profiles::ModuleKey::Ipc),
+        "airbag" => Some(obd2_dash::profiles::ModuleKey::Sdm),
+        "hvac" => Some(obd2_dash::profiles::ModuleKey::Hvac),
+        _ => None,
+    }
+}
+
+fn signal_did(signal: &SignalDefinition) -> u16 {
+    u16::from_be_bytes([signal.request_data[0], signal.request_data[1]])
+}
+
+fn profile_provenance_label(provenance: &[ProfileProvenance]) -> String {
+    let mut label = String::new();
+    for (idx, item) in provenance.iter().enumerate() {
+        if idx > 0 {
+            label.push('+');
+        }
+        label.push_str(profile_provenance_part(*item));
+    }
+    label
+}
+
+fn profile_provenance_part(provenance: ProfileProvenance) -> &'static str {
+    match provenance {
+        ProfileProvenance::ScanGaugePublished => "scangauge-published",
+        ProfileProvenance::LiveObserved => "live-observed",
+        ProfileProvenance::LegacySpec => "legacy-spec",
+        ProfileProvenance::LocalRejection => "local-rejection",
+        ProfileProvenance::LocalFixture => "local-fixture",
+    }
+}
+
+fn identity_confidence_label(confidence: IdentityConfidence) -> &'static str {
+    match confidence {
+        IdentityConfidence::Unread => "unread",
+        IdentityConfidence::Corrupted => "corrupted",
+        IdentityConfidence::Single => "single",
+        IdentityConfidence::Confirmed => "confirmed",
+    }
 }
 
 fn publish_enhanced_targets(targets: &[EnhancedPollTarget], tx: &mpsc::UnboundedSender<Message>) {
@@ -669,6 +1260,8 @@ fn publish_enhanced_targets(targets: &[EnhancedPollTarget], tx: &mpsc::Unbounded
             module: target.module_label.clone(),
             name: target.name.clone(),
             unit: target.unit.clone(),
+            confidence: target.confidence.clone(),
+            evidence: target.evidence.clone(),
         });
     }
 }
@@ -684,11 +1277,118 @@ fn enhanced_target(
         module_label: module_label.to_string(),
         name: pid.name.clone(),
         unit: pid.unit.clone(),
+        profile_request: None,
+        confidence: Some(core_confidence_label(pid.confidence).to_string()),
+        evidence: None,
+    }
+}
+
+fn core_confidence_label(confidence: CoreConfidence) -> &'static str {
+    match confidence {
+        CoreConfidence::Verified => "verified",
+        CoreConfidence::Community => "community",
+        CoreConfidence::Inferred => "inferred",
+        CoreConfidence::Unverified => "unverified",
+    }
+}
+
+fn profile_confidence_label(confidence: ProfileConfidence) -> &'static str {
+    match confidence {
+        ProfileConfidence::Candidate => "candidate",
+        ProfileConfidence::LiveObserved => "live-observed",
+        ProfileConfidence::Community => "community",
+        ProfileConfidence::Verified => "verified",
+        ProfileConfidence::Rejected => "rejected",
     }
 }
 
 fn enrich_dtcs<A: Adapter>(session: &Session<A>, dtcs: &mut Vec<Dtc>) {
     obd2_core::session::diagnostics::enrich_dtcs(dtcs, session.spec());
+}
+
+fn compute_profile_state<A: Adapter>(
+    session: &Session<A>,
+    generation: u64,
+    identity: &IdentityOutcome,
+) -> (ProfileState, ProfileContextFingerprint) {
+    let context = build_vehicle_context(session, generation, identity);
+    let fingerprint = ProfileContextFingerprint::from_context(&context);
+    let registry = ProfileRegistry::with_builtins();
+    let state = select_into_state(&registry, &context);
+    (state, fingerprint)
+}
+
+fn refresh_profile_selection_if_needed<A: Adapter>(
+    session: &Session<A>,
+    prepared: &mut PreparedSession,
+    tx: &mpsc::UnboundedSender<Message>,
+) -> bool {
+    sync_identity_from_session(session, &mut prepared.identity);
+
+    let current_generation = prepared.profile_state.generation;
+    let context = build_vehicle_context(session, current_generation, &prepared.identity);
+    let current = ProfileContextFingerprint::from_context(&context);
+    if current == prepared.profile_context {
+        return false;
+    }
+
+    let generation = next_generation();
+    let context = build_vehicle_context(session, generation, &prepared.identity);
+    let registry = ProfileRegistry::with_builtins();
+    prepared.profile_state = select_into_state(&registry, &context);
+    prepared.profile_context = ProfileContextFingerprint::from_context(&context);
+    publish_profile_state(&prepared.profile_state, tx);
+    true
+}
+
+fn sync_identity_from_session<A: Adapter>(session: &Session<A>, identity: &mut IdentityOutcome) {
+    let Some(vehicle) = session.vehicle() else {
+        return;
+    };
+    if identity.vin.as_deref() == Some(vehicle.vin.as_str()) {
+        return;
+    }
+
+    identity.vin = Some(vehicle.vin.clone());
+    identity.confidence = if validate_vin_charset(&vehicle.vin) {
+        IdentityConfidence::Single
+    } else {
+        IdentityConfidence::Corrupted
+    };
+}
+
+fn publish_profile_state(state: &ProfileState, tx: &mpsc::UnboundedSender<Message>) {
+    let _ = tx.send(Message::ProfileStateUpdate(state.snapshot()));
+    if let Some(confidence) = state.vin_confidence {
+        if let Some(warning) = confidence_warning(confidence) {
+            let _ = tx.send(Message::IdentityConfidenceWarning(warning));
+        }
+    }
+}
+
+impl ProfileContextFingerprint {
+    fn from_context(ctx: &VehicleContext) -> Self {
+        Self {
+            protocol: ctx.protocol,
+            vin: ctx.vin.clone(),
+            vin_confidence: ctx.vin_confidence,
+            spec_identity: ctx.spec.as_ref().map(|spec| {
+                format!(
+                    "{}:{}:{}:{}",
+                    spec.identity.name,
+                    spec.identity.engine.code,
+                    spec.identity.model_years.0,
+                    spec.identity.model_years.1
+                )
+            }),
+            active_bus: ctx.active_bus.clone(),
+            discovered_modules: ctx
+                .discovered_modules
+                .iter()
+                .map(|module| module.0.clone())
+                .collect(),
+        }
+    }
 }
 
 pub fn build_mock_capture_handle() -> CaptureHandle {
@@ -698,10 +1398,96 @@ pub fn build_mock_capture_handle() -> CaptureHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
     use std::time::Instant;
 
+    use async_trait::async_trait;
     use obd2_core::adapter::mock::MockAdapter;
+    use obd2_core::adapter::{
+        AdapterInfo, Capabilities, Chipset, InitializationReport, PhysicalTarget, RoutedRequest,
+    };
     use obd2_core::protocol::enhanced::{Reading, ReadingSource, Value};
+    use obd2_core::protocol::service::ServiceRequest;
+    use obd2_core::vehicle::PhysicalAddress;
+
+    #[derive(Clone)]
+    struct CountingDtcAdapter {
+        routed_writes: Arc<AtomicUsize>,
+    }
+
+    impl CountingDtcAdapter {
+        fn new() -> Self {
+            Self {
+                routed_writes: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn routed_writes(&self) -> Arc<AtomicUsize> {
+            Arc::clone(&self.routed_writes)
+        }
+    }
+
+    #[async_trait]
+    impl Adapter for CountingDtcAdapter {
+        async fn initialize(&mut self) -> Result<InitializationReport, Obd2Error> {
+            Ok(InitializationReport {
+                info: AdapterInfo {
+                    chipset: Chipset::Elm327Genuine,
+                    firmware: "test".into(),
+                    protocol: Protocol::J1850Vpw,
+                    capabilities: Capabilities::default(),
+                },
+                probe_attempts: Vec::new(),
+                events: Vec::new(),
+            })
+        }
+
+        async fn request(&mut self, req: &ServiceRequest) -> Result<Vec<u8>, Obd2Error> {
+            if req.service_id == 0x09 && req.data.as_slice() == [0x02] {
+                Ok(b"1GTHK29294E391526".to_vec())
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        async fn routed_request(&mut self, req: &RoutedRequest) -> Result<Vec<u8>, Obd2Error> {
+            if matches!(req.target, PhysicalTarget::Broadcast)
+                && req.service_id == 0x09
+                && req.data.as_slice() == [0x02]
+            {
+                return Ok(b"1GTHK29294E391526".to_vec());
+            }
+            match req.target {
+                PhysicalTarget::Addressed(PhysicalAddress::J1850 { .. }) => {
+                    self.routed_writes.fetch_add(1, Ordering::SeqCst);
+                    Ok(vec![0x00, 0x00, 0x00])
+                }
+                _ => Ok(Vec::new()),
+            }
+        }
+
+        async fn supported_pids(&mut self) -> Result<HashSet<Pid>, Obd2Error> {
+            Ok(HashSet::new())
+        }
+
+        async fn battery_voltage(&mut self) -> Result<Option<f64>, Obd2Error> {
+            Ok(Some(12.6))
+        }
+
+        fn info(&self) -> &AdapterInfo {
+            static INFO: std::sync::OnceLock<AdapterInfo> = std::sync::OnceLock::new();
+            INFO.get_or_init(|| AdapterInfo {
+                chipset: Chipset::Elm327Genuine,
+                firmware: "test".into(),
+                protocol: Protocol::J1850Vpw,
+                capabilities: Capabilities::default(),
+            })
+        }
+    }
 
     #[tokio::test]
     async fn test_drain_poll_events_translates_reading_and_error() {
@@ -785,68 +1571,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_build_enhanced_targets_from_identified_session() {
+    async fn test_build_enhanced_targets_gates_lly_spec_when_protocol_does_not_match() {
         let vin = crate::mock_profile::mock_vin("chevy");
         let adapter = MockAdapter::with_vin(vin);
         let mut session = Session::new(adapter);
         session.initialize().await.unwrap();
         session.identify_vehicle().await.unwrap();
 
-        let discovery = session.discovery().expect("discovery should be populated");
-        let mut module_ids: Vec<ModuleId> = discovery.modules.keys().cloned().collect();
-        module_ids.sort_by(|a, b| a.0.cmp(&b.0));
-        let expected: Vec<(String, u16, String, String)> = module_ids
-            .into_iter()
-            .flat_map(|module_id| {
-                let module_label = module_id.0.clone();
-                session
-                    .module_pids(module_id.clone())
-                    .into_iter()
-                    .map(move |pid| {
-                        (
-                            module_label.clone(),
-                            pid.did,
-                            pid.name.clone(),
-                            pid.unit.clone(),
-                        )
-                    })
-            })
-            .collect();
-
-        let targets = build_enhanced_targets(&session);
-        let actual: Vec<(String, u16, String, String)> = targets
-            .iter()
-            .map(|target| {
-                (
-                    target.module_label.clone(),
-                    target.did,
-                    target.name.clone(),
-                    target.unit.clone(),
-                )
-            })
-            .collect();
-
-        assert_eq!(actual, expected);
+        let identity = IdentityOutcome {
+            vin: session.vehicle().map(|profile| profile.vin.clone()),
+            confidence: IdentityConfidence::Single,
+        };
+        let (profile_state, _) = compute_profile_state(&session, next_generation(), &identity);
+        let targets = build_enhanced_targets(&session, &profile_state);
         assert!(
-            targets
-                .iter()
-                .any(|target| target.module_label == "ecm" && target.did == 0x1543),
-            "expected Duramax VGT actual DID to be polled"
+            targets.is_empty(),
+            "LLY enhanced targets must not be polled without a J1850 VPW LLY profile match"
         );
-        assert!(
-            targets
-                .iter()
-                .any(|target| target.module_label == "ecm" && target.did == 0x1540),
-            "expected Duramax VGT desired DID to be polled"
-        );
-        for did in 0x162F..=0x1636 {
-            assert!(
-                targets
-                    .iter()
-                    .any(|target| target.module_label == "ecm" && target.did == did),
-                "expected Duramax injector balance DID {did:#06X} to be polled"
-            );
-        }
     }
 
     #[test]
@@ -886,6 +1627,127 @@ mod tests {
         assert_eq!(dtcs.len(), 1);
         assert_eq!(dtcs[0].code, "P2563");
         assert_eq!(dtcs[0].status, DtcStatus::Pending);
+    }
+
+    #[test]
+    fn test_profile_dispatch_decode_error_preserves_decoder_message() {
+        let result = profile_dispatch_scan_result(DispatchError::Decode(
+            ProfileDecodeError::Decode("unsupported payload length 2: 4379".into()),
+        ));
+
+        assert_eq!(
+            result,
+            DiagnosticScanResult::Error("unsupported payload length 2: 4379".into())
+        );
+    }
+
+    #[test]
+    fn test_profile_dispatch_negative_response_maps_unsupported() {
+        let result = profile_dispatch_scan_result(DispatchError::Decode(
+            ProfileDecodeError::NegativeResponse {
+                service: 0x19,
+                nrc: 0x12,
+            },
+        ));
+
+        assert!(matches!(result, DiagnosticScanResult::Unsupported(_)));
+    }
+
+    #[test]
+    fn test_profile_dispatch_non_unsupported_negative_response_is_plain_error() {
+        let result = profile_dispatch_scan_result(DispatchError::Decode(
+            ProfileDecodeError::NegativeResponse {
+                service: 0x19,
+                nrc: 0x78,
+            },
+        ));
+
+        match result {
+            DiagnosticScanResult::Error(message) => {
+                assert!(message.contains("service 0x19"));
+                assert!(!message.contains("Decode("));
+                assert!(!message.contains("NegativeResponse {"));
+            }
+            other => panic!("unexpected scan result: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_profile_dtc_backoff_suppresses_three_scan_writes() {
+        let adapter = CountingDtcAdapter::new();
+        let routed_writes = adapter.routed_writes();
+        let mut session = Session::new(adapter);
+        session.initialize().await.unwrap();
+        session.identify_vehicle().await.unwrap();
+
+        let identity = IdentityOutcome {
+            vin: Some("1GTHK29294E391526".into()),
+            confidence: IdentityConfidence::Confirmed,
+        };
+        let (profile_state, _) = compute_profile_state(&session, next_generation(), &identity);
+        assert!(profile_state.selected.is_some());
+
+        let modules = dtc_scan_modules(&session);
+        assert!(
+            !modules.is_empty(),
+            "fixture VIN should resolve LLY discovered modules"
+        );
+
+        let mut backoff = GmClass2Backoff::default();
+        for module in &modules {
+            for service in [DtcService::GmClass2All, DtcService::GmClass2Active] {
+                backoff.observe(module, service, &DiagnosticScanResult::NoData);
+            }
+        }
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let baseline = routed_writes.load(Ordering::SeqCst);
+        for cycle in [60, 120, 180] {
+            let mut scan = DtcScan {
+                dtcs: Vec::new(),
+                entries: Vec::new(),
+                profile_notes: Vec::new(),
+            };
+            append_profile_dtcs(
+                &mut session,
+                &mut scan,
+                &tx,
+                cycle,
+                &profile_state,
+                &identity,
+                &mut backoff,
+            )
+            .await;
+            assert_eq!(routed_writes.load(Ordering::SeqCst), baseline);
+            assert_eq!(scan.entries.len(), modules.len() * 2);
+            assert!(scan
+                .entries
+                .iter()
+                .all(|entry| entry.result == DiagnosticScanResult::NoData));
+            assert!(rx.try_recv().is_err(), "cached backoff emitted evidence");
+        }
+
+        let mut scan = DtcScan {
+            dtcs: Vec::new(),
+            entries: Vec::new(),
+            profile_notes: Vec::new(),
+        };
+        append_profile_dtcs(
+            &mut session,
+            &mut scan,
+            &tx,
+            240,
+            &profile_state,
+            &identity,
+            &mut backoff,
+        )
+        .await;
+
+        assert!(routed_writes.load(Ordering::SeqCst) > baseline);
+        assert!(
+            matches!(rx.try_recv(), Ok(Message::ProfileEvidence(_))),
+            "real profile DTC retry should emit profile evidence"
+        );
     }
 
     #[tokio::test]

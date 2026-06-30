@@ -3,6 +3,11 @@ name = "obd2-dash"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+profile-selection = []
+proof-profile = []
+probe = []
+
 [dependencies]
 obd2-db = { path = "../obd2-db" }
 obd2-core = { path = "/Users/jared/Projects/HaulLogic/obd2-core/crates/obd2-core", features = ["serial", "ble", "embedded-specs"] }
@@ -29,3 +34,23 @@ sys-locale = "0.3.2"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "gm_class2_probe"
+required-features = ["probe"]
+
+[[example]]
+name = "gm_desired_map_probe"
+required-features = ["probe"]
+
+[[example]]
+name = "gm_desired_map_watch"
+required-features = ["probe"]
+
+[[example]]
+name = "gm_drive_logger"
+required-features = ["probe"]
+
+[[example]]
+name = "gm_pressure_probe"
+required-features = ["probe"]

@@ -10,6 +10,13 @@ apps/obd2-gui/src-tauri/target/
 *.db-shm
 *.db-wal
 
+# Captured device/protocol output (kept local; curated fixtures live under tests/corpus/)
+/raw-captures/
+/emulator/logs/
+/elm.log
+/elm.log.*
+/mock_debug.log
+
 # Device-specific config
 connection.json
 
@@ -30,6 +37,9 @@ apps/obd2-gui/test-results/
 
 # Worktrees
 .worktrees/
+
+# Test corpus staging output
+crates/obd2-dash/tests/corpus/.staging/
 
 # macOS
 .DS_Store

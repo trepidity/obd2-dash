@@ -49,16 +49,7 @@ pub fn render_widget(
         WidgetKind::VehicleSpeedGauge => render_single_speed(frame, area, state, block),
         WidgetKind::EngineLoadGauge => render_single_load(frame, area, state, block),
         WidgetKind::ThrottleGauge => render_single_throttle(frame, area, state, block),
-        WidgetKind::IntakeMapDisplay => render_single_value(
-            frame,
-            area,
-            state,
-            block,
-            "MAP",
-            state.domain.vehicle.intake_map,
-            "kPa",
-            0x0B,
-        ),
+        WidgetKind::IntakeMapDisplay => render_intake_pressure(frame, area, state, block),
         WidgetKind::MafDisplay => render_single_value(
             frame,
             area,
@@ -549,6 +540,105 @@ fn render_single_value(
     .block(block);
 
     frame.render_widget(paragraph, area);
+}
+
+fn render_intake_pressure(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
+    let unit = state.domain.display_pressure_value(0.0).1;
+    let mut lines = Vec::with_capacity(3);
+
+    let actual_color = state
+        .domain
+        .vehicle
+        .intake_map
+        .map(|value| ui::threshold_color_for_pid(state, 0x0B, value, || Color::White))
+        .unwrap_or(Color::DarkGray);
+    lines.push(pressure_line(
+        "Actual",
+        state.domain.vehicle.intake_map,
+        unit,
+        actual_color,
+        state,
+        None,
+    ));
+
+    let desired_map = enhanced_reading(state, 0x1542);
+    let desired_map_value = desired_map.and_then(|reading| reading.value);
+    let desired_map_color = if desired_map_value.is_some() {
+        Color::Cyan
+    } else if desired_map.is_some_and(|reading| reading.last_error.is_some()) {
+        Color::Red
+    } else {
+        Color::DarkGray
+    };
+    lines.push(pressure_line(
+        "Desired",
+        desired_map_value,
+        unit,
+        desired_map_color,
+        state,
+        desired_map.and_then(|reading| reading.confidence.as_deref()),
+    ));
+
+    let gm_baro = enhanced_reading(state, 0x1251).and_then(|reading| reading.value);
+    let baro = gm_baro.or(state.domain.vehicle.barometric_pressure);
+    let baro_color = state
+        .domain
+        .vehicle
+        .barometric_pressure
+        .or(gm_baro)
+        .map(|value| ui::threshold_color_for_pid(state, 0x33, value, || Color::White))
+        .unwrap_or(Color::DarkGray);
+    lines.push(pressure_line(
+        "Baro",
+        baro,
+        unit,
+        baro_color,
+        state,
+        enhanced_reading(state, 0x1251).and_then(|reading| reading.confidence.as_deref()),
+    ));
+
+    let paragraph = Paragraph::new(lines).block(block);
+    frame.render_widget(paragraph, area);
+}
+
+fn pressure_line(
+    label: &'static str,
+    value: Option<f64>,
+    fallback_unit: &'static str,
+    color: Color,
+    state: &AppState,
+    metadata: Option<&str>,
+) -> Line<'static> {
+    let text = match value {
+        Some(value) => {
+            let (display_val, unit) = state.domain.display_pressure_value(value);
+            match metadata {
+                Some(metadata) => {
+                    format!("{:<7} {:>6.1} {} {}", label, display_val, unit, metadata)
+                }
+                None => format!("{:<7} {:>6.1} {}", label, display_val, unit),
+            }
+        }
+        None => match metadata {
+            Some(metadata) => format!("{:<7}     -- {} {}", label, fallback_unit, metadata),
+            None => format!("{:<7}     -- {}", label, fallback_unit),
+        },
+    };
+    Line::from(Span::styled(
+        text,
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    ))
+}
+
+fn enhanced_reading<'a>(
+    state: &'a AppState,
+    did: u16,
+) -> Option<&'a crate::domain::EnhancedReading> {
+    state
+        .domain
+        .enhanced_readings
+        .iter()
+        .find(|reading| reading.did == did)
 }
 
 fn render_single_boost(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
@@ -1118,17 +1208,10 @@ fn render_diagnostic_scan_panel(frame: &mut Frame, area: Rect, state: &AppState,
     let mut idx = 0;
     while idx < entries.len() {
         let scope = entries[idx].scope.clone();
-        let mut stored = None;
-        let mut pending = None;
-        let mut permanent = None;
+        let mut grouped = Vec::new();
 
         while idx < entries.len() && entries[idx].scope == scope {
-            let result = &entries[idx].result;
-            match entries[idx].service {
-                DtcService::Stored => stored = Some(result),
-                DtcService::Pending => pending = Some(result),
-                DtcService::Permanent => permanent = Some(result),
-            }
+            grouped.push((entries[idx].service, &entries[idx].result));
             idx += 1;
         }
 
@@ -1136,9 +1219,9 @@ fn render_diagnostic_scan_panel(frame: &mut Frame, area: Rect, state: &AppState,
             format!(" {:<9}", diagnostic_scan_scope_label(&scope)),
             Style::default().fg(Color::White),
         )];
-        push_scan_result_span(&mut spans, DtcService::Stored, stored);
-        push_scan_result_span(&mut spans, DtcService::Pending, pending);
-        push_scan_result_span(&mut spans, DtcService::Permanent, permanent);
+        for (service, result) in grouped {
+            push_scan_result_span(&mut spans, service, Some(result));
+        }
         lines.push(Line::from(spans));
     }
 
@@ -1163,7 +1246,7 @@ fn push_scan_result_span<'a>(
 
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
-        format!("{:02X}:{:<7}", service.service_id(), text),
+        format!("{:<4}:{:<7}", service.label(), text),
         style,
     ));
 }

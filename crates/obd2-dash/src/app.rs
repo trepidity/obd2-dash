@@ -21,6 +21,9 @@ use obd2_core::protocol::enhanced::Reading;
 use obd2_core::protocol::pid::Pid;
 use obd2_core::transport::CaptureMetadata;
 use obd2_core::vehicle::ModuleId;
+use obd2_dash::gm_active::{GmActiveTestCommand, GmActiveTestResult};
+use obd2_dash::gm_evidence::GmEvidenceRecord;
+use obd2_dash::profiles::{ProfileEvidenceRecord, ProfileStateSnapshot};
 
 /// Commands sent from the UI thread to the session task for raw capture control.
 pub enum CaptureCommand {
@@ -35,7 +38,12 @@ pub enum CaptureCommand {
 pub enum DiagnosticCommand {
     ClearAll,
     ClearOnModule(ModuleId),
-    FetchFreezeFrame { dtc_code: String, pids: Vec<Pid> },
+    FetchFreezeFrame {
+        dtc_code: String,
+        pids: Vec<Pid>,
+    },
+    #[allow(dead_code)]
+    GmActiveTest(GmActiveTestCommand),
 }
 
 /// Shared handle for raw protocol capture state.
@@ -79,6 +87,8 @@ pub enum Message {
     DiscoveryUpdated(DiscoveryState),
     AdapterDetected(AdapterInfo),
     Error(String),
+    ProfileStateUpdate(ProfileStateSnapshot),
+    IdentityConfidenceWarning(String),
     // UI-only
     VinDetected(String),
     DeviceFound(DiscoveredDevice),
@@ -98,12 +108,16 @@ pub enum Message {
         name: String,
         value: f64,
         unit: String,
+        confidence: Option<String>,
+        evidence: Option<String>,
     },
     EnhancedPidTarget {
         did: u16,
         module: String,
         name: String,
         unit: String,
+        confidence: Option<String>,
+        evidence: Option<String>,
     },
     EnhancedPidError {
         did: u16,
@@ -111,17 +125,22 @@ pub enum Message {
         name: String,
         unit: String,
         error: String,
+        confidence: Option<String>,
+        evidence: Option<String>,
     },
     // O2 sensor monitoring
     O2MonitoringUpdate(Vec<O2Reading>),
     // Readiness monitors
     ReadinessUpdate(ReadinessStatus),
+    ProfileEvidence(Box<ProfileEvidenceRecord>),
+    ActiveTestAttempt(Box<GmEvidenceRecord>),
     // Diagnostics commands
     DiagnosticReady(mpsc::UnboundedSender<DiagnosticCommand>),
     ClearDtcsComplete,
     ClearDtcsError(String),
     FreezeFrameResult(crate::domain::FreezeFrameSnapshot),
     FreezeFrameError(String),
+    ActiveTestResult(GmActiveTestResult),
     // Raw protocol capture
     CaptureReady {
         handle: CaptureHandle,
@@ -292,6 +311,18 @@ impl AppState {
             Message::Error(e) => {
                 self.domain.update(DomainMessage::Error(e));
             }
+            Message::ProfileStateUpdate(snapshot) => {
+                tracing::debug!(
+                    generation = snapshot.generation,
+                    selected = snapshot.selected_profile_id,
+                    manual_confirmed = snapshot.manual_confirmed,
+                    ?snapshot.vin_confidence,
+                    "profile state updated"
+                );
+            }
+            Message::IdentityConfidenceWarning(warning) => {
+                tracing::warn!("{warning}");
+            }
             Message::DeviceFound(dev) => {
                 self.scan_devices.push(dev);
                 if self.scan_mode == ScanMode::Scanning {
@@ -328,6 +359,8 @@ impl AppState {
                 name,
                 value,
                 unit,
+                confidence,
+                evidence,
             } => {
                 self.domain.update(DomainMessage::EnhancedPidUpdate {
                     did,
@@ -335,6 +368,8 @@ impl AppState {
                     name,
                     value,
                     unit,
+                    confidence,
+                    evidence,
                 });
             }
             Message::EnhancedPidTarget {
@@ -342,12 +377,16 @@ impl AppState {
                 module,
                 name,
                 unit,
+                confidence,
+                evidence,
             } => {
                 self.domain.update(DomainMessage::EnhancedPidTarget {
                     did,
                     module,
                     name,
                     unit,
+                    confidence,
+                    evidence,
                 });
             }
             Message::EnhancedPidError {
@@ -356,6 +395,8 @@ impl AppState {
                 name,
                 unit,
                 error,
+                confidence,
+                evidence,
             } => {
                 self.domain.update(DomainMessage::EnhancedPidError {
                     did,
@@ -363,6 +404,8 @@ impl AppState {
                     name,
                     unit,
                     error,
+                    confidence,
+                    evidence,
                 });
             }
             Message::O2MonitoringUpdate(readings) => {
@@ -371,6 +414,12 @@ impl AppState {
             }
             Message::ReadinessUpdate(status) => {
                 self.domain.update(DomainMessage::ReadinessUpdate(status));
+            }
+            Message::ProfileEvidence(record) => {
+                self.domain.update(DomainMessage::ProfileEvidence(record));
+            }
+            Message::ActiveTestAttempt(record) => {
+                self.domain.update(DomainMessage::ActiveTestAttempt(record));
             }
             Message::DiagnosticReady(tx) => {
                 self.diagnostic_tx = Some(tx);
@@ -392,6 +441,22 @@ impl AppState {
             Message::FreezeFrameError(e) => {
                 self.domain.freeze_frame_pending = false;
                 tracing::debug!("Freeze-frame: {}", e);
+            }
+            Message::ActiveTestResult(result) => {
+                let status = if result.accepted {
+                    "accepted"
+                } else {
+                    "blocked"
+                };
+                tracing::warn!(
+                    "GM active test {status}: {} ({})",
+                    result.label,
+                    result.detail
+                );
+                self.domain.last_error = Some(format!(
+                    "GM active test {status}: {} - {}",
+                    result.label, result.detail
+                ));
             }
             Message::Tick => {
                 // UI tick -- nothing to do here

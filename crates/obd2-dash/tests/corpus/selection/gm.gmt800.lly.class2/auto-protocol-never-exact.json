@@ -1,0 +1,12 @@
+{
+  "name": "auto protocol never selects LLY",
+  "protocol": "Auto",
+  "vin": "1GCHK23224F000001",
+  "vin_confidence": "Confirmed",
+  "use_embedded_spec": true,
+  "expected": {
+    "selected": false,
+    "exact": [],
+    "partial": []
+  }
+}

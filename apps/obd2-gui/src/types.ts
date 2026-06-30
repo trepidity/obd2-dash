@@ -13,9 +13,32 @@ export interface CylinderBalance {
 
 export interface ModuleScan {
   module: string;
-  stored: string;
-  pending: string;
-  permanent: string;
+  standard: string;
+  gm_all: string;
+  gm_active: string;
+}
+
+export interface DtcSnapshot {
+  code: string;
+  module: string;
+  status: string;
+  description: string | null;
+  notes: string | null;
+}
+
+export interface SignalEvidence {
+  key: string;
+  label: string;
+  module: string;
+  node: string;
+  request: string;
+  source: string;
+  confidence: string;
+  status: string;
+  unit: string;
+  value: number | null;
+  response: string | null;
+  notes: string | null;
 }
 
 export interface TemperatureSnapshot {
@@ -38,6 +61,43 @@ export interface VgtSnapshot {
   error_pct: number;
 }
 
+export interface ActiveTestDefinition {
+  id: "vgt_vane_control";
+  label: string;
+  locked: boolean;
+  lock_reason: string;
+  command_profile: string;
+  supported_modes: string[];
+  safety_notes: string[];
+}
+
+export interface ActiveTestPrecondition {
+  label: string;
+  satisfied: boolean;
+  detail: string;
+}
+
+export interface ActiveTestResult {
+  test_id: "vgt_vane_control";
+  label: string;
+  accepted: boolean;
+  status: string;
+  detail: string;
+  command: string;
+  evidence_path: string | null;
+  timestamp: string;
+}
+
+export interface VgtActiveTestSnapshot {
+  definition: ActiveTestDefinition;
+  preconditions: ActiveTestPrecondition[];
+  last_result: ActiveTestResult | null;
+}
+
+export interface ActiveTestsSnapshot {
+  vgt_vane: VgtActiveTestSnapshot;
+}
+
 export interface DiagnosticSnapshot {
   vehicle: string;
   vin: string;
@@ -50,12 +110,17 @@ export interface DiagnosticSnapshot {
   units: string;
   statuses: StatusValue[];
   alerts: string[];
+  dtcs: DtcSnapshot[];
   modules: ModuleScan[];
   cylinders: CylinderBalance[];
   vgt: VgtSnapshot;
   fuel_rail: FuelRailSnapshot;
   temperatures: TemperatureSnapshot;
   map_psi: number;
+  desired_map_psi: number | null;
+  barometric_psi: number | null;
   boost_psi: number;
-  maf_lb_min: number;
+  maf_g_s: number;
+  source_confidence: SignalEvidence[];
+  active_tests: ActiveTestsSnapshot;
 }

@@ -1,7 +1,8 @@
 use std::time::Instant;
 
 use super::format::{
-    RecordingFrame, FRAME_DTC, FRAME_ENHANCED, FRAME_O2, FRAME_PID, FRAME_VOLTAGE,
+    RecordingFrame, FRAME_ACTIVE_TEST_ATTEMPT, FRAME_DTC, FRAME_ENHANCED, FRAME_O2, FRAME_PID,
+    FRAME_PROFILE_DISPATCH, FRAME_PROFILE_DTC, FRAME_PROFILE_VALUE, FRAME_VOLTAGE,
 };
 use super::index::SessionEntry;
 
@@ -205,6 +206,26 @@ impl ReplayController {
     /// Check if a frame is an O2 monitoring frame.
     pub fn is_o2_frame(frame: &RecordingFrame) -> bool {
         frame.frame_type == FRAME_O2
+    }
+
+    /// Check if a frame is a profile value frame.
+    pub fn is_profile_value_frame(frame: &RecordingFrame) -> bool {
+        frame.frame_type == FRAME_PROFILE_VALUE
+    }
+
+    /// Check if a frame is a profile DTC frame.
+    pub fn is_profile_dtc_frame(frame: &RecordingFrame) -> bool {
+        frame.frame_type == FRAME_PROFILE_DTC
+    }
+
+    /// Check if a frame is profile dispatch evidence only.
+    pub fn is_profile_dispatch_frame(frame: &RecordingFrame) -> bool {
+        frame.frame_type == FRAME_PROFILE_DISPATCH
+    }
+
+    /// Check if a frame is active-test attempt evidence.
+    pub fn is_active_test_attempt_frame(frame: &RecordingFrame) -> bool {
+        frame.frame_type == FRAME_ACTIVE_TEST_ATTEMPT
     }
 }
 
@@ -425,6 +446,44 @@ mod tests {
         assert!(ReplayController::is_o2_frame(&o2_frame));
 
         assert!(!ReplayController::is_pid_frame(&voltage_frame));
+    }
+
+    #[test]
+    fn test_profile_frame_type_checks() {
+        let value = RecordingFrame {
+            frame_type: FRAME_PROFILE_VALUE,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![],
+        };
+        let dtc = RecordingFrame {
+            frame_type: FRAME_PROFILE_DTC,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![],
+        };
+        let dispatch = RecordingFrame {
+            frame_type: FRAME_PROFILE_DISPATCH,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![],
+        };
+        let active = RecordingFrame {
+            frame_type: FRAME_ACTIVE_TEST_ATTEMPT,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![],
+        };
+
+        assert!(ReplayController::is_profile_value_frame(&value));
+        assert!(ReplayController::is_profile_dtc_frame(&dtc));
+        assert!(ReplayController::is_profile_dispatch_frame(&dispatch));
+        assert!(ReplayController::is_active_test_attempt_frame(&active));
+        assert!(!ReplayController::is_profile_value_frame(&dtc));
     }
 }
 
