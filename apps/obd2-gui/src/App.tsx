@@ -437,38 +437,116 @@ function Toolbar({
   );
 }
 
-function CategoryTabs({
+function tabButtonId(tab: TabId): string {
+  return `category-tab-${tab}`;
+}
+
+function tabPanelId(tab: TabId): string {
+  return `category-panel-${tab}`;
+}
+
+function CategoryRail({
   tabs,
   activeTab,
   onSelect,
+  connection,
 }: {
   tabs: CategoryTab[];
   activeTab: TabId;
   onSelect: (tab: TabId) => void;
+  connection: string;
 }) {
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  const moveFocus = useCallback(
+    (currentTab: TabId, key: string) => {
+      const currentIndex = tabs.findIndex((tab) => tab.id === currentTab);
+      if (currentIndex < 0) return;
+
+      let nextIndex: number | null = null;
+      if (key === "ArrowDown" || key === "ArrowRight") {
+        nextIndex = (currentIndex + 1) % tabs.length;
+      } else if (key === "ArrowUp" || key === "ArrowLeft") {
+        nextIndex = (currentIndex + tabs.length - 1) % tabs.length;
+      } else if (key === "Home") {
+        nextIndex = 0;
+      } else if (key === "End") {
+        nextIndex = tabs.length - 1;
+      }
+
+      if (nextIndex == null) return;
+      const nextTab = tabs[nextIndex]?.id;
+      if (!nextTab) return;
+      onSelect(nextTab);
+      window.requestAnimationFrame(() => tabRefs.current[nextTab]?.focus());
+    },
+    [onSelect, tabs],
+  );
+
   return (
-    <div className="flex flex-col gap-2 border-y border-zinc-900 py-2">
-      <div className="flex min-w-0 items-center gap-2 text-xs text-zinc-500">
-        <Radio size={14} />
-        <span className="truncate">Tauri shell active. Live serial polling is owned by the Rust session boundary.</span>
+    <aside
+      className={`${panelClass} overflow-hidden lg:sticky lg:top-[84px] lg:h-[calc(100vh-104px)] lg:w-[238px] lg:flex-shrink-0`}
+      data-testid="category-rail"
+    >
+      <div className="border-b border-zinc-800/90 px-3 py-3">
+        <div className="flex min-w-0 items-center gap-2 text-xs font-semibold uppercase text-zinc-400">
+          <Radio size={14} />
+          <span>Categories</span>
+        </div>
+        <div className="mt-1 truncate text-[11px] text-zinc-500">
+          Live serial owned by Rust session / {connection}
+        </div>
       </div>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 2xl:grid-cols-8" role="tablist" aria-label="Diagnostic categories">
+      <div
+        aria-label="Diagnostic categories"
+        aria-orientation="vertical"
+        className="flex gap-2 overflow-x-auto p-2 lg:min-h-0 lg:flex-1 lg:flex-col lg:overflow-y-auto lg:overflow-x-hidden"
+        role="tablist"
+      >
         {tabs.map((tab) => {
           const selected = activeTab === tab.id;
           return (
             <button
               aria-selected={selected}
-              className={`flex min-h-[58px] min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-left transition ${
+              aria-controls={tabPanelId(tab.id)}
+              className={`relative flex min-h-[64px] min-w-[172px] items-center gap-3 rounded-md border px-3 py-2 text-left transition lg:min-w-0 ${
                 selected
                   ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
                   : "border-zinc-800 bg-zinc-950/45 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200"
               }`}
+              id={tabButtonId(tab.id)}
               key={tab.id}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "ArrowDown" ||
+                  event.key === "ArrowRight" ||
+                  event.key === "ArrowUp" ||
+                  event.key === "ArrowLeft" ||
+                  event.key === "Home" ||
+                  event.key === "End"
+                ) {
+                  event.preventDefault();
+                  moveFocus(tab.id, event.key);
+                }
+              }}
               onClick={() => onSelect(tab.id)}
+              ref={(node) => {
+                tabRefs.current[tab.id] = node;
+              }}
               role="tab"
+              tabIndex={selected ? 0 : -1}
               type="button"
             >
-              <span className={selected ? "text-cyan-200" : "text-zinc-500"}>{tab.icon}</span>
+              {selected ? <span className="absolute bottom-2 left-0 top-2 w-0.5 rounded-r bg-cyan-300" /> : null}
+              <span
+                className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border ${
+                  selected
+                    ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-100"
+                    : "border-zinc-800 bg-black/20 text-zinc-500"
+                }`}
+              >
+                {tab.icon}
+              </span>
               <span className="min-w-0">
                 <span className="block truncate text-xs font-semibold">{tab.label}</span>
                 <span className="mt-1 block truncate text-[11px] text-zinc-500">{tab.summary}</span>
@@ -477,7 +555,7 @@ function CategoryTabs({
           );
         })}
       </div>
-    </div>
+    </aside>
   );
 }
 
@@ -1061,7 +1139,7 @@ function RawPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
     <Panel
       title="Raw snapshot"
       icon={<Database size={14} />}
-      className="flex h-[calc(100vh-238px)] min-h-[420px] flex-col"
+      className="flex h-[calc(100vh-210px)] min-h-[520px] flex-col lg:h-[calc(100vh-156px)]"
       bodyClassName="flex min-h-0 flex-1 p-3"
       testId="raw-snapshot-panel"
     >
@@ -1456,6 +1534,7 @@ function App() {
       },
     ];
   }, [replayMode, replayPaused, replayRunning, selectedRecording, snapshot, unitMode]);
+  const activeTabMeta = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
 
   return (
     <div className="min-h-screen bg-[#090b0d] text-zinc-100">
@@ -1470,68 +1549,77 @@ function App() {
         onToggleRecording={toggleRecording}
         onToggleReplay={toggleReplay}
       />
-      <main className="mx-auto flex max-w-[1680px] flex-col gap-3 px-4 py-4">
+      <main className="mx-auto flex max-w-[1760px] flex-col gap-3 px-4 py-4">
         <StatusStrip snapshot={snapshot} recording={recording} replayMode={replayMode} />
-        <CategoryTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} />
-
-        {activeTab === "raw" ? (
-          <RawPanel snapshot={snapshot} />
-        ) : activeTab === "settings" ? (
-          <SettingsPanel snapshot={snapshot} unitMode={unitMode} setUnitMode={setUnitMode} />
-        ) : activeTab === "replay" ? (
-          <ReplayPanel
-            snapshot={snapshot}
-            selectedRecording={selectedRecording}
-            openRecording={openRecording}
-            replayError={replayError}
-            replayRunning={replayRunning}
-            replayPaused={replayPaused}
-            setReplayPaused={setReplayPaused}
-            setReplayRunning={setReplayRunning}
-            exitReplay={exitReplay}
-          />
-        ) : activeTab === "air" ? (
-          <div className="flex min-w-0 flex-col gap-3">
-            <LiveReadouts snapshot={snapshot} unitMode={unitMode} />
-          </div>
-        ) : activeTab === "fuel" ? (
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
-            <VgtPanel snapshot={snapshot} />
-            <FuelRailPanel snapshot={snapshot} unitMode={unitMode} />
-          </div>
-        ) : activeTab === "active" ? (
-          <ActiveTestsPanel
-            snapshot={snapshot}
-            latestResult={activeTestResult}
-            setLatestResult={setActiveTestResult}
-          />
-        ) : activeTab === "diagnostics" ? (
-          <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
-            <div className="flex flex-col gap-3">
-              <DtcPanel dtcs={snapshot.dtcs} />
-              <ReadinessPanel />
-            </div>
-            <ModuleScanPanel modules={snapshot.modules} />
-            <AlertsPanel alerts={snapshot.alerts} />
-          </div>
-        ) : activeTab === "thermal" ? (
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <TemperaturePanel snapshot={snapshot} unitMode={unitMode} />
-            <ProtocolPanel snapshot={snapshot} />
-          </div>
-        ) : (
-          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="flex min-w-0 flex-col gap-3">
-              <LiveReadouts snapshot={snapshot} unitMode={unitMode} />
-              <FuelRailPanel snapshot={snapshot} unitMode={unitMode} />
-              <TemperaturePanel snapshot={snapshot} unitMode={unitMode} />
-            </div>
-            <div className="flex flex-col gap-3">
-              <DtcPanel dtcs={snapshot.dtcs} />
-              <AlertsPanel alerts={snapshot.alerts} />
-            </div>
-          </div>
-        )}
+        <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start">
+          <CategoryRail tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} connection={snapshot.connection} />
+          <section
+            aria-labelledby={tabButtonId(activeTabMeta.id)}
+            className="min-w-0 flex-1"
+            id={tabPanelId(activeTabMeta.id)}
+            role="tabpanel"
+            tabIndex={0}
+          >
+            {activeTab === "raw" ? (
+              <RawPanel snapshot={snapshot} />
+            ) : activeTab === "settings" ? (
+              <SettingsPanel snapshot={snapshot} unitMode={unitMode} setUnitMode={setUnitMode} />
+            ) : activeTab === "replay" ? (
+              <ReplayPanel
+                snapshot={snapshot}
+                selectedRecording={selectedRecording}
+                openRecording={openRecording}
+                replayError={replayError}
+                replayRunning={replayRunning}
+                replayPaused={replayPaused}
+                setReplayPaused={setReplayPaused}
+                setReplayRunning={setReplayRunning}
+                exitReplay={exitReplay}
+              />
+            ) : activeTab === "air" ? (
+              <div className="flex min-w-0 flex-col gap-3">
+                <LiveReadouts snapshot={snapshot} unitMode={unitMode} />
+              </div>
+            ) : activeTab === "fuel" ? (
+              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
+                <VgtPanel snapshot={snapshot} />
+                <FuelRailPanel snapshot={snapshot} unitMode={unitMode} />
+              </div>
+            ) : activeTab === "active" ? (
+              <ActiveTestsPanel
+                snapshot={snapshot}
+                latestResult={activeTestResult}
+                setLatestResult={setActiveTestResult}
+              />
+            ) : activeTab === "diagnostics" ? (
+              <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
+                <div className="flex flex-col gap-3">
+                  <DtcPanel dtcs={snapshot.dtcs} />
+                  <ReadinessPanel />
+                </div>
+                <ModuleScanPanel modules={snapshot.modules} />
+                <AlertsPanel alerts={snapshot.alerts} />
+              </div>
+            ) : activeTab === "thermal" ? (
+              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <TemperaturePanel snapshot={snapshot} unitMode={unitMode} />
+                <ProtocolPanel snapshot={snapshot} />
+              </div>
+            ) : (
+              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="flex min-w-0 flex-col gap-3">
+                  <LiveReadouts snapshot={snapshot} unitMode={unitMode} />
+                  <FuelRailPanel snapshot={snapshot} unitMode={unitMode} />
+                  <TemperaturePanel snapshot={snapshot} unitMode={unitMode} />
+                </div>
+                <div className="flex flex-col gap-3">
+                  <DtcPanel dtcs={snapshot.dtcs} />
+                  <AlertsPanel alerts={snapshot.alerts} />
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
       </main>
     </div>
   );

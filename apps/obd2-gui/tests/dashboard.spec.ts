@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-test("dashboard renders category tabs and utility panels", async ({ page }) => {
+test("dashboard renders category rail and utility panels", async ({ page }) => {
   const consoleIssues: string[] = [];
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning") {
@@ -13,8 +13,16 @@ test("dashboard renders category tabs and utility panels", async ({ page }) => {
 
   await page.goto("http://127.0.0.1:5173/");
   await expect(page).toHaveTitle("OBD2 Dash");
-  await expect(page.getByRole("tab", { name: /Overview\s+0 DTC \/ 0 alerts/ })).toBeVisible();
-  await expect(page.getByRole("tab", { name: /Air \/ Boost\s+0\.0 psi \/ 39\.0 g\/s/ })).toBeVisible();
+  await expect(page.getByTestId("category-rail")).toBeVisible();
+  await expect(page.getByRole("tablist", { name: "Diagnostic categories" })).toHaveAttribute("aria-orientation", "vertical");
+  const overviewTab = page.getByRole("tab", { name: /Overview\s+0 DTC \/ 0 alerts/ });
+  const airTab = page.getByRole("tab", { name: /Air \/ Boost\s+0\.0 psi \/ 39\.0 g\/s/ });
+  await expect(overviewTab).toBeVisible();
+  await expect(overviewTab).toHaveAttribute("aria-controls", "category-panel-overview");
+  await expect(overviewTab).toHaveAttribute("tabindex", "0");
+  await expect(page.getByRole("tabpanel", { name: /Overview/ })).toHaveAttribute("id", "category-panel-overview");
+  await expect(page.getByRole("tabpanel", { name: /Overview/ })).toHaveAttribute("tabindex", "0");
+  await expect(airTab).toBeVisible();
   await expect(page.getByRole("tab", { name: /Fuel \/ VGT\s+rail delta -1250\.0 psi/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /Active Tests\s+locked/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /Thermal \/ System\s+13\.8 V \/ 170\.6 F/ })).toBeVisible();
@@ -26,7 +34,15 @@ test("dashboard renders category tabs and utility panels", async ({ page }) => {
   await expect(page.getByText("Barometer", { exact: true })).toBeVisible();
   await expect(page.getByText("39.0 g/s", { exact: true })).toBeVisible();
 
-  await page.getByRole("tab", { name: /Air \/ Boost/ }).click();
+  await overviewTab.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(airTab).toBeFocused();
+  await expect(airTab).toHaveAttribute("aria-selected", "true");
+  await expect(airTab).toHaveAttribute("tabindex", "0");
+  await expect(overviewTab).toHaveAttribute("tabindex", "-1");
+  await expect(page.getByRole("tabpanel", { name: /Air \/ Boost/ })).toHaveAttribute("id", "category-panel-air");
+
+  await airTab.click();
   await expect(page.getByText("Intake MAP")).toBeVisible();
   await expect(page.getByText("Boost", { exact: true })).toBeVisible();
   await expect(page.getByText("MAF")).toBeVisible();
