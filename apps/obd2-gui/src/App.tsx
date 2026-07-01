@@ -73,12 +73,12 @@ interface RecordingSummary {
 const stateClasses: Record<StateKind, string> = {
   ok: "text-emerald-300",
   warn: "text-amber-300",
-  crit: "text-red-300",
-  muted: "text-zinc-500",
+  crit: "text-red-400",
+  muted: "text-zinc-400",
 };
 
 const panelClass =
-  "rounded-md border border-zinc-700/80 bg-zinc-950/58 shadow-[0_18px_60px_rgba(0,0,0,0.25)]";
+  "rounded-md border border-zinc-700 bg-zinc-900/60 ring-1 ring-white/5";
 
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
@@ -340,7 +340,7 @@ function Panel({
 }) {
   return (
     <section className={`${panelClass} ${className}`} data-testid={testId}>
-      <div className="flex h-9 items-center gap-2 border-b border-zinc-800/90 px-3 text-[11px] font-semibold uppercase text-zinc-400">
+      <div className="flex h-9 items-center gap-2 border-b border-zinc-800 px-3 text-[11px] font-semibold uppercase text-zinc-400">
         {icon}
         <span>{title}</span>
       </div>
@@ -378,8 +378,8 @@ function Toolbar({
             <Gauge size={19} />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-cyan-100">{snapshot.vehicle}</div>
-            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-500">
+            <div className="truncate text-sm font-semibold text-cyan-200">{snapshot.vehicle}</div>
+            <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-400">
               <span>VIN {snapshot.vin}</span>
               <span>{snapshot.protocol}</span>
               <span>{snapshot.poll_ms} ms poll</span>
@@ -428,7 +428,7 @@ function Toolbar({
             <RotateCcw size={14} />
             Refresh
           </button>
-          <div className="hidden min-w-[112px] text-right text-[11px] text-zinc-500 xl:block">
+          <div className="hidden min-w-[112px] text-right text-[11px] text-zinc-400 xl:block">
             {lastRefresh.toLocaleTimeString()}
           </div>
         </div>
@@ -488,12 +488,12 @@ function CategoryRail({
       className={`${panelClass} overflow-hidden lg:sticky lg:top-[84px] lg:h-[calc(100vh-104px)] lg:w-[238px] lg:flex-shrink-0`}
       data-testid="category-rail"
     >
-      <div className="border-b border-zinc-800/90 px-3 py-3">
+      <div className="border-b border-zinc-800 px-3 py-3">
         <div className="flex min-w-0 items-center gap-2 text-xs font-semibold uppercase text-zinc-400">
           <Radio size={14} />
           <span>Categories</span>
         </div>
-        <div className="mt-1 truncate text-[11px] text-zinc-500">
+        <div className="mt-1 truncate text-[11px] text-zinc-400">
           Live serial owned by Rust session / {connection}
         </div>
       </div>
@@ -512,7 +512,7 @@ function CategoryRail({
               className={`relative flex min-h-[64px] min-w-[172px] items-center gap-3 rounded-md border px-3 py-2 text-left transition lg:min-w-0 ${
                 selected
                   ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
-                  : "border-zinc-800 bg-zinc-950/45 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200"
+                  : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:border-zinc-600 hover:text-zinc-200"
               }`}
               id={tabButtonId(tab.id)}
               key={tab.id}
@@ -542,14 +542,14 @@ function CategoryRail({
                 className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md border ${
                   selected
                     ? "border-cyan-400/40 bg-cyan-400/10 text-cyan-100"
-                    : "border-zinc-800 bg-black/20 text-zinc-500"
+                    : "border-zinc-800 bg-black/25 text-zinc-400"
                 }`}
               >
                 {tab.icon}
               </span>
               <span className="min-w-0">
                 <span className="block truncate text-xs font-semibold">{tab.label}</span>
-                <span className="mt-1 block truncate text-[11px] text-zinc-500">{tab.summary}</span>
+                <span className="mt-1 block truncate text-[11px] text-zinc-400">{tab.summary}</span>
               </span>
             </button>
           );
@@ -587,25 +587,34 @@ function StatusStrip({
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
-      <div className="rounded-md border border-zinc-800 bg-zinc-950/70 px-3 py-2">
-        <div className="text-[11px] text-zinc-500">Voltage</div>
-        <div className="mt-1 text-lg font-semibold text-yellow-300">{snapshot.voltage.toFixed(1)} V</div>
+      <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+        <div className="text-[11px] text-zinc-400">Voltage</div>
+        <div className="mt-1 text-lg font-semibold text-zinc-100">{snapshot.voltage.toFixed(1)} V</div>
       </div>
-      <div className="rounded-md border border-zinc-800 bg-zinc-950/70 px-3 py-2">
-        <div className="text-[11px] text-zinc-500">Engine RPM</div>
+      <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+        <div className="text-[11px] text-zinc-400">Engine RPM</div>
         <div className="mt-1 text-lg font-semibold text-emerald-300">{snapshot.rpm}</div>
       </div>
-      <div className="rounded-md border border-zinc-800 bg-zinc-950/70 px-3 py-2">
-        <div className="text-[11px] text-zinc-500">Speed</div>
+      <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+        <div className="text-[11px] text-zinc-400">Speed</div>
         <div className="mt-1 text-lg font-semibold text-zinc-100">{snapshot.speed_mph} mph</div>
       </div>
-      <div className="rounded-md border border-zinc-800 bg-zinc-950/70 px-3 py-2">
-        <div className="text-[11px] text-zinc-500">Source</div>
-        <div className="mt-1 text-lg font-semibold text-cyan-200">{snapshot.connection}</div>
+      <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
+        <div className="text-[11px] text-zinc-400">Source</div>
+        <div
+          className={`mt-1 line-clamp-2 text-sm font-medium leading-snug ${
+            /error|failed|busy|unavailable|denied/i.test(snapshot.connection)
+              ? "text-red-400"
+              : "text-cyan-200"
+          }`}
+          title={snapshot.connection}
+        >
+          {snapshot.connection}
+        </div>
       </div>
       {statuses.map((item) => (
-        <div className="rounded-md border border-zinc-800 bg-zinc-950/70 px-3 py-2" key={item.label}>
-          <div className="text-[11px] text-zinc-500">{item.label}</div>
+        <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2" key={item.label}>
+          <div className="text-[11px] text-zinc-400">{item.label}</div>
           <div className={`mt-1 text-lg font-semibold ${stateClasses[item.state]}`}>{item.value}</div>
         </div>
       ))}
@@ -619,18 +628,18 @@ function VgtPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
       ? "text-emerald-300"
       : Math.abs(snapshot.vgt.error_pct) <= 5
         ? "text-amber-300"
-        : "text-red-300";
+        : "text-red-400";
 
   return (
     <Panel title="Enhanced PIDs" icon={<Activity size={14} />} className="min-h-[430px]">
       <div className="grid min-h-[340px] content-start gap-3">
-        <div className="rounded-md border border-zinc-800 bg-black/20 p-3">
-          <div className="text-[11px] uppercase text-zinc-500">VGT vane position</div>
+        <div className="rounded-md border border-zinc-800 bg-black/25 p-3">
+          <div className="text-[11px] uppercase text-zinc-400">VGT vane position</div>
           <div className="mt-3 grid grid-cols-3 gap-2 text-center">
             <GaugeMetric label="Actual" value={`${snapshot.vgt.actual_pct.toFixed(1)}%`} tone="cyan" />
             <GaugeMetric label="Desired" value={`${snapshot.vgt.desired_pct.toFixed(1)}%`} tone="emerald" />
             <div>
-              <div className="text-[11px] text-zinc-500">Error</div>
+              <div className="text-[11px] text-zinc-400">Error</div>
               <div className={`mt-1 text-2xl font-semibold ${errorState}`}>
                 {formatSigned(snapshot.vgt.error_pct, 1)}%
               </div>
@@ -693,7 +702,7 @@ function ActiveTestsPanel({
           <Readout label="Voltage" value={`${snapshot.voltage.toFixed(1)} V`} />
         </div>
 
-        <div className="mt-4 rounded-md border border-amber-400/30 bg-amber-400/6 p-3">
+        <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
           <div className="flex items-center gap-2 text-sm font-semibold text-amber-100">
             <LockKeyhole size={15} />
             Locked: {vgt.definition.command_profile}
@@ -702,8 +711,8 @@ function ActiveTestsPanel({
         </div>
 
         <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          <section className="rounded-md border border-zinc-800 bg-black/20 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-500">TC Learn ON/OFF</div>
+          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+            <div className="text-[11px] font-semibold uppercase text-zinc-400">TC Learn ON/OFF</div>
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-300 hover:border-zinc-500 disabled:cursor-wait disabled:text-zinc-600"
@@ -724,8 +733,8 @@ function ActiveTestsPanel({
             </div>
           </section>
 
-          <section className="rounded-md border border-zinc-800 bg-black/20 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-500">Manual vane percent</div>
+          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+            <div className="text-[11px] font-semibold uppercase text-zinc-400">Manual vane percent</div>
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <input
                 aria-label="Manual VGT vane percent"
@@ -734,7 +743,7 @@ function ActiveTestsPanel({
                 value={manualPercent}
                 onChange={(event) => setManualPercent(event.currentTarget.value)}
               />
-              <span className="text-sm text-zinc-500">%</span>
+              <span className="text-sm text-zinc-400">%</span>
               <button
                 className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-300 hover:border-zinc-500 disabled:cursor-not-allowed disabled:text-zinc-600"
                 disabled={pending || !manualShapeValid}
@@ -750,22 +759,22 @@ function ActiveTestsPanel({
                 Record blocked request
               </button>
             </div>
-            {!manualShapeValid ? <div className="mt-2 text-xs text-red-300">Enter 0.0 to 100.0.</div> : null}
+            {!manualShapeValid ? <div className="mt-2 text-xs text-red-400">Enter 0.0 to 100.0.</div> : null}
           </section>
         </div>
 
         {error ? (
-          <div className="mt-4 rounded-md border border-red-400/30 bg-red-400/7 px-3 py-2 text-xs leading-5 text-red-200">
+          <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
             {error}
           </div>
         ) : null}
         {displayedResult ? (
-          <div className="mt-4 rounded-md border border-zinc-800 bg-black/20 p-3 text-sm">
+          <div className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3 text-sm">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className={displayedResult.accepted ? "font-semibold text-emerald-300" : "font-semibold text-amber-300"}>
                 {displayedResult.accepted ? "Accepted" : "Blocked"}: {displayedResult.label}
               </span>
-              <span className="font-mono text-xs text-zinc-500">{displayedResult.status}</span>
+              <span className="font-mono text-xs text-zinc-400">{displayedResult.status}</span>
             </div>
             <div className="mt-2 text-xs leading-5 text-zinc-400">{displayedResult.detail}</div>
             {displayedResult.evidence_path ? (
@@ -778,27 +787,27 @@ function ActiveTestsPanel({
       <Panel title="Safety gates" icon={<ShieldAlert size={14} />} className="min-h-[520px]">
         <div className="space-y-2">
           {vgt.preconditions.map((item) => (
-            <div className="rounded-md border border-zinc-800 bg-black/20 px-3 py-2" key={item.label}>
+            <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-2" key={item.label}>
               <div className="flex items-center justify-between gap-3">
                 <span className="text-sm font-semibold text-zinc-200">{item.label}</span>
                 <span className={item.satisfied ? "text-xs font-semibold text-emerald-300" : "text-xs font-semibold text-amber-300"}>
                   {item.satisfied ? "ready" : "blocked"}
                 </span>
               </div>
-              <div className="mt-1 text-xs leading-5 text-zinc-500">{item.detail}</div>
+              <div className="mt-1 text-xs leading-5 text-zinc-400">{item.detail}</div>
             </div>
           ))}
         </div>
-        <div className="mt-4 rounded-md border border-zinc-800 bg-black/20 p-3">
-          <div className="text-[11px] font-semibold uppercase text-zinc-500">Supported modes</div>
+        <div className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3">
+          <div className="text-[11px] font-semibold uppercase text-zinc-400">Supported modes</div>
           <div className="mt-2 space-y-1 text-xs leading-5 text-zinc-400">
             {vgt.definition.supported_modes.map((mode) => (
               <div key={mode}>{mode}</div>
             ))}
           </div>
         </div>
-        <div className="mt-4 rounded-md border border-zinc-800 bg-black/20 p-3">
-          <div className="text-[11px] font-semibold uppercase text-zinc-500">Execution guardrails</div>
+        <div className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3">
+          <div className="text-[11px] font-semibold uppercase text-zinc-400">Execution guardrails</div>
           <div className="mt-2 space-y-1 text-xs leading-5 text-zinc-400">
             {vgt.definition.safety_notes.map((note) => (
               <div key={note}>{note}</div>
@@ -806,7 +815,7 @@ function ActiveTestsPanel({
           </div>
         </div>
         {locked ? null : (
-          <div className="mt-4 rounded-md border border-emerald-400/30 bg-emerald-400/7 px-3 py-2 text-xs text-emerald-200">
+          <div className="mt-4 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
             Command profile loaded.
           </div>
         )}
@@ -819,7 +828,7 @@ function GaugeMetric({ label, value, tone }: { label: string; value: string; ton
   const color = tone === "cyan" ? "text-cyan-200" : "text-emerald-300";
   return (
     <div>
-      <div className="text-[11px] text-zinc-500">{label}</div>
+      <div className="text-[11px] text-zinc-400">{label}</div>
       <div className={`mt-1 text-2xl font-semibold ${color}`}>{value}</div>
     </div>
   );
@@ -827,21 +836,21 @@ function GaugeMetric({ label, value, tone }: { label: string; value: string; ton
 
 function CylinderTable({ cylinders }: { cylinders: CylinderBalance[] }) {
   return (
-    <div className="rounded-md border border-zinc-800 bg-black/20 p-3">
+    <div className="rounded-md border border-zinc-800 bg-black/25 p-3">
       <div className="mb-2 flex items-center justify-between">
-        <div className="text-[11px] uppercase text-zinc-500">Injector balance</div>
-        <div className="text-[11px] text-zinc-500">mm3</div>
+        <div className="text-[11px] uppercase text-zinc-400">Injector balance</div>
+        <div className="text-[11px] text-zinc-400">mm3</div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[520px] table-fixed border-collapse text-sm">
           <thead>
             <tr>
-              <th className="border border-zinc-800 px-2 py-1 text-left text-[11px] font-medium text-zinc-500">
+              <th className="border border-zinc-800 px-2 py-1 text-left text-[11px] font-medium text-zinc-400">
                 Cyl
               </th>
               {cylinders.map((item) => (
                 <th
-                  className="border border-zinc-800 px-2 py-1 text-center text-[11px] font-medium text-zinc-500"
+                  className="border border-zinc-800 px-2 py-1 text-center text-[11px] font-medium text-zinc-400"
                   key={item.cylinder}
                 >
                   {item.cylinder}
@@ -851,11 +860,11 @@ function CylinderTable({ cylinders }: { cylinders: CylinderBalance[] }) {
           </thead>
           <tbody>
             <tr>
-              <td className="border border-zinc-800 px-2 py-2 text-xs text-zinc-500">mm3</td>
+              <td className="border border-zinc-800 px-2 py-2 text-xs text-zinc-400">mm3</td>
               {cylinders.map((item) => {
                 const tone =
                   Math.abs(item.mm3) >= 4
-                    ? "text-red-300"
+                    ? "text-red-400"
                     : Math.abs(item.mm3) >= 2
                       ? "text-amber-300"
                       : "text-cyan-200";
@@ -882,7 +891,7 @@ function FuelRailPanel({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot; u
         <Readout label="Delta" value={pressure(snapshot.fuel_rail.delta_psi, unitMode)} muted={snapshot.fuel_rail.delta_psi == null} />
       </div>
       {snapshot.fuel_rail.desired_psi == null ? (
-        <div className="mt-3 rounded-md border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
+        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
           Waiting for GM Class 2 $22 163D 01.
         </div>
       ) : null}
@@ -900,7 +909,7 @@ function ModuleScanPanel({ modules }: { modules: ModuleScan[] }) {
     <Panel title="Module scan" icon={<ListTree size={14} />}>
       <table className="w-full border-collapse text-sm">
         <thead>
-          <tr className="text-left text-[11px] uppercase text-zinc-500">
+          <tr className="text-left text-[11px] uppercase text-zinc-400">
             <th className="border-b border-zinc-800 pb-2 font-medium">Module</th>
             <th className="border-b border-zinc-800 pb-2 font-medium">03</th>
             <th className="border-b border-zinc-800 pb-2 font-medium">19 FF</th>
@@ -909,7 +918,7 @@ function ModuleScanPanel({ modules }: { modules: ModuleScan[] }) {
         </thead>
         <tbody>
           {modules.map((module) => (
-            <tr className="border-b border-zinc-900 last:border-0" key={module.module}>
+            <tr className="border-b border-zinc-800 last:border-0" key={module.module}>
               <td className="py-2 font-semibold text-zinc-200">{module.module}</td>
               <td className={scanClass(module.standard)}>{module.standard}</td>
               <td className={scanClass(module.gm_all)}>{module.gm_all}</td>
@@ -925,10 +934,10 @@ function ModuleScanPanel({ modules }: { modules: ModuleScan[] }) {
 function scanClass(value: string): string {
   if (value === "empty") return "py-2 text-emerald-300";
   if (value === "probe") return "py-2 text-cyan-200";
-  if (value === "no data") return "py-2 text-zinc-500";
-  if (value === "error") return "py-2 text-red-300";
+  if (value === "no data") return "py-2 text-zinc-400";
+  if (value === "error") return "py-2 text-red-400";
   if (value.endsWith("dtc")) return "py-2 text-amber-300";
-  return "py-2 text-yellow-300";
+  return "py-2 text-amber-300";
 }
 
 function evidenceFor(snapshot: DiagnosticSnapshot, key: string): SignalEvidence | undefined {
@@ -942,14 +951,14 @@ function EvidenceLine({ evidence }: { evidence: SignalEvidence | undefined }) {
       ? "text-emerald-300"
       : evidence.status === "cached" || evidence.status === "fallback-gm"
         ? "text-amber-300"
-        : "text-zinc-500";
+        : "text-zinc-400";
   return (
-    <div className="rounded-md border border-zinc-800 bg-black/20 px-3 py-2 text-xs leading-5">
+    <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-2 text-xs leading-5">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-semibold text-zinc-200">{evidence.label}</span>
         <span className={statusClass}>{evidence.status}</span>
       </div>
-      <div className="mt-1 text-zinc-500">
+      <div className="mt-1 text-zinc-400">
         {evidence.source} / {evidence.confidence}
       </div>
       <div className="mt-1 font-mono text-[11px] text-cyan-200">{evidence.request}</div>
@@ -963,10 +972,10 @@ function AlertsPanel({ alerts }: { alerts: string[] }) {
     <Panel title="Alerts" icon={<AlertTriangle size={14} />} className="min-h-[340px]">
       <div className="min-h-[260px] space-y-2 overflow-y-auto pr-1">
         {alerts.length === 0 ? (
-          <div className="text-sm text-zinc-500">No active alerts</div>
+          <div className="text-sm text-zinc-400">No active alerts</div>
         ) : (
           alerts.map((alert) => (
-            <div className="rounded-md border border-amber-500/25 bg-amber-500/7 px-3 py-2 text-sm text-amber-100" key={alert}>
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100" key={alert}>
               {alert}
             </div>
           ))
@@ -986,9 +995,9 @@ function Readout({
   muted?: boolean;
 }) {
   return (
-    <div className="rounded-md border border-zinc-800 bg-black/20 px-3 py-3">
-      <div className="text-[11px] uppercase text-zinc-500">{label}</div>
-      <div className={`mt-2 whitespace-nowrap text-xl font-semibold ${muted ? "text-zinc-500" : "text-emerald-300"}`}>
+    <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-3">
+      <div className="text-[11px] uppercase text-zinc-400">{label}</div>
+      <div className={`mt-2 whitespace-nowrap text-xl font-semibold ${muted ? "text-zinc-400" : "text-emerald-300"}`}>
         {value}
       </div>
     </div>
@@ -1044,9 +1053,9 @@ function TemperaturePanel({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot
     <Panel title="Temperatures" icon={<Thermometer size={14} />}>
       <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
         {rows.map(([label, value]) => (
-          <div className="flex items-center justify-between border-b border-zinc-900 pb-2" key={label}>
-            <span className="text-sm text-zinc-500">{label}</span>
-            <span className={value == null ? "text-sm font-semibold text-zinc-500" : "text-sm font-semibold text-emerald-300"}>
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-2" key={label}>
+            <span className="text-sm text-zinc-400">{label}</span>
+            <span className={value == null ? "text-sm font-semibold text-zinc-400" : "text-sm font-semibold text-emerald-300"}>
               {temperature(value, unitMode)}
             </span>
           </div>
@@ -1064,14 +1073,14 @@ function DtcPanel({ dtcs }: { dtcs: DtcSnapshot[] }) {
   return (
     <Panel title="DTCs" icon={<FileText size={14} />}>
       {dtcs.length === 0 ? (
-        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/6 px-3 py-3 text-sm text-emerald-200">
+        <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 text-sm text-emerald-200">
           No diagnostic codes
         </div>
       ) : (
         <div className="max-h-48 space-y-2 overflow-y-auto pr-1">
           {dtcs.map((dtc) => (
             <div
-              className="rounded-md border border-amber-500/25 bg-amber-500/7 px-3 py-2 text-sm"
+              className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm"
               key={`${dtc.module}-${dtc.code}-${dtc.status}`}
             >
               <div className="flex items-center justify-between gap-3">
@@ -1080,12 +1089,12 @@ function DtcPanel({ dtcs }: { dtcs: DtcSnapshot[] }) {
               </div>
               <div className="mt-1 text-xs text-zinc-400">{dtc.status}</div>
               {dtc.description ? <div className="mt-1 text-xs text-zinc-300">{dtc.description}</div> : null}
-              {dtc.notes ? <div className="mt-1 text-[11px] text-zinc-500">{dtc.notes}</div> : null}
+              {dtc.notes ? <div className="mt-1 text-[11px] text-zinc-400">{dtc.notes}</div> : null}
             </div>
           ))}
         </div>
       )}
-      <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-zinc-500 sm:grid-cols-3">
+      <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-zinc-400 sm:grid-cols-3">
         <div className="rounded-md border border-zinc-800 px-3 py-2">Stored {storedCount}</div>
         <div className="rounded-md border border-zinc-800 px-3 py-2">Pending {pendingCount}</div>
         <div className="rounded-md border border-zinc-800 px-3 py-2">Current {currentCount}</div>
@@ -1098,12 +1107,12 @@ function ReadinessPanel() {
   return (
     <Panel title="Readiness" icon={<CircleDot size={14} />}>
       <div className="flex items-center justify-between">
-        <span className="text-sm text-zinc-500">MIL</span>
+        <span className="text-sm text-zinc-400">MIL</span>
         <span className="text-sm font-semibold text-emerald-300">OFF</span>
       </div>
       <div className="mt-3 flex items-center justify-between">
-        <span className="text-sm text-zinc-500">Monitor data</span>
-        <span className="text-sm font-semibold text-zinc-500">waiting</span>
+        <span className="text-sm text-zinc-400">Monitor data</span>
+        <span className="text-sm font-semibold text-zinc-400">waiting</span>
       </div>
       <div className="mt-4 h-2 rounded-full bg-zinc-900">
         <div className="h-2 w-1/5 rounded-full bg-cyan-300" />
@@ -1116,16 +1125,16 @@ function ProtocolPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
   return (
     <Panel title="Protocol" icon={<Table2 size={14} />}>
       <div className="space-y-3 text-sm">
-        <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
-          <span className="text-zinc-500">Bus</span>
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+          <span className="text-zinc-400">Bus</span>
           <span className="font-semibold text-cyan-200">{snapshot.protocol}</span>
         </div>
-        <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
-          <span className="text-zinc-500">Header</span>
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+          <span className="text-zinc-400">Header</span>
           <span className="font-semibold text-zinc-200">68 6A F1</span>
         </div>
-        <div className="flex items-center justify-between border-b border-zinc-900 pb-2">
-          <span className="text-zinc-500">Enhanced DTC</span>
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+          <span className="text-zinc-400">Enhanced DTC</span>
           <span className="font-semibold text-emerald-300">GM $19 live</span>
         </div>
       </div>
@@ -1143,7 +1152,7 @@ function RawPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
       bodyClassName="flex min-h-0 flex-1 p-3"
       testId="raw-snapshot-panel"
     >
-      <pre className="min-h-0 flex-1 overflow-auto rounded-md bg-black/30 p-3 text-xs leading-5 text-zinc-400">
+      <pre className="min-h-0 flex-1 overflow-auto rounded-md bg-black/25 p-3 text-xs leading-5 text-zinc-400">
         {payload}
       </pre>
     </Panel>
@@ -1179,7 +1188,7 @@ function ReplayPanel({
   return (
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Panel title="Replay controls" icon={<Play size={14} />} className="min-h-[420px]">
-        <div className="rounded-md border border-zinc-800 bg-black/20 p-3">
+        <div className="rounded-md border border-zinc-800 bg-black/25 p-3">
           <div className="grid gap-3 md:grid-cols-3">
             <Readout label="Session" value={selectedRecording?.sessionId ?? selectedRecording?.name ?? "--"} muted={selectedRecording == null} />
             <Readout label="State" value={replayState} muted={selectedRecording == null} />
@@ -1236,17 +1245,17 @@ function ReplayPanel({
             </button>
           </div>
           {replayError ? (
-            <div className="mt-4 rounded-md border border-red-400/30 bg-red-400/7 px-3 py-2 text-xs leading-5 text-red-200">
+            <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
               {replayError}
             </div>
           ) : null}
           {selectedRecording?.warning ? (
-            <div className="mt-4 rounded-md border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-200">
+            <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
               {selectedRecording.warning}
             </div>
           ) : null}
           {selectedRecording?.preview.length ? (
-            <pre className="mt-4 max-h-44 overflow-auto rounded-md border border-zinc-800 bg-black/30 p-3 text-xs leading-5 text-zinc-400">
+            <pre className="mt-4 max-h-44 overflow-auto rounded-md border border-zinc-800 bg-black/25 p-3 text-xs leading-5 text-zinc-400">
               {selectedRecording.preview.join("\n")}
             </pre>
           ) : null}
@@ -1270,14 +1279,14 @@ function ReplayPanel({
           {selectedRecording?.writeEvents != null ? <SettingRow label="Write events" value={selectedRecording.writeEvents.toString()} /> : null}
         </div>
         {selectedRecording?.evidencePreview?.length ? (
-          <div className="mt-4 rounded-md border border-cyan-400/30 bg-cyan-400/7 p-3">
+          <div className="mt-4 rounded-md border border-cyan-400/50 bg-cyan-400/10 p-3">
             <div className="text-[11px] font-semibold uppercase text-cyan-200">Evidence metadata</div>
             <pre className="mt-2 max-h-40 overflow-auto text-xs leading-5 text-zinc-300">
               {selectedRecording.evidencePreview.join("\n")}
             </pre>
           </div>
         ) : null}
-        <div className="mt-4 rounded-md border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-200">
+        <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
           Opening old files is wired. Playback is still GUI-local until the Rust replay controller is attached to this shell.
         </div>
       </Panel>
@@ -1298,8 +1307,8 @@ function SettingsPanel({
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Panel title="Runtime settings" icon={<Settings size={14} />} className="min-h-[420px]">
         <div className="grid gap-4 lg:grid-cols-2">
-          <section className="rounded-md border border-zinc-800 bg-black/20 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-500">Display units</div>
+          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+            <div className="text-[11px] font-semibold uppercase text-zinc-400">Display units</div>
             <div className="mt-3 flex gap-2">
               <button
                 aria-pressed={unitMode === "us"}
@@ -1324,13 +1333,13 @@ function SettingsPanel({
                 Metric
               </button>
             </div>
-            <div className="mt-3 text-xs leading-5 text-zinc-500">
+            <div className="mt-3 text-xs leading-5 text-zinc-400">
               Pressure and temperature readouts follow this setting. MAF stays in g/s.
             </div>
           </section>
 
-          <section className="rounded-md border border-zinc-800 bg-black/20 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-500">Polling</div>
+          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+            <div className="text-[11px] font-semibold uppercase text-zinc-400">Polling</div>
             <div className="mt-3 space-y-3 text-sm">
               <SettingRow label="Standard PID poll" value={`${snapshot.poll_ms} ms`} />
               <SettingRow label="Enhanced refresh" value="2.5 s live" />
@@ -1338,8 +1347,8 @@ function SettingsPanel({
             </div>
           </section>
 
-          <section className="rounded-md border border-zinc-800 bg-black/20 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-500">Adapter</div>
+          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+            <div className="text-[11px] font-semibold uppercase text-zinc-400">Adapter</div>
             <div className="mt-3 space-y-3 text-sm">
               <SettingRow label="Protocol" value={snapshot.protocol} />
               <SettingRow label="Transport" value="Tauri command boundary" />
@@ -1347,8 +1356,8 @@ function SettingsPanel({
             </div>
           </section>
 
-          <section className="rounded-md border border-zinc-800 bg-black/20 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-500">Diagnostics</div>
+          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+            <div className="text-[11px] font-semibold uppercase text-zinc-400">Diagnostics</div>
             <div className="mt-3 space-y-3 text-sm">
               <SettingRow label="Enhanced DTC service" value="GM Class 2 $19" tone="ok" />
               <SettingRow label="Desired fuel rail" value="GM $22 163D 01" tone="ok" />
@@ -1367,7 +1376,7 @@ function SettingsPanel({
           <SettingRow label="Voltage" value={`${snapshot.voltage.toFixed(1)} V`} />
           <SettingRow label="Connection" value={snapshot.connection} tone="ok" />
         </div>
-        <div className="mt-4 rounded-md border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs leading-5 text-amber-200">
+        <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
           Live serial ownership stays at the Rust session boundary.
         </div>
       </Panel>
@@ -1387,8 +1396,8 @@ function SettingRow({
   const valueClass =
     tone === "ok" ? "text-emerald-300" : tone === "warn" ? "text-amber-300" : "text-zinc-200";
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-zinc-900 pb-2 last:border-0 last:pb-0">
-      <span className="text-zinc-500">{label}</span>
+    <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2 last:border-0 last:pb-0">
+      <span className="text-zinc-400">{label}</span>
       <span className={`text-right font-semibold ${valueClass}`}>{value}</span>
     </div>
   );
