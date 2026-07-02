@@ -16,13 +16,14 @@ use obd2_core::protocol::service::ServiceRequest;
 use obd2_core::session::Session;
 use obd2_core::vehicle::{ModuleId, PhysicalAddress, Protocol};
 use obd2_dash::profiles::{
-    AddressState, AddressTemplate, BackoffPolicy, BusDefinition, BusKey, CapabilityId, Confidence,
-    DecodedDtc, DecodedSignal, DiagnosticProfile, DispatchError, DtcServiceDefinition,
-    EvidencePolicy, FailurePolicy, IdentityConfidence, J1850HeaderConvention, Manufacturer,
-    MatchConfidence, ModuleDefinition, ModuleKey, ModuleMap, ModuleSafetyClass, NullEvidenceSink,
-    PassiveMonitorDefinition, PollCadence, ProfileDecodeError, ProfileId, ProfileMatch,
-    ProfileRegistry, ProfileResponse, ProfileRuntime, Provenance, RequestId, RouteDefinition,
-    RouteSet, SignalCategory, SignalDefinition, SourceFields, StandardPidOverride, VehicleContext,
+    ActiveCommandProfile, ActiveTestDefinition, AddressState, AddressTemplate, BackoffPolicy,
+    BusDefinition, BusKey, CapabilityId, Confidence, DecodedDtc, DecodedSignal, DiagnosticProfile,
+    DispatchError, DtcServiceDefinition, EvidencePolicy, FailurePolicy, IdentityConfidence,
+    J1850HeaderConvention, Manufacturer, MatchConfidence, ModuleDefinition, ModuleKey, ModuleMap,
+    ModuleSafetyClass, NullEvidenceSink, PassiveMonitorDefinition, PollCadence, ProfileDecodeError,
+    ProfileId, ProfileMatch, ProfileRegistry, ProfileResponse, ProfileRuntime, Provenance,
+    RequestId, RouteDefinition, RouteSet, SafetyClass, SignalCategory, SignalDefinition,
+    SourceFields, StandardPidOverride, VehicleContext,
 };
 
 const PROFILE_ID: ProfileId = ProfileId::new("test.fixture.dispatcher");
@@ -107,6 +108,19 @@ const FIXTURE_DTC: DtcServiceDefinition = DtcServiceDefinition {
 
 const SIGNALS: &[SignalDefinition] = &[FIXTURE_SIGNAL];
 const DTC_SERVICES: &[DtcServiceDefinition] = &[FIXTURE_DTC];
+const ACTIVE_TESTS: &[ActiveTestDefinition] = &[ActiveTestDefinition {
+    key: "fixture.active",
+    label: "Fixture active test",
+    safety_class: SafetyClass::Locked,
+    command_profile: ActiveCommandProfile::Locked,
+    preconditions: &[],
+    lock_reason: Some("fixture active test is locked"),
+    supported_modes: &[],
+    safety_notes: &[],
+    timeout: std::time::Duration::from_millis(500),
+    cancel_command: None,
+    evidence_policy: EvidencePolicy::Always,
+}];
 
 struct FixtureProfile {
     id: ProfileId,
@@ -155,7 +169,7 @@ impl DiagnosticProfile for FixtureProfile {
     }
 
     fn active_tests(&self) -> &[obd2_dash::profiles::ActiveTestDefinition] {
-        &[]
+        ACTIVE_TESTS
     }
 
     fn passive_monitors(&self) -> &[PassiveMonitorDefinition] {
@@ -562,6 +576,37 @@ async fn active_test_capability_is_locked_before_adapter_write() {
         err,
         DispatchError::ActiveTestLocked {
             capability: CapabilityId::ActiveTest("fixture.active")
+        }
+    ));
+    assert_eq!(writes.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn unowned_active_test_capability_is_rejected_before_adapter_write() {
+    let registry = registry();
+    let runtime = ProfileRuntime::new(&registry);
+    let selected = selected_fixture(&registry, 1).await;
+    let adapter = CountingAdapter::new(Protocol::J1850Vpw, vec![0x2A]);
+    let writes = adapter.writes();
+    let mut session = Session::new(adapter);
+
+    let err = runtime
+        .execute_request(
+            &mut session,
+            &context(1, Protocol::J1850Vpw),
+            &selected,
+            CapabilityId::ActiveTest("fixture.foreign_active"),
+            RequestId::SINGLE,
+            &mut NullEvidenceSink,
+        )
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        DispatchError::CapabilityNotOwned {
+            capability: CapabilityId::ActiveTest("fixture.foreign_active"),
+            ..
         }
     ));
     assert_eq!(writes.load(Ordering::SeqCst), 0);

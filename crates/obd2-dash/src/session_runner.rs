@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -7,7 +7,6 @@ use tokio::sync::mpsc;
 use obd2_core::adapter::Adapter;
 use obd2_core::error::{NegativeResponse, Obd2Error};
 use obd2_core::protocol::dtc::{Dtc, DtcStatus};
-use obd2_core::protocol::enhanced::{Confidence as CoreConfidence, EnhancedPid};
 use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::service::Target;
 use obd2_core::session::poller::{execute_poll_cycle, PollConfig, PollEvent};
@@ -20,17 +19,15 @@ use crate::domain::{
     DiagnosticScanEntry, DiagnosticScanResult, DiagnosticScanScope, DtcService, FreezeFrameSnapshot,
 };
 use obd2_dash::gm_active::{
-    active_test_evidence_record, blocked_active_test_result, write_active_test_evidence,
-    GmActiveTestCommand,
+    blocked_active_test_result, write_active_test_evidence, GmActiveTestCommand,
 };
-use obd2_dash::gm_enhanced::{is_lly_spec_identity, lly_profile_matches};
-use obd2_dash::gm_evidence::GmEvidenceRecord;
+use obd2_dash::profiles::gm::active::active_test_profile_evidence_record;
 use obd2_dash::profiles::{
     acquire_identity, build_vehicle_context, confidence_warning, next_generation,
     select_into_state, validate_vin_charset, CapabilityId, Confidence as ProfileConfidence,
-    CoverageMap, DecodedDtc, DispatchError, DispatchEvidence, IdentityConfidence, IdentityOutcome,
-    PlannedRequest, ProfileDecodeError, ProfileEvidenceRecord, ProfileEvidenceSink,
-    ProfileRegistry, ProfileResponse, ProfileRuntime, ProfileState,
+    CoverageMap, DecodedDtc, DispatchError, DispatchEvidence, DtcServiceDefinition,
+    IdentityConfidence, IdentityOutcome, PlannedRequest, ProfileDecodeError, ProfileEvidenceRecord,
+    ProfileEvidenceSink, ProfileRegistry, ProfileResponse, ProfileRuntime, ProfileState,
     Provenance as ProfileProvenance, RequestId, SelectedProfile, SignalDefinition, VehicleContext,
 };
 
@@ -38,6 +35,10 @@ use obd2_dash::profiles::{
 const EXTRA_VIN_READS: u8 = 2;
 #[cfg(not(feature = "profile-selection"))]
 const EXTRA_VIN_READS: u8 = 0;
+
+const PROFILE_DTC_STATUS_SERVICE: u8 = 0x19;
+const PROFILE_DTC_ALL_STATUS_REQUEST: &[u8] = &[0xFF, 0xFF, 0x00];
+const PROFILE_DTC_ACTIVE_STATUS_REQUEST: &[u8] = &[0x92, 0xFF, 0x00];
 
 #[derive(Debug, Clone)]
 pub struct SessionRunnerConfig {
@@ -174,12 +175,9 @@ pub async fn prepare_session<A: Adapter>(
     publish_enhanced_targets(&enhanced_targets, tx);
 
     let pids_to_poll = match session.supported_pids().await {
-        Ok(supported) if !supported.is_empty() => config
-            .standard_pids
-            .iter()
-            .copied()
-            .filter(|pid| supported.contains(pid) || should_force_standard_poll(*pid))
-            .collect(),
+        Ok(supported) if !supported.is_empty() => {
+            planned_standard_pids(&config.standard_pids, Some(&supported), &profile_state)
+        }
         Ok(_) | Err(_) => config.standard_pids.clone(),
     };
 
@@ -259,7 +257,7 @@ pub async fn run_prepared_session<A: Adapter>(
 
         cycle += 1;
 
-        if !prepared.enhanced_targets.is_empty() && cycle % 5 == 0 {
+        if !prepared.enhanced_targets.is_empty() && cycle.is_multiple_of(5) {
             poll_enhanced(session, &prepared.enhanced_targets, tx).await;
             emit_session_state(session, tx, &mut prepared.last_connection);
             let discovery_changed = emit_discovery(session, tx, &mut prepared.last_discovery);
@@ -271,7 +269,7 @@ pub async fn run_prepared_session<A: Adapter>(
             }
         }
 
-        if cycle % 10 == 0 {
+        if cycle.is_multiple_of(10) {
             poll_dtcs(
                 session,
                 tx,
@@ -291,7 +289,7 @@ pub async fn run_prepared_session<A: Adapter>(
             }
         }
 
-        if cycle % 20 == 0 {
+        if cycle.is_multiple_of(20) {
             poll_o2_monitoring(session, tx).await;
             poll_readiness(session, tx).await;
             emit_session_state(session, tx, &mut prepared.last_connection);
@@ -613,14 +611,32 @@ async fn append_profile_dtcs<A: Adapter>(
     );
     let registry = ProfileRegistry::with_builtins();
     let runtime = ProfileRuntime::new(&registry);
+    let Some(profile) = registry.get(selected.profile_id()) else {
+        tracing::debug!(
+            "Skipping profile DTC scan for unknown selected profile {}",
+            selected.profile_id().as_str()
+        );
+        return;
+    };
     let plan = runtime.plan_poll_cycle(Some(selected), cycle, &coverage);
 
     for planned in plan.requests {
         let CapabilityId::DtcService(key) = planned.capability else {
             continue;
         };
-        let Some(service) = profile_dtc_service_for_key(key) else {
-            tracing::debug!("Skipping profile DTC service without scan-panel mapping: {key}");
+        let Some(definition) = profile
+            .dtc_services()
+            .iter()
+            .find(|service| service.key == key)
+        else {
+            tracing::debug!("Skipping planned DTC service not owned by selected profile: {key}");
+            continue;
+        };
+        let Some(service) = profile_dtc_service_for_definition(definition) else {
+            tracing::debug!(
+                "Skipping profile DTC service without scan-panel mapping: {}",
+                definition.key
+            );
             continue;
         };
 
@@ -635,10 +651,16 @@ async fn append_profile_dtcs<A: Adapter>(
             continue;
         }
 
-        let result = execute_profile_dtc_request(
-            session, scan, tx, &runtime, &context, selected, planned, service, &module,
-        )
-        .await;
+        let request = ProfileDtcExecution {
+            tx,
+            runtime: &runtime,
+            context: &context,
+            selected,
+            planned,
+            service,
+            module: &module,
+        };
+        let result = execute_profile_dtc_request(session, scan, request).await;
 
         backoff.observe(&module, service, &result);
         scan.entries.push(DiagnosticScanEntry {
@@ -649,17 +671,31 @@ async fn append_profile_dtcs<A: Adapter>(
     }
 }
 
+struct ProfileDtcExecution<'a, 'runtime> {
+    tx: &'a mpsc::UnboundedSender<Message>,
+    runtime: &'a ProfileRuntime<'runtime>,
+    context: &'a VehicleContext,
+    selected: &'a SelectedProfile,
+    planned: PlannedRequest,
+    service: DtcService,
+    module: &'a ModuleId,
+}
+
 async fn execute_profile_dtc_request<A: Adapter>(
     session: &mut Session<A>,
     scan: &mut DtcScan,
-    tx: &mpsc::UnboundedSender<Message>,
-    runtime: &ProfileRuntime<'_>,
-    context: &VehicleContext,
-    selected: &SelectedProfile,
-    planned: PlannedRequest,
-    service: DtcService,
-    module: &ModuleId,
+    request: ProfileDtcExecution<'_, '_>,
 ) -> DiagnosticScanResult {
+    let ProfileDtcExecution {
+        tx,
+        runtime,
+        context,
+        selected,
+        planned,
+        service,
+        module,
+    } = request;
+
     let mut evidence =
         ChannelProfileEvidenceSink::new(tx, context.vin_confidence, selected.manual_confirmed());
     match runtime
@@ -697,10 +733,13 @@ async fn execute_profile_dtc_request<A: Adapter>(
     }
 }
 
-fn profile_dtc_service_for_key(key: &str) -> Option<DtcService> {
-    match key {
-        "lly.class2.dtc.all" => Some(DtcService::GmClass2All),
-        "lly.class2.dtc.active" => Some(DtcService::GmClass2Active),
+fn profile_dtc_service_for_definition(definition: &DtcServiceDefinition) -> Option<DtcService> {
+    if definition.service_id != PROFILE_DTC_STATUS_SERVICE {
+        return None;
+    }
+    match definition.request_data {
+        request if request == PROFILE_DTC_ALL_STATUS_REQUEST => Some(DtcService::GmClass2All),
+        request if request == PROFILE_DTC_ACTIVE_STATUS_REQUEST => Some(DtcService::GmClass2Active),
         _ => None,
     }
 }
@@ -977,13 +1016,11 @@ async fn handle_diagnostic_command<A: Adapter>(
         DiagnosticCommand::FetchFreezeFrame { dtc_code, pids } => {
             let mut readings = Vec::new();
             for pid in &pids {
-                match session.read_freeze_frame(*pid, 0).await {
-                    Ok(reading) => {
-                        if let Ok(val) = reading.value.as_f64() {
-                            readings.push((*pid, val, reading.unit));
-                        }
+                // Skip PIDs with no freeze-frame data.
+                if let Ok(reading) = session.read_freeze_frame(*pid, 0).await {
+                    if let Ok(val) = reading.value.as_f64() {
+                        readings.push((*pid, val, reading.unit));
                     }
-                    Err(_) => {} // Skip PIDs with no freeze-frame data
                 }
             }
             if !readings.is_empty() {
@@ -998,8 +1035,8 @@ async fn handle_diagnostic_command<A: Adapter>(
             }
         }
         DiagnosticCommand::GmActiveTest(command) => {
-            let (result, record) = handle_gm_active_test(command);
-            let _ = tx.send(Message::ActiveTestAttempt(Box::new(record)));
+            let (result, profile_record) = handle_gm_active_test(command);
+            let _ = tx.send(Message::ProfileEvidence(Box::new(profile_record)));
             let _ = tx.send(Message::ActiveTestResult(result));
         }
     }
@@ -1007,9 +1044,12 @@ async fn handle_diagnostic_command<A: Adapter>(
 
 fn handle_gm_active_test(
     command: GmActiveTestCommand,
-) -> (obd2_dash::gm_active::GmActiveTestResult, GmEvidenceRecord) {
+) -> (
+    obd2_dash::gm_active::GmActiveTestResult,
+    ProfileEvidenceRecord,
+) {
     let mut result = blocked_active_test_result(&command);
-    let record = active_test_evidence_record(&command, &result);
+    let profile_record = active_test_profile_evidence_record(&command, &result);
     match write_active_test_evidence(&command, &result) {
         Ok(path) => {
             result.evidence_path = Some(path.display().to_string());
@@ -1018,7 +1058,7 @@ fn handle_gm_active_test(
             tracing::warn!("failed to write GM active-test evidence: {error}");
         }
     }
-    (result, record)
+    (result, profile_record)
 }
 
 async fn poll_readiness<A: Adapter>(session: &mut Session<A>, tx: &mpsc::UnboundedSender<Message>) {
@@ -1060,56 +1100,34 @@ fn emit_discovery<A: Adapter>(
     false
 }
 
-fn should_force_standard_poll(pid: Pid) -> bool {
-    // This LLY's supported-PID bitmap can be incomplete on J1850 VPW, while
-    // direct reads for dashboard-critical PIDs work. Keep these in the poll
-    // set and let the core poller silently skip real NO DATA responses.
-    matches!(
-        pid.0,
-        0x04  // Engine load
-            | 0x05  // Coolant temperature
-            | 0x0B  // Intake MAP
-            | 0x0C  // Engine RPM
-            | 0x0D  // Vehicle speed
-            | 0x0F  // Intake air temperature
-            | 0x10  // MAF
-            | 0x11  // Throttle position
-            | 0x23  // Fuel rail gauge pressure
-            | 0x33  // Barometric pressure
-            | 0x42  // Control module voltage
-            | 0x46  // Ambient air temperature
-            | 0x5C // Engine oil temperature
-    )
-}
-
 fn build_enhanced_targets<A: Adapter>(
     session: &Session<A>,
     profile_state: &ProfileState,
 ) -> Vec<EnhancedPollTarget> {
-    let Some(discovery) = session.discovery() else {
-        return Vec::new();
-    };
-
     let mut targets = Vec::new();
-    let mut module_ids: Vec<ModuleId> = discovery.modules.keys().cloned().collect();
-    module_ids.sort_by(|a, b| a.0.cmp(&b.0));
-    let profile_matches_lly = session_matches_lly_profile(session);
-    let loaded_lly_spec = session.spec().is_some_and(is_lly_spec_identity);
+    append_profile_enhanced_targets(session, profile_state, &mut targets);
+    targets
+}
 
-    for module_id in module_ids {
-        let module_label = module_id.0.clone();
-        let pids = session.module_pids(module_id.clone());
-        for pid in pids {
-            if loaded_lly_spec && !profile_matches_lly {
-                continue;
-            }
-            targets.push(enhanced_target(&module_label, &module_id, pid));
-        }
+fn planned_standard_pids(
+    configured: &[Pid],
+    supported: Option<&HashSet<Pid>>,
+    profile_state: &ProfileState,
+) -> Vec<Pid> {
+    let registry = ProfileRegistry::with_builtins();
+    let runtime = ProfileRuntime::new(&registry);
+    let mut coverage = CoverageMap::new(configured.iter().map(|pid| pid.0).collect());
+    if let Some(supported) = supported {
+        coverage =
+            coverage.with_supported_standard_pids(supported.iter().map(|pid| pid.0).collect());
     }
 
-    append_profile_enhanced_targets(session, profile_state, &mut targets);
-
-    targets
+    runtime
+        .plan_poll_cycle(profile_state.selected.as_ref(), 0, &coverage)
+        .standard_pids
+        .into_iter()
+        .map(Pid)
+        .collect()
 }
 
 fn append_profile_enhanced_targets<A: Adapter>(
@@ -1179,19 +1197,6 @@ fn push_profile_enhanced_target(
         confidence: Some(profile_confidence_label(signal.confidence).to_string()),
         evidence: Some(profile_provenance_label(signal.provenance)),
     });
-}
-
-fn session_matches_lly_profile<A: Adapter>(session: &Session<A>) -> bool {
-    let vin = session
-        .vehicle()
-        .map(|profile| profile.vin.as_str())
-        .unwrap_or_default();
-    let protocol = session
-        .discovery()
-        .map(|discovery| discovery.selected_protocol)
-        .unwrap_or(session.adapter_info().protocol);
-
-    lly_profile_matches(vin, session.spec(), protocol)
 }
 
 fn profile_identity<A: Adapter>(session: &Session<A>) -> IdentityOutcome {
@@ -1266,32 +1271,6 @@ fn publish_enhanced_targets(targets: &[EnhancedPollTarget], tx: &mpsc::Unbounded
     }
 }
 
-fn enhanced_target(
-    module_label: &str,
-    module_id: &ModuleId,
-    pid: &EnhancedPid,
-) -> EnhancedPollTarget {
-    EnhancedPollTarget {
-        did: pid.did,
-        module_id: module_id.clone(),
-        module_label: module_label.to_string(),
-        name: pid.name.clone(),
-        unit: pid.unit.clone(),
-        profile_request: None,
-        confidence: Some(core_confidence_label(pid.confidence).to_string()),
-        evidence: None,
-    }
-}
-
-fn core_confidence_label(confidence: CoreConfidence) -> &'static str {
-    match confidence {
-        CoreConfidence::Verified => "verified",
-        CoreConfidence::Community => "community",
-        CoreConfidence::Inferred => "inferred",
-        CoreConfidence::Unverified => "unverified",
-    }
-}
-
 fn profile_confidence_label(confidence: ProfileConfidence) -> &'static str {
     match confidence {
         ProfileConfidence::Candidate => "candidate",
@@ -1302,7 +1281,7 @@ fn profile_confidence_label(confidence: ProfileConfidence) -> &'static str {
     }
 }
 
-fn enrich_dtcs<A: Adapter>(session: &Session<A>, dtcs: &mut Vec<Dtc>) {
+fn enrich_dtcs<A: Adapter>(session: &Session<A>, dtcs: &mut [Dtc]) {
     obd2_core::session::diagnostics::enrich_dtcs(dtcs, session.spec());
 }
 
@@ -1590,14 +1569,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_should_force_barometric_standard_poll() {
-        assert!(should_force_standard_poll(Pid::BAROMETRIC_PRESSURE));
-    }
-
-    #[test]
-    fn test_should_force_dashboard_standard_polls() {
-        for pid in [
+    #[tokio::test]
+    async fn test_lly_profile_policy_forces_dashboard_standard_polls() {
+        let configured = vec![
             Pid::ENGINE_LOAD,
             Pid::COOLANT_TEMP,
             Pid::INTAKE_MAP,
@@ -1611,13 +1585,61 @@ mod tests {
             Pid::CONTROL_MODULE_VOLTAGE,
             Pid::AMBIENT_AIR_TEMP,
             Pid::ENGINE_OIL_TEMP,
-        ] {
-            assert!(
-                should_force_standard_poll(pid),
-                "PID {pid} should be forced"
-            );
+            Pid::FUEL_TANK_LEVEL,
+        ];
+
+        let mut session = Session::new(MockAdapter::with_vin("1GCHK23224F000001"));
+        session.initialize().await.unwrap();
+        session.identify_vehicle().await.unwrap();
+        let identity = IdentityOutcome {
+            vin: session.vehicle().map(|profile| profile.vin.clone()),
+            confidence: IdentityConfidence::Confirmed,
+        };
+        let generation = next_generation();
+        let context = VehicleContext {
+            generation,
+            protocol: Protocol::J1850Vpw,
+            vin: identity.vin.clone(),
+            vin_confidence: identity.confidence,
+            spec: session.spec().cloned(),
+            discovered_modules: Vec::new(),
+            active_bus: None,
+        };
+        let registry = ProfileRegistry::with_builtins();
+        let profile_state = select_into_state(&registry, &context);
+        assert!(profile_state.selected.is_some());
+
+        let supported = HashSet::from([Pid::FUEL_TANK_LEVEL]);
+        let planned = planned_standard_pids(&configured, Some(&supported), &profile_state);
+
+        for pid in configured
+            .iter()
+            .copied()
+            .filter(|pid| *pid != Pid::FUEL_TANK_LEVEL)
+        {
+            assert!(planned.contains(&pid), "PID {pid} should be profile-forced");
         }
-        assert!(!should_force_standard_poll(Pid::FUEL_TANK_LEVEL));
+        assert!(planned.contains(&Pid::FUEL_TANK_LEVEL));
+    }
+
+    #[test]
+    fn test_generic_policy_does_not_force_unsupported_standard_pids() {
+        let profile_state = ProfileState {
+            generation: 1,
+            vin_confidence: None,
+            selected: None,
+            exact_matches: Vec::new(),
+            partial_matches: Vec::new(),
+            ambiguity: None,
+        };
+        let supported = HashSet::from([Pid::FUEL_TANK_LEVEL]);
+        let planned = planned_standard_pids(
+            &[Pid::BAROMETRIC_PRESSURE, Pid::FUEL_TANK_LEVEL],
+            Some(&supported),
+            &profile_state,
+        );
+
+        assert_eq!(planned, vec![Pid::FUEL_TANK_LEVEL]);
     }
 
     #[test]

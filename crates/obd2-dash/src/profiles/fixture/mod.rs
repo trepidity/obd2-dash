@@ -203,7 +203,7 @@ fn decode_scalar_u16_centi(
 }
 
 fn decode_sae_pairs(payload: &[u8]) -> Result<Vec<DecodedDtc>, ProfileDecodeError> {
-    if payload.len() % 2 != 0 {
+    if !payload.len().is_multiple_of(2) {
         return Err(ProfileDecodeError::PayloadTooShort {
             expected: payload.len() + 1,
             got: payload.len(),

@@ -2,9 +2,12 @@ use obd2_dash::gm_active::{
     active_test_evidence_record, blocked_active_test_result, vgt_vane_control_definition,
     GmActiveTestCommand,
 };
-use obd2_dash::profiles::gm::active::VGT_VANE_CONTROL_KEY;
+use obd2_dash::profiles::gm::active::{active_test_profile_evidence_record, VGT_VANE_CONTROL_KEY};
 use obd2_dash::profiles::gm::GM_LLY_CLASS2_PROFILE;
-use obd2_dash::profiles::{ActiveCommandProfile, DiagnosticProfile, EvidencePolicy, SafetyClass};
+use obd2_dash::profiles::{
+    ActiveCommandProfile, DiagnosticProfile, EvidencePolicy, ProfileDecodedEvidence, RouteEvidence,
+    SafetyClass,
+};
 
 #[test]
 fn lly_profile_publishes_locked_vgt_active_test() {
@@ -51,4 +54,38 @@ fn active_test_attempts_are_evidence_records_even_when_refused() {
     assert_eq!(record.decoder, "gm-active-test-vgt-vane-control");
     assert_eq!(record.node, 0x10);
     assert!(record.error.is_some());
+}
+
+#[test]
+fn active_test_attempts_can_be_profile_evidence_records_even_when_refused() {
+    let command = GmActiveTestCommand::VgtManualPercent {
+        percent: 35.0,
+        hold_ms: 1_000,
+    };
+    let result = blocked_active_test_result(&command);
+    let record = active_test_profile_evidence_record(&command, &result);
+
+    assert_eq!(record.profile_id, "gm.gmt800.lly.class2");
+    assert_eq!(record.capability_id, VGT_VANE_CONTROL_KEY);
+    assert_eq!(record.capability_kind, "active_test");
+    assert_eq!(record.module, "ecm");
+    assert!(matches!(
+        record.route,
+        RouteEvidence::J1850 {
+            node: 0x10,
+            ref header
+        } if header == &[0x6C, 0x10, 0xF1]
+    ));
+    assert!(matches!(
+        record.decoded,
+        Some(ProfileDecodedEvidence::ActiveTest {
+            accepted: false,
+            ref status,
+            ..
+        }) if status == "unverified_command_profile"
+    ));
+    assert_eq!(
+        record.error.as_ref().map(|error| error.kind.as_str()),
+        Some("unverified_command")
+    );
 }

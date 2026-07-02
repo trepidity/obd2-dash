@@ -2,7 +2,7 @@ use std::fmt;
 
 use obd2_core::vehicle::Protocol;
 
-#[cfg(feature = "proof-profile")]
+#[cfg(any(test, feature = "proof-profile"))]
 use super::fixture::FIXTURE_PROFILE;
 use super::gm::GM_LLY_CLASS2_PROFILE;
 use super::model::{
@@ -24,7 +24,7 @@ impl ProfileRegistry {
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
         registry.register(&GM_LLY_CLASS2_PROFILE);
-        #[cfg(feature = "proof-profile")]
+        #[cfg(any(test, feature = "proof-profile"))]
         registry.register(&FIXTURE_PROFILE);
         registry
     }
@@ -138,6 +138,17 @@ impl ProfileRegistry {
             }
         }
     }
+}
+
+pub fn builtin_profile(id: ProfileId) -> Option<&'static dyn DiagnosticProfile> {
+    if id == GM_LLY_CLASS2_PROFILE.id() {
+        return Some(&GM_LLY_CLASS2_PROFILE);
+    }
+    #[cfg(any(test, feature = "proof-profile"))]
+    if id == FIXTURE_PROFILE.id() {
+        return Some(&FIXTURE_PROFILE);
+    }
+    None
 }
 
 impl Default for ProfileRegistry {

@@ -15,6 +15,10 @@ use crate::widget::config::RowHeight;
 use crate::widget::edit_mode::EditPhase;
 use crate::widget::renderers;
 use obd2_core::protocol::dtc::DtcCategory;
+use obd2_dash::profiles::{
+    builtin_profile, DiagnosticProfile, PairRole, ProfileId, SignalComposition,
+    SignalDisplayDefinition, SignalDisplaySource,
+};
 
 use crate::recording::RecordingState;
 
@@ -2348,14 +2352,16 @@ pub(crate) fn render_full_enhanced(
             Style::default().fg(Color::DarkGray),
         )));
     } else {
-        let has_fuel_rail_summary = append_fuel_rail_summary(&mut lines, readings, state);
-        let has_vgt_summary = append_vgt_summary(&mut lines, readings, state);
+        let profile = selected_profile(state);
+        let has_fuel_rail_summary = append_fuel_rail_summary(&mut lines, readings, state, profile);
+        let has_vgt_summary = append_vgt_summary(&mut lines, readings, state, profile);
         let has_injector_summary =
-            append_injector_balance_summary(&mut lines, readings, area.width);
+            append_injector_balance_summary(&mut lines, readings, area.width, profile);
 
         for (i, r) in readings.iter().enumerate() {
-            if summarized_enhanced_did(
-                r.did,
+            if summarized_enhanced_reading(
+                profile,
+                r,
                 has_fuel_rail_summary,
                 has_vgt_summary,
                 has_injector_summary,
@@ -2383,25 +2389,33 @@ pub(crate) fn render_full_enhanced(
     frame.render_widget(panel, area);
 }
 
-fn summarized_enhanced_did(
-    did: u16,
+fn summarized_enhanced_reading(
+    profile: Option<&dyn DiagnosticProfile>,
+    reading: &EnhancedReading,
     has_fuel_rail_summary: bool,
     has_vgt_summary: bool,
     has_injector_summary: bool,
 ) -> bool {
-    (has_fuel_rail_summary && matches!(did, 0x1170 | 0x1171 | 0x163D | 0x163E))
-        || (has_vgt_summary && matches!(did, 0x1540 | 0x1543))
-        || (has_injector_summary && injector_balance_cylinder(did).is_some())
+    (has_fuel_rail_summary
+        && (reading_is_pair_input(profile, reading, &["fuel", "rail"])
+            || reading_is_legacy_fuel_rail_alias(reading)))
+        || (has_vgt_summary && reading_is_pair_input(profile, reading, &["vgt", "vane"]))
+        || (has_injector_summary
+            && reading_is_table_row(profile, reading, &["injector", "balance"]))
 }
 
 fn append_fuel_rail_summary(
     lines: &mut Vec<Line>,
     readings: &[EnhancedReading],
     state: &AppState,
+    profile: Option<&dyn DiagnosticProfile>,
 ) -> bool {
     let actual_enhanced =
-        enhanced_reading(readings, 0x163E).or_else(|| enhanced_reading(readings, 0x1170));
-    let desired = enhanced_reading(readings, 0x163D).or_else(|| enhanced_reading(readings, 0x1171));
+        enhanced_reading_for_pair_label(readings, profile, &["fuel", "rail"], PairRole::Actual)
+            .or_else(|| legacy_fuel_rail_reading(readings, PairRole::Actual));
+    let desired =
+        enhanced_reading_for_pair_label(readings, profile, &["fuel", "rail"], PairRole::Desired)
+            .or_else(|| legacy_fuel_rail_reading(readings, PairRole::Desired));
     let actual = state
         .domain
         .vehicle
@@ -2540,9 +2554,12 @@ fn append_vgt_summary(
     lines: &mut Vec<Line>,
     readings: &[EnhancedReading],
     _state: &AppState,
+    profile: Option<&dyn DiagnosticProfile>,
 ) -> bool {
-    let actual = enhanced_reading(readings, 0x1543);
-    let desired = enhanced_reading(readings, 0x1540);
+    let actual =
+        enhanced_reading_for_pair_label(readings, profile, &["vgt", "vane"], PairRole::Actual);
+    let desired =
+        enhanced_reading_for_pair_label(readings, profile, &["vgt", "vane"], PairRole::Desired);
 
     let mut appended = false;
     if let (Some(actual), Some(desired)) =
@@ -2576,8 +2593,9 @@ fn append_injector_balance_summary(
     lines: &mut Vec<Line>,
     readings: &[EnhancedReading],
     width: u16,
+    profile: Option<&dyn DiagnosticProfile>,
 ) -> bool {
-    if !(1..=8).any(|cyl| injector_balance_reading(readings, cyl).is_some()) {
+    if !(1..=8).any(|cyl| injector_balance_reading(profile, readings, cyl).is_some()) {
         return false;
     }
 
@@ -2587,16 +2605,31 @@ fn append_injector_balance_summary(
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(injector_balance_header_line(1..=8, " Cyl  "));
-        lines.push(injector_balance_value_line(readings, 1..=8, " mm3  "));
+        lines.push(injector_balance_value_line(
+            profile,
+            readings,
+            1..=8,
+            " mm3  ",
+        ));
     } else {
         lines.push(Line::from(Span::styled(
             " Injector Balance (mm3)",
             Style::default().fg(Color::DarkGray),
         )));
         lines.push(injector_balance_header_line(1..=4, " Cyl  "));
-        lines.push(injector_balance_value_line(readings, 1..=4, " mm3  "));
+        lines.push(injector_balance_value_line(
+            profile,
+            readings,
+            1..=4,
+            " mm3  ",
+        ));
         lines.push(injector_balance_header_line(5..=8, " Cyl  "));
-        lines.push(injector_balance_value_line(readings, 5..=8, " mm3  "));
+        lines.push(injector_balance_value_line(
+            profile,
+            readings,
+            5..=8,
+            " mm3  ",
+        ));
     }
     true
 }
@@ -2618,6 +2651,7 @@ fn injector_balance_header_line(
 }
 
 fn injector_balance_value_line(
+    profile: Option<&dyn DiagnosticProfile>,
     readings: &[EnhancedReading],
     cylinders: std::ops::RangeInclusive<u8>,
     prefix: &'static str,
@@ -2626,7 +2660,7 @@ fn injector_balance_value_line(
     spans.push(Span::styled(prefix, Style::default().fg(Color::DarkGray)));
     for cyl in cylinders {
         spans.push(Span::styled("|", Style::default().fg(Color::DarkGray)));
-        match injector_balance_reading(readings, cyl) {
+        match injector_balance_reading(profile, readings, cyl) {
             Some(reading) if reading.last_error.is_some() => {
                 spans.push(Span::styled(
                     format!("{:^6}", "ERR"),
@@ -2669,26 +2703,293 @@ fn injector_balance_style(value: f64) -> Style {
     }
 }
 
-fn injector_balance_reading(
-    readings: &[EnhancedReading],
+fn injector_balance_reading<'a>(
+    profile: Option<&dyn DiagnosticProfile>,
+    readings: &'a [EnhancedReading],
     cylinder: u8,
-) -> Option<&EnhancedReading> {
+) -> Option<&'a EnhancedReading> {
     if !(1..=8).contains(&cylinder) {
         return None;
     }
-    let did = 0x162E + u16::from(cylinder);
-    readings.iter().find(|reading| reading.did == did)
+    enhanced_reading_for_table_label(
+        readings,
+        profile,
+        &["injector", "balance"],
+        cylinder.saturating_sub(1),
+    )
 }
 
-fn injector_balance_cylinder(did: u16) -> Option<u8> {
-    match did {
-        0x162F..=0x1636 => Some((did - 0x162E) as u8),
-        _ => None,
+fn selected_profile(state: &AppState) -> Option<&'static dyn DiagnosticProfile> {
+    let id = state.profile_state.as_ref()?.selected_profile_id?;
+    builtin_profile(ProfileId::new(id))
+}
+
+pub(crate) fn enhanced_reading_for_map_pair_role<'a>(
+    state: &AppState,
+    readings: &'a [EnhancedReading],
+    role: PairRole,
+) -> Option<&'a EnhancedReading> {
+    let profile = selected_profile(state)?;
+    let group_key =
+        profile
+            .signal_display()
+            .iter()
+            .find_map(|display| match display.composition {
+                SignalComposition::Pair {
+                    group_key,
+                    role: PairRole::Actual,
+                } if matches!(display.source, SignalDisplaySource::StandardPid(0x0B)) => {
+                    Some(group_key)
+                }
+                _ => None,
+            })?;
+    enhanced_reading_for_pair_role(readings, Some(profile), group_key, role)
+}
+
+pub(crate) fn enhanced_reading_for_scalar_label<'a>(
+    state: &AppState,
+    readings: &'a [EnhancedReading],
+    label_terms: &[&str],
+) -> Option<&'a EnhancedReading> {
+    let profile = selected_profile(state)?;
+    profile
+        .signal_display()
+        .iter()
+        .find(|display| {
+            matches!(display.composition, SignalComposition::Scalar)
+                && label_matches_terms(display.label, label_terms)
+        })
+        .and_then(|display| {
+            enhanced_reading_for_display_source(readings, Some(profile), &display.source)
+        })
+}
+
+fn enhanced_reading_for_pair_label<'a>(
+    readings: &'a [EnhancedReading],
+    profile: Option<&dyn DiagnosticProfile>,
+    label_terms: &[&str],
+    role: PairRole,
+) -> Option<&'a EnhancedReading> {
+    let profile = profile?;
+    let group_key =
+        profile
+            .signal_display()
+            .iter()
+            .find_map(|display| match display.composition {
+                SignalComposition::Pair {
+                    group_key,
+                    role: candidate_role,
+                } if candidate_role == role && label_matches_terms(display.label, label_terms) => {
+                    Some(group_key)
+                }
+                _ => None,
+            })?;
+    enhanced_reading_for_pair_role(readings, Some(profile), group_key, role)
+}
+
+fn enhanced_reading_for_pair_role<'a>(
+    readings: &'a [EnhancedReading],
+    profile: Option<&dyn DiagnosticProfile>,
+    group_key: &str,
+    role: PairRole,
+) -> Option<&'a EnhancedReading> {
+    profile?
+        .signal_display()
+        .iter()
+        .find(|display| display_has_pair_role(display, group_key, role))
+        .and_then(|display| enhanced_reading_for_display_source(readings, profile, &display.source))
+}
+
+fn enhanced_reading_for_table_label<'a>(
+    readings: &'a [EnhancedReading],
+    profile: Option<&dyn DiagnosticProfile>,
+    label_terms: &[&str],
+    row_index: u8,
+) -> Option<&'a EnhancedReading> {
+    let profile = profile?;
+    let table_key =
+        profile
+            .signal_display()
+            .iter()
+            .find_map(|display| match display.composition {
+                SignalComposition::TableRow { table_key, .. }
+                    if label_matches_terms(display.label, label_terms) =>
+                {
+                    Some(table_key)
+                }
+                _ => None,
+            })?;
+    profile
+        .signal_display()
+        .iter()
+        .find(|display| match display.composition {
+            SignalComposition::TableRow {
+                table_key: candidate,
+                row_index: candidate_row,
+                ..
+            } => candidate == table_key && candidate_row == row_index,
+            _ => false,
+        })
+        .and_then(|display| {
+            enhanced_reading_for_display_source(readings, Some(profile), &display.source)
+        })
+}
+
+fn enhanced_reading_for_display_source<'a>(
+    readings: &'a [EnhancedReading],
+    profile: Option<&dyn DiagnosticProfile>,
+    source: &SignalDisplaySource,
+) -> Option<&'a EnhancedReading> {
+    match *source {
+        SignalDisplaySource::ProfileSignal(signal_key) => {
+            enhanced_reading_for_profile_signal(readings, profile, signal_key)
+        }
+        SignalDisplaySource::StandardPid(_) => None,
+        SignalDisplaySource::Derived { input_keys, .. } => input_keys
+            .iter()
+            .find_map(|input| enhanced_reading_for_profile_signal(readings, profile, input)),
     }
 }
 
-fn enhanced_reading(readings: &[EnhancedReading], did: u16) -> Option<&EnhancedReading> {
-    readings.iter().find(|reading| reading.did == did)
+pub(crate) fn enhanced_reading_for_profile_signal<'a>(
+    readings: &'a [EnhancedReading],
+    profile: Option<&dyn DiagnosticProfile>,
+    signal_key: &str,
+) -> Option<&'a EnhancedReading> {
+    readings
+        .iter()
+        .find(|reading| reading_matches_profile_signal(reading, profile, signal_key))
+}
+
+fn reading_is_pair_input(
+    profile: Option<&dyn DiagnosticProfile>,
+    reading: &EnhancedReading,
+    label_terms: &[&str],
+) -> bool {
+    let Some(profile) = profile else {
+        return false;
+    };
+    profile
+        .signal_display()
+        .iter()
+        .filter(|display| {
+            matches!(display.composition, SignalComposition::Pair { .. })
+                && label_matches_terms(display.label, label_terms)
+        })
+        .any(|display| reading_matches_display_source(reading, Some(profile), &display.source))
+}
+
+fn reading_is_table_row(
+    profile: Option<&dyn DiagnosticProfile>,
+    reading: &EnhancedReading,
+    label_terms: &[&str],
+) -> bool {
+    let Some(profile) = profile else {
+        return false;
+    };
+    profile
+        .signal_display()
+        .iter()
+        .filter(|display| {
+            matches!(display.composition, SignalComposition::TableRow { .. })
+                && label_matches_terms(display.label, label_terms)
+        })
+        .any(|display| reading_matches_display_source(reading, Some(profile), &display.source))
+}
+
+fn reading_matches_display_source(
+    reading: &EnhancedReading,
+    profile: Option<&dyn DiagnosticProfile>,
+    source: &SignalDisplaySource,
+) -> bool {
+    match *source {
+        SignalDisplaySource::ProfileSignal(signal_key) => {
+            reading_matches_profile_signal(reading, profile, signal_key)
+        }
+        SignalDisplaySource::StandardPid(_) => false,
+        SignalDisplaySource::Derived { input_keys, .. } => input_keys
+            .iter()
+            .any(|input| reading_matches_profile_signal(reading, profile, input)),
+    }
+}
+
+fn reading_matches_profile_signal(
+    reading: &EnhancedReading,
+    profile: Option<&dyn DiagnosticProfile>,
+    signal_key: &str,
+) -> bool {
+    reading
+        .evidence
+        .as_deref()
+        .is_some_and(|evidence| evidence_capability_key(evidence) == Some(signal_key))
+        || profile_signal_did(profile, signal_key).is_some_and(|did| reading.did == did)
+}
+
+fn evidence_capability_key(evidence: &str) -> Option<&str> {
+    evidence.rsplit_once(':').map(|(_, capability)| capability)
+}
+
+fn profile_signal_did(profile: Option<&dyn DiagnosticProfile>, signal_key: &str) -> Option<u16> {
+    let signal = profile?
+        .signals()
+        .iter()
+        .find(|signal| signal.key == signal_key)?;
+    let did = signal.request_data.get(..2)?;
+    Some(u16::from_be_bytes([did[0], did[1]]))
+}
+
+fn label_matches_terms(label: &str, terms: &[&str]) -> bool {
+    terms
+        .iter()
+        .all(|term| contains_ascii_ignore_case(label, term))
+}
+
+fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+fn display_has_pair_role(
+    display: &SignalDisplayDefinition,
+    group_key: &str,
+    role: PairRole,
+) -> bool {
+    matches!(
+        display.composition,
+        SignalComposition::Pair {
+            group_key: candidate,
+            role: candidate_role
+        } if candidate == group_key && candidate_role == role
+    )
+}
+
+fn legacy_fuel_rail_reading(
+    readings: &[EnhancedReading],
+    role: PairRole,
+) -> Option<&EnhancedReading> {
+    readings
+        .iter()
+        .find(|reading| legacy_fuel_rail_role(reading) == Some(role))
+}
+
+fn reading_is_legacy_fuel_rail_alias(reading: &EnhancedReading) -> bool {
+    legacy_fuel_rail_role(reading).is_some()
+}
+
+fn legacy_fuel_rail_role(reading: &EnhancedReading) -> Option<PairRole> {
+    if reading.name.eq_ignore_ascii_case("fuel rail actual") {
+        Some(PairRole::Actual)
+    } else if reading.name.eq_ignore_ascii_case("fuel rail desired") {
+        Some(PairRole::Desired)
+    } else {
+        None
+    }
 }
 
 fn enhanced_metadata_span(reading: &EnhancedReading) -> Span<'static> {
@@ -2768,4 +3069,120 @@ pub(crate) fn render_full_o2_sensors(
 
     let panel = Paragraph::new(lines).block(block);
     frame.render_widget(panel, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_profile() -> &'static dyn DiagnosticProfile {
+        builtin_profile(ProfileId::new("gm.gmt800.lly.class2")).expect("test profile")
+    }
+
+    fn reading_for_signal(signal_key: &str, name: &str) -> EnhancedReading {
+        EnhancedReading {
+            did: profile_signal_did(Some(test_profile()), signal_key).expect("profile signal DID"),
+            module: "ECM".to_string(),
+            name: name.to_string(),
+            value: Some(42.0),
+            unit: "psi".to_string(),
+            last_error: None,
+            confidence: None,
+            evidence: None,
+        }
+    }
+
+    fn reading_with_evidence(signal_key: &str, name: &str) -> EnhancedReading {
+        EnhancedReading {
+            did: 1,
+            module: "ECM".to_string(),
+            name: name.to_string(),
+            value: Some(42.0),
+            unit: "psi".to_string(),
+            last_error: None,
+            confidence: None,
+            evidence: Some(format!("gm.gmt800.lly.class2:{signal_key}")),
+        }
+    }
+
+    #[test]
+    fn profile_signal_lookup_prefers_evidence_key() {
+        let readings = [reading_with_evidence("lly.1543", "VGT vane actual")];
+
+        let reading =
+            enhanced_reading_for_profile_signal(&readings, Some(test_profile()), "lly.1543")
+                .expect("evidence-keyed reading");
+
+        assert_eq!(reading.name, "VGT vane actual");
+    }
+
+    #[test]
+    fn profile_signal_lookup_falls_back_to_profile_signal_did() {
+        let readings = [reading_for_signal("lly.1543", "VGT vane actual")];
+
+        let reading =
+            enhanced_reading_for_profile_signal(&readings, Some(test_profile()), "lly.1543")
+                .expect("DID-keyed reading");
+
+        assert_eq!(reading.name, "VGT vane actual");
+    }
+
+    #[test]
+    fn summarized_reading_uses_pair_display_metadata() {
+        let reading = reading_for_signal("lly.1543", "VGT vane actual");
+
+        assert!(summarized_enhanced_reading(
+            Some(test_profile()),
+            &reading,
+            false,
+            true,
+            false
+        ));
+        assert!(!summarized_enhanced_reading(
+            Some(test_profile()),
+            &reading,
+            true,
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn injector_lookup_uses_table_row_display_metadata() {
+        let readings = [reading_for_signal("lly.1634", "injector balance cyl 6")];
+
+        let reading =
+            injector_balance_reading(Some(test_profile()), &readings, 6).expect("cylinder row");
+
+        assert_eq!(reading.name, "injector balance cyl 6");
+    }
+
+    #[test]
+    fn legacy_fuel_rail_alias_suppresses_without_did_literal() {
+        let reading = EnhancedReading {
+            did: 1,
+            module: "ECM".to_string(),
+            name: "fuel rail desired".to_string(),
+            value: Some(42.0),
+            unit: "psi".to_string(),
+            last_error: None,
+            confidence: None,
+            evidence: None,
+        };
+
+        assert!(summarized_enhanced_reading(
+            Some(test_profile()),
+            &reading,
+            true,
+            false,
+            false
+        ));
+        assert!(!summarized_enhanced_reading(
+            Some(test_profile()),
+            &reading,
+            false,
+            true,
+            false
+        ));
+    }
 }

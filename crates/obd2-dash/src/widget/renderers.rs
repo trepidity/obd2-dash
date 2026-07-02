@@ -11,6 +11,7 @@ use crate::app::AppState;
 use crate::domain::{DiagnosticScanResult, DiagnosticScanScope, DtcService};
 use crate::tui::ui;
 use obd2_core::protocol::pid::Pid;
+use obd2_dash::profiles::PairRole;
 
 /// Render a widget of the given kind into the provided area.
 pub fn render_widget(
@@ -79,7 +80,7 @@ pub fn render_widget(
             state,
             block,
             "Fuel Rate",
-            state.domain.vehicle.engine_fuel_rate.map(|r| r),
+            state.domain.vehicle.engine_fuel_rate,
             "L/h",
             0x5E,
         ),
@@ -281,7 +282,7 @@ fn render_single_rpm(frame: &mut Frame, area: Rect, state: &AppState, block: Blo
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let rpm_val = state.domain.vehicle.rpm.map(|r| r).unwrap_or(0.0);
+    let rpm_val = state.domain.vehicle.rpm.unwrap_or(0.0);
     let color =
         ui::threshold_color_for_pid(state, 0x0C, rpm_val, || ui::rpm_color_default(rpm_val));
     let max_rpm = state
@@ -375,7 +376,7 @@ fn render_single_load(frame: &mut Frame, area: Rect, state: &AppState, block: Bl
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let load_val = state.domain.vehicle.engine_load.map(|r| r).unwrap_or(0.0);
+    let load_val = state.domain.vehicle.engine_load.unwrap_or(0.0);
     let has_data = state.domain.vehicle.engine_load.is_some();
 
     let chunks = Layout::default()
@@ -465,12 +466,7 @@ fn render_single_throttle(frame: &mut Frame, area: Rect, state: &AppState, block
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let val = state
-        .domain
-        .vehicle
-        .throttle_position
-        .map(|r| r)
-        .unwrap_or(0.0);
+    let val = state.domain.vehicle.throttle_position.unwrap_or(0.0);
     let color = ui::threshold_color_for_pid(state, 0x11, val, || Color::Cyan);
 
     let chunks = Layout::default()
@@ -561,7 +557,11 @@ fn render_intake_pressure(frame: &mut Frame, area: Rect, state: &AppState, block
         None,
     ));
 
-    let desired_map = enhanced_reading(state, 0x1542);
+    let desired_map = ui::enhanced_reading_for_map_pair_role(
+        state,
+        &state.domain.enhanced_readings,
+        PairRole::Desired,
+    );
     let desired_map_value = desired_map.and_then(|reading| reading.value);
     let desired_map_color = if desired_map_value.is_some() {
         Color::Cyan
@@ -579,7 +579,12 @@ fn render_intake_pressure(frame: &mut Frame, area: Rect, state: &AppState, block
         desired_map.and_then(|reading| reading.confidence.as_deref()),
     ));
 
-    let gm_baro = enhanced_reading(state, 0x1251).and_then(|reading| reading.value);
+    let baro_reading = ui::enhanced_reading_for_scalar_label(
+        state,
+        &state.domain.enhanced_readings,
+        &["barometric"],
+    );
+    let gm_baro = baro_reading.and_then(|reading| reading.value);
     let baro = gm_baro.or(state.domain.vehicle.barometric_pressure);
     let baro_color = state
         .domain
@@ -594,7 +599,7 @@ fn render_intake_pressure(frame: &mut Frame, area: Rect, state: &AppState, block
         unit,
         baro_color,
         state,
-        enhanced_reading(state, 0x1251).and_then(|reading| reading.confidence.as_deref()),
+        baro_reading.and_then(|reading| reading.confidence.as_deref()),
     ));
 
     let paragraph = Paragraph::new(lines).block(block);
@@ -628,17 +633,6 @@ fn pressure_line(
         text,
         Style::default().fg(color).add_modifier(Modifier::BOLD),
     ))
-}
-
-fn enhanced_reading<'a>(
-    state: &'a AppState,
-    did: u16,
-) -> Option<&'a crate::domain::EnhancedReading> {
-    state
-        .domain
-        .enhanced_readings
-        .iter()
-        .find(|reading| reading.did == did)
 }
 
 fn render_single_boost(frame: &mut Frame, area: Rect, state: &AppState, block: Block) {
@@ -706,12 +700,7 @@ fn render_single_fuel_tank(frame: &mut Frame, area: Rect, state: &AppState, bloc
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    let val = state
-        .domain
-        .vehicle
-        .fuel_tank_level
-        .map(|r| r)
-        .unwrap_or(0.0);
+    let val = state.domain.vehicle.fuel_tank_level.unwrap_or(0.0);
     let has_data = state.domain.vehicle.fuel_tank_level.is_some();
 
     let fuel_color = ui::threshold_color_for_pid(state, 0x2F, val, || fuel_zone_color(val));

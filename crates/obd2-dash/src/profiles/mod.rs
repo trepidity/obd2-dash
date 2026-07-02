@@ -1,10 +1,11 @@
 //! Wave 1: pure profile model. Single owner of all shared Layer-3 types.
 
-// TODO(wave-2+): remove once the registry/dispatcher consume these types.
+// The profile contract intentionally includes variants before every backend
+// consumes them so unsupported modules/protocols remain typed, not stringly.
 #![allow(dead_code)]
 
 pub mod evidence;
-#[cfg(feature = "proof-profile")]
+#[cfg(any(test, feature = "proof-profile"))]
 pub mod fixture;
 pub mod gm;
 pub mod model;
@@ -34,7 +35,7 @@ pub use model::{
     SignalDisplayDefinition, SignalDisplaySource, SourceFields, StandardPidOverride,
     StandardPidPolicy, VehicleContext,
 };
-pub use registry::{ManualConfirmError, ProfileRegistry};
+pub use registry::{builtin_profile, ManualConfirmError, ProfileRegistry};
 pub use runtime::{
     bus_family, resolve_route, resolve_route_target, CapabilityId, DispatchError, DispatchEvidence,
     NullEvidenceSink, ProfileEvidenceSink, ProfileResponse, ProfileRuntime, RequestId,

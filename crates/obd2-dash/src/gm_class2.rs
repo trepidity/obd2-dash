@@ -274,7 +274,7 @@ pub fn decode_class2_dtcs(payload: &[u8]) -> Result<Vec<GmClass2DtcRecord>, GmCl
         return Ok(Vec::new());
     }
 
-    if payload.len() % 3 != 0 {
+    if !payload.len().is_multiple_of(3) {
         return Err(GmClass2DecodeError::UnexpectedPayloadLength {
             len: payload.len(),
             payload: payload.to_vec(),

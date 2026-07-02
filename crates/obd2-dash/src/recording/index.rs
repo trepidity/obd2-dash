@@ -10,6 +10,8 @@ pub struct SessionEntry {
     pub start_time: DateTime<Utc>,
     pub vin: Option<String>,
     pub vehicle_name: Option<String>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
     pub duration_secs: u64,
     pub frame_count: u64,
     pub file_path: PathBuf,
@@ -105,6 +107,7 @@ mod tests {
             start_time: Utc::now(),
             vin: Some("TESTVIN1234567890".into()),
             vehicle_name: Some("Test Car".into()),
+            profile_id: None,
             duration_secs: 60,
             frame_count: 100,
             file_path: PathBuf::from(format!("recordings/{}.obd2rec", id)),
@@ -135,6 +138,29 @@ mod tests {
         assert_eq!(loaded.sessions.len(), 2);
         assert_eq!(loaded.sessions[0].session_id, "aaa");
         assert_eq!(loaded.sessions[1].session_id, "bbb");
+    }
+
+    #[test]
+    fn test_load_legacy_entry_defaults_profile_id() {
+        let json = r#"{
+          "sessions": [{
+            "session_id": "legacy",
+            "start_time": "2026-01-01T00:00:00Z",
+            "vin": null,
+            "vehicle_name": null,
+            "duration_secs": 1,
+            "frame_count": 0,
+            "file_path": "recordings/legacy.obd2rec",
+            "file_size_bytes": 1,
+            "compressed": false
+          }]
+        }"#;
+
+        let index: SessionIndex = serde_json::from_str(json).unwrap();
+
+        assert_eq!(index.sessions.len(), 1);
+        assert_eq!(index.sessions[0].session_id, "legacy");
+        assert!(index.sessions[0].profile_id.is_none());
     }
 
     #[test]

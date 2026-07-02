@@ -16,6 +16,10 @@ pub struct ProfileEvidenceRecord {
     pub route: RouteEvidence,
     pub service_id: u8,
     pub request_data: Vec<u8>,
+    #[serde(default)]
+    pub raw_adapter_write_text: Option<String>,
+    #[serde(default)]
+    pub raw_adapter_read_text: Option<String>,
     pub parsed_response_bytes: Vec<u8>,
     pub decoder_id: String,
     pub identity_confidence: Option<String>,
@@ -66,6 +70,12 @@ pub enum ProfileDecodedEvidence {
     },
     Dtcs {
         records: Vec<ProfileDtcEvidence>,
+    },
+    ActiveTest {
+        test_id: String,
+        command: String,
+        accepted: bool,
+        status: String,
     },
 }
 
@@ -134,6 +144,12 @@ impl ProfileEvidenceRecord {
             route: route_evidence(&evidence.physical_address),
             service_id: evidence.service_id,
             request_data: evidence.request_data.to_vec(),
+            raw_adapter_write_text: Some(raw_write_text(
+                &evidence.physical_address,
+                evidence.service_id,
+                evidence.request_data,
+            )),
+            raw_adapter_read_text: Some(hex_compact(evidence.raw_payload)),
             parsed_response_bytes: evidence.raw_payload.to_vec(),
             decoder_id: evidence.decoder_id.to_string(),
             identity_confidence: identity_confidence.map(str::to_string),
@@ -228,6 +244,26 @@ fn route_evidence(address: &PhysicalAddress) -> RouteEvidence {
         },
         _ => RouteEvidence::Unknown,
     }
+}
+
+fn raw_write_text(address: &PhysicalAddress, service_id: u8, request_data: &[u8]) -> String {
+    let mut bytes = Vec::new();
+    if let PhysicalAddress::J1850 { header, .. } = address {
+        bytes.extend_from_slice(header);
+    }
+    bytes.push(service_id);
+    bytes.extend_from_slice(request_data);
+    hex_compact(&bytes)
+}
+
+fn hex_compact(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0F) as usize] as char);
+    }
+    out
 }
 
 pub fn source_fields_evidence(fields: SourceFields) -> Option<SourceFieldsEvidence> {

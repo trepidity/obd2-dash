@@ -146,9 +146,9 @@ impl GmMth {
             return Err(GmEnhancedDecodeError::InvalidMth { raw });
         }
         let mut bytes = [0u8; 6];
-        for index in 0..6 {
+        for (index, byte) in bytes.iter_mut().enumerate() {
             let start = index * 2;
-            bytes[index] = parse_hex_byte(&raw[start..start + 2])?;
+            *byte = parse_hex_byte(&raw[start..start + 2])?;
         }
         Ok(Self {
             raw,
@@ -662,7 +662,7 @@ pub fn is_lly_spec_identity(spec: &VehicleSpec) -> bool {
     if spec.identity.model_years != (2004, 2005) {
         return false;
     }
-    if spec.identity.engine.code.to_ascii_uppercase() != "LLY" {
+    if !spec.identity.engine.code.eq_ignore_ascii_case("LLY") {
         return false;
     }
     if spec.identity.engine.cylinders != 8 {

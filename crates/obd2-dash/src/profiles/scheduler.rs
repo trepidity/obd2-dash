@@ -263,7 +263,7 @@ fn dtc_interval(cadence: PollCadence) -> u64 {
 }
 
 fn cycle_due(cycle: u64, interval: u64) -> bool {
-    interval != 0 && cycle != 0 && cycle % interval == 0
+    interval != 0 && cycle != 0 && cycle.is_multiple_of(interval)
 }
 
 fn is_backed_off(capability: CapabilityId, request: RequestId, coverage: &CoverageMap) -> bool {

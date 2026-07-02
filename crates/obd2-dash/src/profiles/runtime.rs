@@ -6,10 +6,10 @@ use obd2_core::session::Session;
 use obd2_core::vehicle::{ModuleId, PhysicalAddress, Protocol};
 
 use crate::profiles::model::{
-    AddressState, AddressTemplate, DecodedDtc, DecodedSignal, DiagnosticProfile,
-    DtcServiceDefinition, ModuleDefinition, ModuleKey, ModuleMap, ProfileDecodeError, ProfileId,
-    RouteDefinition, RouteScope, RouteSet, SelectedProfile, SignalDefinition, SourceFields,
-    VehicleContext,
+    ActiveTestDefinition, AddressState, AddressTemplate, DecodedDtc, DecodedSignal,
+    DiagnosticProfile, DtcServiceDefinition, ModuleDefinition, ModuleKey, ModuleMap,
+    ProfileDecodeError, ProfileId, RouteDefinition, RouteScope, RouteSet, SelectedProfile,
+    SignalDefinition, SourceFields, VehicleContext,
 };
 use crate::profiles::registry::ProfileRegistry;
 
@@ -141,7 +141,7 @@ impl<'r> ProfileRuntime<'r> {
                 profile: selected.profile_id(),
                 capability,
             })?;
-        if matches!(resolved_capability, ResolvedCapability::ActiveTest) {
+        if matches!(resolved_capability, ResolvedCapability::ActiveTest(_)) {
             return Err(DispatchError::ActiveTestLocked { capability });
         }
 
@@ -303,7 +303,9 @@ impl<'r> ProfileRuntime<'r> {
                 );
                 Ok(response)
             }
-            ResolvedCapability::ActiveTest => Err(DispatchError::ActiveTestLocked { capability }),
+            ResolvedCapability::ActiveTest(test) => Err(DispatchError::ActiveTestLocked {
+                capability: CapabilityId::ActiveTest(test.key),
+            }),
         }
     }
 }
@@ -311,7 +313,7 @@ impl<'r> ProfileRuntime<'r> {
 enum ResolvedCapability<'a> {
     Signal(&'a SignalDefinition),
     DtcService(&'a DtcServiceDefinition),
-    ActiveTest,
+    ActiveTest(&'a ActiveTestDefinition),
 }
 
 fn resolve_capability(
@@ -329,7 +331,11 @@ fn resolve_capability(
             .iter()
             .find(|service| service.key == key)
             .map(ResolvedCapability::DtcService),
-        CapabilityId::ActiveTest(_key) => Some(ResolvedCapability::ActiveTest),
+        CapabilityId::ActiveTest(key) => profile
+            .active_tests()
+            .iter()
+            .find(|test| test.key == key)
+            .map(ResolvedCapability::ActiveTest),
     }
 }
 
@@ -357,8 +363,8 @@ fn capability_route(
             request,
             CapabilityId::DtcService(service.key),
         ),
-        ResolvedCapability::ActiveTest => Err(DispatchError::ActiveTestLocked {
-            capability: CapabilityId::ActiveTest("active"),
+        ResolvedCapability::ActiveTest(test) => Err(DispatchError::ActiveTestLocked {
+            capability: CapabilityId::ActiveTest(test.key),
         }),
     }
 }

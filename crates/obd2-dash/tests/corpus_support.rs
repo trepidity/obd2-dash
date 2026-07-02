@@ -91,7 +91,7 @@ pub fn corpus_dir() -> PathBuf {
 
 pub fn hex_to_bytes(s: &str) -> Vec<u8> {
     let compact: String = s.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-    if compact.len() % 2 != 0 {
+    if !compact.len().is_multiple_of(2) {
         panic!("hex string has odd length: {s}");
     }
 

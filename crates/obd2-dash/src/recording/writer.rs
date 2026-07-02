@@ -15,6 +15,17 @@ pub struct RecordingWriter {
     version: u8,
 }
 
+struct RecordingWriterConfig<'a> {
+    recordings_dir: &'a Path,
+    session_id: &'a str,
+    vin: Option<String>,
+    vehicle_name: Option<String>,
+    poll_interval_ms: u64,
+    version: u8,
+    profile_id: Option<String>,
+    identity_confidence: Option<String>,
+}
+
 impl RecordingWriter {
     /// Create a new recording file and write the session header.
     pub fn new(
@@ -24,14 +35,16 @@ impl RecordingWriter {
         vehicle_name: Option<String>,
         poll_interval_ms: u64,
     ) -> std::io::Result<Self> {
-        Self::new_with_version(
+        Self::new_with_config(RecordingWriterConfig {
             recordings_dir,
             session_id,
             vin,
             vehicle_name,
             poll_interval_ms,
-            2,
-        )
+            version: 2,
+            profile_id: None,
+            identity_confidence: None,
+        })
     }
 
     /// Create a v3 recording file. Default app recording still uses v2 until
@@ -43,38 +56,57 @@ impl RecordingWriter {
         vehicle_name: Option<String>,
         poll_interval_ms: u64,
     ) -> std::io::Result<Self> {
-        Self::new_with_version(
+        Self::new_v3_with_profile(
             recordings_dir,
             session_id,
             vin,
             vehicle_name,
             poll_interval_ms,
-            3,
+            None,
+            None,
         )
     }
 
-    fn new_with_version(
+    pub fn new_v3_with_profile(
         recordings_dir: &Path,
         session_id: &str,
         vin: Option<String>,
         vehicle_name: Option<String>,
         poll_interval_ms: u64,
-        version: u8,
+        profile_id: Option<String>,
+        identity_confidence: Option<String>,
     ) -> std::io::Result<Self> {
-        std::fs::create_dir_all(recordings_dir)?;
-        let file_path = recordings_dir.join(format!("{}.obd2rec", session_id));
+        Self::new_with_config(RecordingWriterConfig {
+            recordings_dir,
+            session_id,
+            vin,
+            vehicle_name,
+            poll_interval_ms,
+            version: 3,
+            profile_id,
+            identity_confidence,
+        })
+    }
+
+    fn new_with_config(config: RecordingWriterConfig<'_>) -> std::io::Result<Self> {
+        std::fs::create_dir_all(config.recordings_dir)?;
+        let file_path = config
+            .recordings_dir
+            .join(format!("{}.obd2rec", config.session_id));
         let file = File::create(&file_path)?;
         let mut writer = BufWriter::new(file);
 
         let header = SessionHeader {
-            session_id: session_id.to_string(),
+            session_id: config.session_id.to_string(),
             start_time: Utc::now(),
-            vin,
-            vehicle_name,
-            poll_interval_ms,
+            vin: config.vin,
+            vehicle_name: config.vehicle_name,
+            poll_interval_ms: config.poll_interval_ms,
+            profile_id: config.profile_id,
+            identity_confidence: config.identity_confidence,
         };
 
-        match version {
+        match config.version {
             2 => write_file_header(&mut writer, &header)?,
             3 => write_file_header_v3(&mut writer, &header)?,
             _ => {
@@ -88,9 +120,9 @@ impl RecordingWriter {
         Ok(Self {
             writer,
             file_path,
-            session_id: session_id.to_string(),
+            session_id: config.session_id.to_string(),
             frame_count: 0,
-            version,
+            version: config.version,
         })
     }
 
@@ -219,6 +251,8 @@ mod tests {
             },
             service_id: 0x22,
             request_data: vec![0x15, 0x43, 0x01],
+            raw_adapter_write_text: None,
+            raw_adapter_read_text: None,
             parsed_response_bytes: vec![0x62, 0x15, 0x43, 0xE1],
             decoder_id: "gm-lly-mode22".to_string(),
             identity_confidence: Some("confirmed".to_string()),
@@ -257,12 +291,23 @@ mod tests {
         let mut record = sample_profile_record();
         record.parsed_response_bytes = vec![0xAB; 512];
 
-        let mut writer = RecordingWriter::new_v3(dir.path(), "v3", None, None, 250).unwrap();
+        let mut writer = RecordingWriter::new_v3_with_profile(
+            dir.path(),
+            "v3",
+            None,
+            None,
+            250,
+            Some(record.profile_id.clone()),
+            Some("confirmed".to_string()),
+        )
+        .unwrap();
         let wrote = writer.write_profile_evidence(100, &record).unwrap();
         let path = writer.finish().unwrap();
 
         assert!(wrote);
-        let (_header, frames) = crate::recording::reader::read_recording(&path).unwrap();
+        let (header, frames) = crate::recording::reader::read_recording(&path).unwrap();
+        assert_eq!(header.profile_id, Some("gm.gmt800.lly.class2".to_string()));
+        assert_eq!(header.identity_confidence, Some("confirmed".to_string()));
         assert_eq!(frames.len(), 1);
         let decoded = frames[0]
             .decode_profile_evidence()

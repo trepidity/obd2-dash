@@ -2,7 +2,8 @@ use std::time::Instant;
 
 use super::format::{
     RecordingFrame, FRAME_ACTIVE_TEST_ATTEMPT, FRAME_DTC, FRAME_ENHANCED, FRAME_O2, FRAME_PID,
-    FRAME_PROFILE_DISPATCH, FRAME_PROFILE_DTC, FRAME_PROFILE_VALUE, FRAME_VOLTAGE,
+    FRAME_PROFILE_ACTIVE_TEST, FRAME_PROFILE_DISPATCH, FRAME_PROFILE_DTC, FRAME_PROFILE_VALUE,
+    FRAME_VOLTAGE,
 };
 use super::index::SessionEntry;
 
@@ -227,6 +228,23 @@ impl ReplayController {
     pub fn is_active_test_attempt_frame(frame: &RecordingFrame) -> bool {
         frame.frame_type == FRAME_ACTIVE_TEST_ATTEMPT
     }
+
+    /// Check if a frame is profile-owned active-test evidence.
+    pub fn is_profile_active_test_frame(frame: &RecordingFrame) -> bool {
+        frame.frame_type == FRAME_PROFILE_ACTIVE_TEST
+    }
+}
+
+fn format_duration_ms(ms: u64) -> String {
+    let total_secs = ms / 1000;
+    let hours = total_secs / 3600;
+    let mins = (total_secs % 3600) / 60;
+    let secs = total_secs % 60;
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, mins, secs)
+    } else {
+        format!("{}:{:02}", mins, secs)
+    }
 }
 
 #[cfg(test)]
@@ -234,6 +252,9 @@ mod tests {
     use super::*;
     use crate::recording::index::SessionEntry;
     use chrono::Utc;
+    use obd2_dash::profiles::{
+        ProfileDecodedEvidence, ProfileDtcEvidence, ProfileEvidenceRecord, RouteEvidence,
+    };
     use std::path::PathBuf;
 
     fn sample_entry() -> SessionEntry {
@@ -242,6 +263,7 @@ mod tests {
             start_time: Utc::now(),
             vin: Some("TESTVIN1234567890".into()),
             vehicle_name: Some("Test Car".into()),
+            profile_id: None,
             duration_secs: 60,
             frame_count: 100,
             file_path: PathBuf::from("test.obd2rec"),
@@ -260,6 +282,77 @@ mod tests {
                 raw_bytes: vec![],
             })
             .collect()
+    }
+
+    fn profile_signal_record() -> ProfileEvidenceRecord {
+        ProfileEvidenceRecord {
+            timestamp: Utc::now(),
+            profile_id: "fixture.can11.readonly.v1".to_string(),
+            capability_id: "fixture.coolant_c".to_string(),
+            capability_kind: "signal".to_string(),
+            module: "ecm".to_string(),
+            route: RouteEvidence::Can11 {
+                request_id: 0x7E0,
+                response_id: 0x7E8,
+            },
+            service_id: 0x22,
+            request_data: vec![0xF0, 0x01],
+            raw_adapter_write_text: Some("22F001".to_string()),
+            raw_adapter_read_text: Some("62F0011388".to_string()),
+            parsed_response_bytes: vec![0x13, 0x88],
+            decoder_id: "fixture.scalar.u16_centi".to_string(),
+            identity_confidence: Some("confirmed".to_string()),
+            manual_confirmation: false,
+            probe: false,
+            source_fields: None,
+            decoded: Some(ProfileDecodedEvidence::Signal {
+                key: "fixture.coolant_c".to_string(),
+                label: "Fixture Coolant".to_string(),
+                did: Some(0xF001),
+                value: 50.0,
+                unit: "C".to_string(),
+                raw: vec![0x13, 0x88],
+                selected_raw: vec![0x13, 0x88],
+                confidence: "verified".to_string(),
+            }),
+            error: None,
+        }
+    }
+
+    fn profile_dtc_record() -> ProfileEvidenceRecord {
+        ProfileEvidenceRecord {
+            timestamp: Utc::now(),
+            profile_id: "fixture.can11.readonly.v1".to_string(),
+            capability_id: "fixture.dtc".to_string(),
+            capability_kind: "dtc_service".to_string(),
+            module: "ecm".to_string(),
+            route: RouteEvidence::Can11 {
+                request_id: 0x7E0,
+                response_id: 0x7E8,
+            },
+            service_id: 0x19,
+            request_data: vec![0xFF, 0xFF, 0x00],
+            raw_adapter_write_text: Some("19FFFF00".to_string()),
+            raw_adapter_read_text: Some("590123".to_string()),
+            parsed_response_bytes: vec![0x01, 0x23],
+            decoder_id: "fixture.dtc.sae2byte".to_string(),
+            identity_confidence: Some("confirmed".to_string()),
+            manual_confirmation: false,
+            probe: false,
+            source_fields: None,
+            decoded: Some(ProfileDecodedEvidence::Dtcs {
+                records: vec![ProfileDtcEvidence {
+                    code: "P0123".to_string(),
+                    status: "stored".to_string(),
+                    status_raw: None,
+                    status_flags: Vec::new(),
+                    raw: vec![0x01, 0x23],
+                    module: Some("ecm".to_string()),
+                    notes: Some("fixture sae2byte".to_string()),
+                }],
+            }),
+            error: None,
+        }
     }
 
     #[test]
@@ -478,23 +571,70 @@ mod tests {
             value: 0.0,
             raw_bytes: vec![],
         };
+        let profile_active = RecordingFrame {
+            frame_type: FRAME_PROFILE_ACTIVE_TEST,
+            offset_ms: 0,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![],
+        };
 
         assert!(ReplayController::is_profile_value_frame(&value));
         assert!(ReplayController::is_profile_dtc_frame(&dtc));
         assert!(ReplayController::is_profile_dispatch_frame(&dispatch));
         assert!(ReplayController::is_active_test_attempt_frame(&active));
+        assert!(ReplayController::is_profile_active_test_frame(
+            &profile_active
+        ));
+        assert!(!ReplayController::is_active_test_attempt_frame(
+            &profile_active
+        ));
         assert!(!ReplayController::is_profile_value_frame(&dtc));
     }
-}
 
-fn format_duration_ms(ms: u64) -> String {
-    let total_secs = ms / 1000;
-    let hours = total_secs / 3600;
-    let mins = (total_secs % 3600) / 60;
-    let secs = total_secs % 60;
-    if hours > 0 {
-        format!("{}:{:02}:{:02}", hours, mins, secs)
-    } else {
-        format!("{}:{:02}", mins, secs)
+    #[test]
+    fn test_profile_value_frame_replay_decodes_signal_evidence() {
+        let frame = RecordingFrame::profile_evidence(10, &profile_signal_record()).unwrap();
+
+        assert!(ReplayController::is_profile_value_frame(&frame));
+        let decoded = frame.decode_profile_evidence().expect("profile evidence");
+        assert_eq!(decoded.profile_id, "fixture.can11.readonly.v1");
+        assert_eq!(decoded.capability_id, "fixture.coolant_c");
+        assert_eq!(decoded.raw_adapter_write_text.as_deref(), Some("22F001"));
+        assert_eq!(decoded.raw_adapter_read_text.as_deref(), Some("62F0011388"));
+        match decoded.decoded {
+            Some(ProfileDecodedEvidence::Signal {
+                did,
+                value,
+                unit,
+                confidence,
+                ..
+            }) => {
+                assert_eq!(did, Some(0xF001));
+                assert_eq!(value, 50.0);
+                assert_eq!(unit, "C");
+                assert_eq!(confidence, "verified");
+            }
+            other => panic!("expected signal profile evidence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_profile_dtc_frame_replay_decodes_dtc_evidence() {
+        let frame = RecordingFrame::profile_evidence(20, &profile_dtc_record()).unwrap();
+
+        assert!(ReplayController::is_profile_dtc_frame(&frame));
+        let decoded = frame.decode_profile_evidence().expect("profile evidence");
+        assert_eq!(decoded.profile_id, "fixture.can11.readonly.v1");
+        assert_eq!(decoded.capability_id, "fixture.dtc");
+        match decoded.decoded {
+            Some(ProfileDecodedEvidence::Dtcs { records }) => {
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].code, "P0123");
+                assert_eq!(records[0].module.as_deref(), Some("ecm"));
+                assert_eq!(records[0].raw, vec![0x01, 0x23]);
+            }
+            other => panic!("expected DTC profile evidence, got {other:?}"),
+        }
     }
 }

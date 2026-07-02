@@ -242,6 +242,18 @@ impl StorageStats {
     }
 }
 
+fn format_bytes(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else if bytes < 1024 * 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,6 +268,7 @@ mod tests {
             start_time: Utc::now(),
             vin: Some("TEST".into()),
             vehicle_name: Some("Test".into()),
+            profile_id: None,
             duration_secs: 60,
             frame_count: 100,
             file_path,
@@ -382,17 +395,5 @@ mod tests {
         assert_eq!(mgr.index.sessions.len(), 1);
         mgr.reload_index();
         assert_eq!(mgr.index.sessions.len(), 2);
-    }
-}
-
-fn format_bytes(bytes: u64) -> String {
-    if bytes < 1024 {
-        format!("{} B", bytes)
-    } else if bytes < 1024 * 1024 {
-        format!("{:.1} KB", bytes as f64 / 1024.0)
-    } else if bytes < 1024 * 1024 * 1024 {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
-    } else {
-        format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }

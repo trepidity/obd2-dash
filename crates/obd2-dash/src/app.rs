@@ -22,7 +22,6 @@ use obd2_core::protocol::pid::Pid;
 use obd2_core::transport::CaptureMetadata;
 use obd2_core::vehicle::ModuleId;
 use obd2_dash::gm_active::{GmActiveTestCommand, GmActiveTestResult};
-use obd2_dash::gm_evidence::GmEvidenceRecord;
 use obd2_dash::profiles::{ProfileEvidenceRecord, ProfileStateSnapshot};
 
 /// Commands sent from the UI thread to the session task for raw capture control.
@@ -133,7 +132,6 @@ pub enum Message {
     // Readiness monitors
     ReadinessUpdate(ReadinessStatus),
     ProfileEvidence(Box<ProfileEvidenceRecord>),
-    ActiveTestAttempt(Box<GmEvidenceRecord>),
     // Diagnostics commands
     DiagnosticReady(mpsc::UnboundedSender<DiagnosticCommand>),
     ClearDtcsComplete,
@@ -233,6 +231,7 @@ pub struct AppState {
     pub serial_baud_rate: Option<u32>,
     // Diagnostics command channel
     pub diagnostic_tx: Option<mpsc::UnboundedSender<DiagnosticCommand>>,
+    pub profile_state: Option<ProfileStateSnapshot>,
     // Clear DTC confirmation state
     pub clear_dtc_confirm: Option<ClearDtcConfirm>,
 }
@@ -270,6 +269,7 @@ impl AppState {
             capture_tx: None,
             serial_baud_rate: None,
             diagnostic_tx: None,
+            profile_state: None,
             clear_dtc_confirm: None,
         }
     }
@@ -319,6 +319,7 @@ impl AppState {
                     ?snapshot.vin_confidence,
                     "profile state updated"
                 );
+                self.profile_state = Some(snapshot);
             }
             Message::IdentityConfidenceWarning(warning) => {
                 tracing::warn!("{warning}");
@@ -417,9 +418,6 @@ impl AppState {
             }
             Message::ProfileEvidence(record) => {
                 self.domain.update(DomainMessage::ProfileEvidence(record));
-            }
-            Message::ActiveTestAttempt(record) => {
-                self.domain.update(DomainMessage::ActiveTestAttempt(record));
             }
             Message::DiagnosticReady(tx) => {
                 self.diagnostic_tx = Some(tx);

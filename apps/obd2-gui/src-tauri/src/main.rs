@@ -14,15 +14,15 @@ use obd2_core::{
     vehicle::{ModuleId, PhysicalAddress, Protocol},
 };
 use obd2_dash::gm_active::{
-    active_test_evidence_record, blocked_active_test_result, vgt_vane_control_definition,
-    GmActiveTestCommand, GmActiveTestPrecondition, GmActiveTestResult,
+    active_test_evidence_record, blocked_active_test_result, GmActiveTestCommand,
+    GmActiveTestPrecondition, GmActiveTestResult,
 };
 use obd2_dash::gm_evidence::{GmEvidenceWriter, GmVehicleIdentity};
 use obd2_dash::profiles::{
-    acquire_identity, build_vehicle_context, next_generation, select_into_state,
+    acquire_identity, build_vehicle_context, builtin_profile, next_generation, select_into_state,
     validate_vin_charset, ActiveCommandProfile as ProfileActiveCommandProfile,
     ActiveTestDefinition, CapabilityId, Confidence as ProfileConfidence, CoverageMap, DecodedDtc,
-    DispatchError, DispatchEvidence, EvidencePolicy as ProfileEvidencePolicy,
+    DiagnosticProfile, DispatchError, DispatchEvidence, EvidencePolicy as ProfileEvidencePolicy,
     FailurePolicy as ProfileFailurePolicy, IdentityConfidence, IdentityOutcome, ModuleKey,
     ModuleSafetyClass as ProfileModuleSafetyClass, PairRole as ProfilePairRole, ProfileDecodeError,
     ProfileEvidenceSink, ProfileRegistry, ProfileResponse, ProfileRuntime, ProfileState,
@@ -37,21 +37,9 @@ use tokio::{sync::Mutex, time::Duration};
 const DEFAULT_BAUD: u32 = 115_200;
 const POLL_MS: u16 = 250;
 const GUI_EXTRA_VIN_READS: u8 = 2;
-const LLY_PROFILE_ID: &str = "gm.gmt800.lly.class2";
 const PROFILE_DTC_SCAN_CYCLE: u64 = 60;
 const PSI_PER_KPA: f64 = 0.145_037_737_7;
 const MPH_PER_KPH: f64 = 0.621_371;
-const LLY_DESIRED_FUEL_PRESSURE_DID: u16 = 0x163D;
-const LLY_ACTUAL_FUEL_PRESSURE_DID: u16 = 0x163E;
-const LLY_BAROMETRIC_PRESSURE_DID: u16 = 0x1251;
-// Live-probed on the 2004.5 LLY ECM. Public VPW docs for this DID were not found.
-const LLY_DESIRED_MAP_DID: u16 = 0x1542;
-const VGT_ERROR_DISPLAY_INPUTS: &[&str] = &["lly.1543", "lly.1540"];
-const FUEL_RAIL_ACTUAL_DISPLAY_INPUTS: &[&str] = &["standard:23", "lly.163E"];
-const FUEL_RAIL_DELTA_DISPLAY_INPUTS: &[&str] = &["lly.fuel_rail.actual", "lly.163D"];
-const BAROMETRIC_DISPLAY_INPUTS: &[&str] = &["standard:33", "lly.1251"];
-const BOOST_DISPLAY_INPUTS: &[&str] = &["standard:0B", "lly.barometric_pressure"];
-const DESIRED_MAP_DISPLAY_INPUTS: &[&str] = &["lly.1542"];
 
 #[derive(Debug, Clone, Serialize)]
 struct StatusValue {
@@ -344,13 +332,15 @@ impl LiveBackend {
         let vehicle = self.vehicle.clone();
         let vin = self.vin.clone();
         let selected_profile = self.profile_state.selected.clone();
-        let selected_lly = self.selected_lly_profile();
+        let selected_profile_definition = selected_profile
+            .as_ref()
+            .and_then(|selected| builtin_profile(selected.profile_id()));
         let profile_context = self
             .session
             .as_ref()
-            .and_then(|session| selected_lly.as_ref().map(|_| self.profile_context(session)));
-        let gm_lly_enabled = selected_lly.is_some();
-        if !gm_lly_enabled {
+            .and_then(|session| selected_profile_definition.map(|_| self.profile_context(session)));
+        let profile_enabled = selected_profile_definition.is_some();
+        if !profile_enabled {
             self.cached_dtc_count = None;
             self.cached_dtcs.clear();
             self.cached_modules.clear();
@@ -398,61 +388,6 @@ impl LiveBackend {
             read_scalar_pid(session, Pid::INTAKE_MAP, &mut alerts, "Intake MAP").await;
         let map_kpa = map_kpa_read.unwrap_or(f64::from(self.last_values.map_psi) / PSI_PER_KPA);
         let baro_kpa = read_optional_scalar_pid(session, Pid::BAROMETRIC_PRESSURE).await;
-        let enhanced_baro_read = if let (Some(context), Some(selected)) =
-            (profile_context.as_ref(), selected_lly.as_ref())
-        {
-            Some(
-                read_profile_signal_value(
-                    session,
-                    context,
-                    selected,
-                    LLY_BAROMETRIC_PRESSURE_DID,
-                    &mut alerts,
-                    "barometric_pressure_gm",
-                    "Barometer GM $22 1251 01 candidate",
-                    Some("Used when standard PID 01 33 is unavailable or stale."),
-                )
-                .await,
-            )
-        } else {
-            None
-        };
-        let enhanced_baro_kpa = enhanced_baro_read
-            .as_ref()
-            .and_then(|reading| reading.value);
-        if let Some(reading) = enhanced_baro_read.as_ref() {
-            source_confidence.push(reading.evidence.clone());
-        }
-        let desired_map_read = if let (Some(context), Some(selected)) =
-            (profile_context.as_ref(), selected_lly.as_ref())
-        {
-            Some(
-                read_profile_signal_value(
-                    session,
-                    context,
-                    selected,
-                    LLY_DESIRED_MAP_DID,
-                    &mut alerts,
-                    "desired_map",
-                    "Desired MAP GM $22 1542 01 candidate",
-                    Some("Display as absolute pressure until cross-checked against a factory-equivalent tool."),
-                )
-                .await,
-            )
-        } else {
-            None
-        };
-        let desired_map_kpa = desired_map_read
-            .as_ref()
-            .and_then(|reading| reading.value)
-            .or_else(|| {
-                self.last_values
-                    .desired_map_psi
-                    .map(|value| f64::from(value) / PSI_PER_KPA)
-            });
-        if let Some(reading) = desired_map_read.as_ref() {
-            source_confidence.push(reading.evidence.clone());
-        }
         let maf_g_s_read = read_scalar_pid(session, Pid::MAF, &mut alerts, "MAF").await;
         let maf_g_s = maf_g_s_read.unwrap_or(f64::from(self.last_values.maf_g_s));
         let fuel_rail_kpa = read_scalar_pid(
@@ -462,35 +397,36 @@ impl LiveBackend {
             "Fuel rail pressure",
         )
         .await;
-        let actual_fuel_rail_gm_read = if let (Some(context), Some(selected)) =
-            (profile_context.as_ref(), selected_lly.as_ref())
-        {
-            Some(
-                read_profile_signal_value(
-                    session,
-                    context,
-                    selected,
-                    LLY_ACTUAL_FUEL_PRESSURE_DID,
-                    &mut alerts,
-                    "fuel_rail_actual_gm",
-                    "Actual fuel rail GM $22 163E 01",
-                    Some(
-                        "Standard PID 01 23 remains preferred for the displayed actual rail pressure.",
-                    ),
-                )
-                .await,
-            )
-        } else {
-            None
-        };
-        let actual_fuel_rail_gm_psi = actual_fuel_rail_gm_read.as_ref().and_then(|reading| {
-            reading
-                .value
-                .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
-        });
-        if let Some(reading) = actual_fuel_rail_gm_read.as_ref() {
-            source_confidence.push(reading.evidence.clone());
+
+        let mut profile_readings = HashMap::new();
+        if let (Some(context), Some(selected), Some(profile)) = (
+            profile_context.as_ref(),
+            selected_profile.as_ref(),
+            selected_profile_definition,
+        ) {
+            for signal in profile_signals_to_read(profile) {
+                let reading =
+                    read_profile_signal(session, context, selected, signal, &mut alerts).await;
+                source_confidence.push(reading.evidence.clone());
+                profile_readings.insert(signal.key, reading);
+            }
         }
+
+        let enhanced_baro_kpa = profile_reading_value_by_label(&profile_readings, &["barometric"]);
+        let desired_map_kpa =
+            profile_reading_value_by_label(&profile_readings, &["desired", "map"]).or_else(|| {
+                self.last_values
+                    .desired_map_psi
+                    .map(|value| f64::from(value) / PSI_PER_KPA)
+            });
+        let actual_fuel_rail_gm_psi =
+            profile_reading_by_label(&profile_readings, &["actual", "fuel", "rail"]).and_then(
+                |reading| {
+                    reading
+                        .value
+                        .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
+                },
+            );
         let fuel_rail_actual_psi = fuel_rail_kpa
             .map(|value| value * PSI_PER_KPA)
             .or(actual_fuel_rail_gm_psi)
@@ -514,113 +450,31 @@ impl LiveBackend {
             Some("Full-range gauge pressure; preferred over GM $22 163E X-Gauge scaling."),
         );
         source_confidence.push(actual_fuel_rail_evidence.clone());
-        let desired_fuel_rail_read = if let (Some(context), Some(selected)) =
-            (profile_context.as_ref(), selected_lly.as_ref())
-        {
-            Some(
-                read_profile_signal_value(
-                    session,
-                    context,
-                    selected,
-                    LLY_DESIRED_FUEL_PRESSURE_DID,
-                    &mut alerts,
-                    "fuel_rail_desired",
-                    "Desired fuel rail GM $22 163D 01",
-                    Some("Display scaling is retained from current live/probe code until persisted bytes are cross-checked."),
-                )
-                .await,
-            )
-        } else {
-            None
-        };
-        let desired_fuel_rail_psi = desired_fuel_rail_read
-            .as_ref()
-            .and_then(|reading| {
-                reading
-                    .value
-                    .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
-            })
-            .or(self.last_values.fuel_rail_desired_psi.map(f64::from));
-        if let Some(reading) = desired_fuel_rail_read.as_ref() {
-            source_confidence.push(reading.evidence.clone());
-        }
-
-        let (vgt_actual_read, vgt_desired_read) = if let (Some(context), Some(selected)) =
-            (profile_context.as_ref(), selected_lly.as_ref())
-        {
-            (
-                Some(
-                    read_profile_signal_value(
-                        session,
-                        context,
-                        selected,
-                        0x1543,
-                        &mut alerts,
-                        "vgt_actual",
-                        "VGT actual",
-                        None,
-                    )
-                    .await,
-                ),
-                Some(
-                    read_profile_signal_value(
-                        session,
-                        context,
-                        selected,
-                        0x1540,
-                        &mut alerts,
-                        "vgt_desired",
-                        "VGT desired",
-                        None,
-                    )
-                    .await,
-                ),
-            )
-        } else {
-            (None, None)
-        };
-        let vgt_actual = vgt_actual_read
-            .as_ref()
-            .and_then(|reading| reading.value)
+        let desired_fuel_rail_psi =
+            profile_reading_by_label(&profile_readings, &["desired", "fuel", "rail"])
+                .and_then(|reading| {
+                    reading
+                        .value
+                        .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
+                })
+                .or(self.last_values.fuel_rail_desired_psi.map(f64::from));
+        let vgt_actual = profile_reading_value_by_label(&profile_readings, &["vgt", "actual"])
             .unwrap_or(f64::from(self.last_values.vgt_actual_pct));
-        let vgt_desired = vgt_desired_read
-            .as_ref()
-            .and_then(|reading| reading.value)
+        let vgt_desired = profile_reading_value_by_label(&profile_readings, &["vgt", "desired"])
             .unwrap_or(f64::from(self.last_values.vgt_desired_pct));
 
-        let mut cylinders = Vec::with_capacity(8);
-        let mut cylinder_states = Vec::with_capacity(8);
-        if let (Some(context), Some(selected)) = (profile_context.as_ref(), selected_lly.as_ref()) {
-            for (idx, did) in (0x162Fu16..=0x1636).enumerate() {
-                let previous = self
-                    .last_values
-                    .cylinders
-                    .get(idx)
-                    .map(|reading| f64::from(reading.mm3))
-                    .unwrap_or(0.0);
-                let read = read_enhanced_scalar(
-                    session,
-                    context,
-                    selected,
-                    did,
-                    &mut alerts,
-                    &format!("Injector balance cyl {}", idx + 1),
-                )
-                .await;
-                let mm3 = read.unwrap_or(previous);
-                cylinders.push(CylinderBalance {
-                    cylinder: (idx + 1) as u8,
-                    mm3: mm3 as f32,
-                });
-                cylinder_states.push(if read.is_some() { "ok" } else { "cached" });
-            }
-        } else {
-            cylinders.extend((1..=8).map(|cylinder| CylinderBalance { cylinder, mm3: 0.0 }));
-            cylinder_states.extend(std::iter::repeat("waiting").take(8));
-        }
+        let (cylinders, cylinder_states) = profile_cylinder_values(
+            selected_profile_definition,
+            &profile_readings,
+            &self.last_values.cylinders,
+        );
 
-        if let (Some(context), Some(selected)) = (profile_context.as_ref(), selected_lly.as_ref()) {
-            if cycle % 12 == 0 {
+        if let (Some(context), Some(selected), Some(_profile)) = (
+            profile_context.as_ref(),
+            selected_profile.as_ref(),
+            selected_profile_definition,
+        ) {
+            if cycle.is_multiple_of(12) {
                 let scan = scan_profile_dtcs(session, context, selected, &mut alerts).await;
                 self.cached_dtc_count = Some(scan.dtcs.len());
                 self.cached_dtcs = scan.dtcs;
@@ -649,7 +503,7 @@ impl LiveBackend {
         let boost_psi = baro_display_kpa
             .map(|baro| ((map_kpa - baro) * PSI_PER_KPA).max(0.0))
             .unwrap_or(0.0);
-        let module_scan = if !gm_lly_enabled {
+        let module_scan = if !profile_enabled {
             Vec::new()
         } else if self.cached_modules.is_empty() {
             build_pending_module_scan(session)
@@ -671,12 +525,7 @@ impl LiveBackend {
         let active_tests_v2 =
             build_active_tests_v2(selected_profile.as_ref(), &active_test_runtime);
         let profile_values = LivedataProfileValues {
-            enhanced_baro_read: enhanced_baro_read.as_ref(),
-            desired_map_read: desired_map_read.as_ref(),
-            actual_fuel_rail_gm_read: actual_fuel_rail_gm_read.as_ref(),
-            desired_fuel_rail_read: desired_fuel_rail_read.as_ref(),
-            vgt_actual_read: vgt_actual_read.as_ref(),
-            vgt_desired_read: vgt_desired_read.as_ref(),
+            profile_readings: &profile_readings,
             cylinders: &cylinders,
             cylinder_states: &cylinder_states,
             desired_map_kpa,
@@ -694,8 +543,6 @@ impl LiveBackend {
             intake_air_state: state_from_option(intake_air_c_read),
             map_psi,
             map_state: state_from_option(map_kpa_read),
-            desired_map_psi,
-            desired_map_state: derived_option_state(desired_map_psi),
             barometric_psi,
             barometric_state: if baro_kpa.is_some() {
                 "ok"
@@ -715,8 +562,6 @@ impl LiveBackend {
             fuel_rail_actual_psi: fuel_rail_actual_psi as f32,
             fuel_rail_actual_state: if fuel_rail_kpa.is_some() {
                 "ok"
-            } else if actual_fuel_rail_gm_psi.is_some() {
-                "cached"
             } else {
                 "cached"
             },
@@ -810,7 +655,7 @@ impl LiveBackend {
             self.last.alerts = vec!["VIN/spec identification failed or unread".to_string()];
         }
 
-        if !self.has_selected_lly_profile() {
+        if !self.has_selected_profile() {
             self.cached_dtc_count = None;
             self.cached_dtcs.clear();
             self.cached_modules.clear();
@@ -841,23 +686,18 @@ impl LiveBackend {
         self.profile_state = select_into_state(&registry, &context);
         self.profile_context = Some(GuiProfileContextFingerprint::from_context(&context));
 
-        if !self.has_selected_lly_profile() {
+        if !self.has_selected_profile() {
             self.cached_dtc_count = None;
             self.cached_dtcs.clear();
             self.cached_modules.clear();
         }
     }
 
-    fn selected_lly_profile(&self) -> Option<SelectedProfile> {
-        let selected = self.profile_state.selected.as_ref()?;
-        (selected.profile_id().as_str() == LLY_PROFILE_ID).then(|| selected.clone())
-    }
-
-    fn has_selected_lly_profile(&self) -> bool {
+    fn has_selected_profile(&self) -> bool {
         self.profile_state
             .selected
             .as_ref()
-            .is_some_and(|selected| selected.profile_id().as_str() == LLY_PROFILE_ID)
+            .is_some_and(|selected| builtin_profile(selected.profile_id()).is_some())
     }
 
     fn profile_context(&self, session: &Session<Elm327Adapter>) -> VehicleContext {
@@ -987,21 +827,8 @@ async fn read_optional_scalar_pid(session: &mut Session<Elm327Adapter>, pid: Pid
         .and_then(|reading| scalar_value(&reading.value))
 }
 
-async fn read_enhanced_scalar(
-    session: &mut Session<Elm327Adapter>,
-    context: &VehicleContext,
-    selected: &SelectedProfile,
-    did: u16,
-    alerts: &mut Vec<String>,
-    label: &str,
-) -> Option<f64> {
-    read_profile_signal_value(session, context, selected, did, alerts, label, label, None)
-        .await
-        .value
-}
-
 #[derive(Debug, Clone)]
-struct GmSignalReading<T> {
+struct ProfileSignalReading<T> {
     value: Option<T>,
     evidence: SignalEvidence,
 }
@@ -1030,66 +857,18 @@ impl ProfileEvidenceSink for GuiDispatchSink {
     }
 }
 
-async fn read_profile_signal_value(
+async fn read_profile_signal(
     session: &mut Session<Elm327Adapter>,
     context: &VehicleContext,
     selected: &SelectedProfile,
-    did: u16,
+    signal: SignalDefinition,
     alerts: &mut Vec<String>,
-    key: &str,
-    label: &str,
-    notes: Option<&str>,
-) -> GmSignalReading<f64> {
-    let registry = ProfileRegistry::with_builtins();
-    let Some(profile) = registry.get(selected.profile_id()) else {
-        alerts.push(format!("{label}: selected profile is not registered"));
-        return GmSignalReading {
-            value: None,
-            evidence: profile_signal_evidence(
-                key,
-                label,
-                "unknown",
-                "--",
-                "--",
-                "GM Mode 22 registry",
-                "missing-profile",
-                "",
-                None,
-                "error",
-                None,
-                Some("Selected manufacturer profile is not present in the registry."),
-            ),
-        };
-    };
-
-    let Some(signal) = profile_signal_by_did(profile.signals(), did) else {
-        alerts.push(format!(
-            "{label}: DID 0x{did:04X} is not owned by the selected profile"
-        ));
-        return GmSignalReading {
-            value: None,
-            evidence: profile_signal_evidence(
-                key,
-                label,
-                "unknown",
-                "--",
-                "--",
-                "selected profile signal registry",
-                "missing-signal",
-                "",
-                None,
-                "error",
-                None,
-                Some("DID is not present in the selected manufacturer profile."),
-            ),
-        };
-    };
-
+) -> ProfileSignalReading<f64> {
     let source = profile_signal_source(&signal);
     let confidence = profile_signal_confidence(&signal);
     let mut evidence = profile_signal_evidence(
-        key,
-        label,
+        signal.key,
+        signal.label,
         signal.route.module.canonical(),
         "--",
         signal.source_fields.txd,
@@ -1099,10 +878,11 @@ async fn read_profile_signal_value(
         None,
         "pending",
         None,
-        notes,
+        profile_signal_note(signal).as_deref(),
     );
 
     let mut sink = GuiDispatchSink::default();
+    let registry = ProfileRegistry::with_builtins();
     let runtime = ProfileRuntime::new(&registry);
     match runtime
         .execute_request(
@@ -1127,27 +907,28 @@ async fn read_profile_signal_value(
             if evidence.response.is_none() {
                 evidence.response = Some(spaced_hex(&decoded.raw));
             }
-            GmSignalReading {
+            ProfileSignalReading {
                 value: Some(decoded.value),
                 evidence,
             }
         }
         Ok(ProfileResponse::Dtcs(_)) => {
             alerts.push(format!(
-                "{label}: selected profile returned DTCs for a signal request"
+                "{}: selected profile returned DTCs for a signal request",
+                signal.label
             ));
             evidence.status = "error".to_string();
             evidence.notes = merge_note(
                 evidence.notes.as_deref(),
                 "Profile capability returned DTCs for a signal request.",
             );
-            GmSignalReading {
+            ProfileSignalReading {
                 value: None,
                 evidence,
             }
         }
         Err(error) => {
-            push_profile_dispatch_error(alerts, label, &error);
+            push_profile_dispatch_error(alerts, signal.label, &error);
             if let Some(dispatch) = sink.last {
                 evidence.module = dispatch.module;
                 evidence.node = dispatch.node;
@@ -1156,7 +937,7 @@ async fn read_profile_signal_value(
             }
             evidence.status = profile_dispatch_error_label(&error).to_string();
             evidence.notes = merge_note(evidence.notes.as_deref(), &format!("{error:?}"));
-            GmSignalReading {
+            ProfileSignalReading {
                 value: None,
                 evidence,
             }
@@ -1164,6 +945,67 @@ async fn read_profile_signal_value(
     }
 }
 
+fn profile_signal_note(signal: SignalDefinition) -> Option<String> {
+    match signal.failure_policy {
+        ProfileFailurePolicy::PreferStandardPid => {
+            Some("Standard PID remains preferred for the displayed value.".to_string())
+        }
+        ProfileFailurePolicy::CandidateOnly => {
+            Some("Candidate profile signal; display until cross-checked against a factory-equivalent tool.".to_string())
+        }
+        _ => None,
+    }
+}
+
+fn profile_signals_to_read(profile: &dyn DiagnosticProfile) -> Vec<SignalDefinition> {
+    let mut keys = Vec::new();
+    let display = profile.signal_display();
+    if display.is_empty() {
+        return profile
+            .signals()
+            .iter()
+            .copied()
+            .filter(signal_should_poll)
+            .collect();
+    }
+
+    for definition in display {
+        match definition.source {
+            SignalDisplaySource::ProfileSignal(key) => push_unique_key(&mut keys, key),
+            SignalDisplaySource::Derived { input_keys, .. } => {
+                for key in input_keys {
+                    if profile.signals().iter().any(|signal| signal.key == *key) {
+                        push_unique_key(&mut keys, key);
+                    }
+                }
+            }
+            SignalDisplaySource::StandardPid(_) => {}
+        }
+    }
+
+    keys.into_iter()
+        .filter_map(|key| {
+            profile
+                .signals()
+                .iter()
+                .copied()
+                .find(|signal| signal.key == key)
+        })
+        .filter(signal_should_poll)
+        .collect()
+}
+
+fn signal_should_poll(signal: &SignalDefinition) -> bool {
+    !matches!(signal.failure_policy, ProfileFailurePolicy::DoNotPoll)
+}
+
+fn push_unique_key(keys: &mut Vec<&'static str>, key: &'static str) {
+    if !keys.contains(&key) {
+        keys.push(key);
+    }
+}
+
+#[cfg(test)]
 fn profile_signal_by_did(signals: &[SignalDefinition], did: u16) -> Option<SignalDefinition> {
     signals
         .iter()
@@ -1171,6 +1013,7 @@ fn profile_signal_by_did(signals: &[SignalDefinition], did: u16) -> Option<Signa
         .find(|signal| signal_did(*signal) == Some(did))
 }
 
+#[cfg(test)]
 fn signal_did(signal: SignalDefinition) -> Option<u16> {
     (signal.request_data.len() >= 2)
         .then(|| u16::from_be_bytes([signal.request_data[0], signal.request_data[1]]))
@@ -1210,6 +1053,112 @@ fn profile_signal_confidence(signal: &SignalDefinition) -> String {
         label.push_str(";candidate-only");
     }
     label
+}
+
+fn profile_reading_by_label<'a>(
+    readings: &'a HashMap<&'static str, ProfileSignalReading<f64>>,
+    terms: &[&str],
+) -> Option<&'a ProfileSignalReading<f64>> {
+    readings
+        .values()
+        .find(|reading| label_matches_terms(&reading.evidence.label, terms))
+}
+
+fn profile_reading_value_by_label(
+    readings: &HashMap<&'static str, ProfileSignalReading<f64>>,
+    terms: &[&str],
+) -> Option<f64> {
+    profile_reading_by_label(readings, terms).and_then(|reading| reading.value)
+}
+
+fn profile_cylinder_values(
+    profile: Option<&dyn DiagnosticProfile>,
+    readings: &HashMap<&'static str, ProfileSignalReading<f64>>,
+    previous: &[CylinderBalance],
+) -> (Vec<CylinderBalance>, Vec<&'static str>) {
+    let Some(profile) = profile else {
+        return (
+            (1..=8)
+                .map(|cylinder| CylinderBalance { cylinder, mm3: 0.0 })
+                .collect(),
+            std::iter::repeat_n("waiting", 8).collect(),
+        );
+    };
+
+    let mut rows = profile
+        .signal_display()
+        .iter()
+        .filter_map(|display| {
+            let SignalDisplaySource::ProfileSignal(key) = display.source else {
+                return None;
+            };
+            let ProfileSignalComposition::TableRow {
+                row_index,
+                row_label,
+                ..
+            } = display.composition
+            else {
+                return None;
+            };
+            Some((row_index, row_label, key))
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by_key(|(row_index, _, _)| *row_index);
+
+    if rows.is_empty() {
+        return (
+            previous.to_vec(),
+            std::iter::repeat_n("cached", previous.len()).collect(),
+        );
+    }
+
+    let mut cylinders = Vec::with_capacity(rows.len());
+    let mut states = Vec::with_capacity(rows.len());
+    for (idx, (row_index, row_label, key)) in rows.into_iter().enumerate() {
+        let previous_value = previous
+            .get(idx)
+            .map(|reading| reading.mm3)
+            .unwrap_or_default();
+        let reading = readings.get(key);
+        let value = reading
+            .and_then(|reading| reading.value)
+            .map(|value| value as f32)
+            .unwrap_or(previous_value);
+        let cylinder = row_label
+            .parse::<u8>()
+            .unwrap_or(row_index.saturating_add(1));
+        cylinders.push(CylinderBalance {
+            cylinder,
+            mm3: value,
+        });
+        states.push(
+            reading
+                .map(profile_evidence_state_for_reading)
+                .unwrap_or("cached"),
+        );
+    }
+    (cylinders, states)
+}
+
+fn profile_evidence_state_for_reading(reading: &ProfileSignalReading<f64>) -> &'static str {
+    profile_evidence_state(&reading.evidence)
+}
+
+fn label_matches_terms(label: &str, terms: &[&str]) -> bool {
+    terms
+        .iter()
+        .all(|term| contains_ascii_ignore_case(label, term))
+}
+
+fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
+    let needle = needle.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 fn physical_node_label(address: &PhysicalAddress) -> String {
@@ -1305,8 +1254,6 @@ struct StandardSignalValues {
     intake_air_state: &'static str,
     map_psi: f32,
     map_state: &'static str,
-    desired_map_psi: Option<f32>,
-    desired_map_state: &'static str,
     barometric_psi: Option<f32>,
     barometric_state: &'static str,
     boost_psi: f32,
@@ -1319,12 +1266,7 @@ struct StandardSignalValues {
 }
 
 struct LivedataProfileValues<'a> {
-    enhanced_baro_read: Option<&'a GmSignalReading<f64>>,
-    desired_map_read: Option<&'a GmSignalReading<f64>>,
-    actual_fuel_rail_gm_read: Option<&'a GmSignalReading<f64>>,
-    desired_fuel_rail_read: Option<&'a GmSignalReading<f64>>,
-    vgt_actual_read: Option<&'a GmSignalReading<f64>>,
-    vgt_desired_read: Option<&'a GmSignalReading<f64>>,
+    profile_readings: &'a HashMap<&'static str, ProfileSignalReading<f64>>,
     cylinders: &'a [CylinderBalance],
     cylinder_states: &'a [&'static str],
     desired_map_kpa: Option<f64>,
@@ -1335,14 +1277,6 @@ fn state_from_option<T>(value: Option<T>) -> &'static str {
         "ok"
     } else {
         "cached"
-    }
-}
-
-fn derived_option_state<T>(value: Option<T>) -> &'static str {
-    if value.is_some() {
-        "ok"
-    } else {
-        "waiting"
     }
 }
 
@@ -1357,13 +1291,24 @@ fn build_signal_snapshots(
         let display = profile.signal_display();
         if !display.is_empty() {
             let mut signals = Vec::with_capacity(display.len());
+            let mut display_values = HashMap::new();
             for definition in display {
-                signals.push(display_signal_snapshot(
+                let snapshot = display_signal_snapshot(
                     *definition,
                     profile.signals(),
                     standard,
                     profile_values,
-                ));
+                    &display_values,
+                );
+                display_values.insert(
+                    snapshot.key.clone(),
+                    RuntimeSignalValue {
+                        value: snapshot.value,
+                        state: runtime_state_label(&snapshot.state),
+                        unit: snapshot.unit.clone(),
+                    },
+                );
+                signals.push(snapshot);
             }
             return signals;
         }
@@ -1381,7 +1326,7 @@ fn build_signal_snapshots(
             ));
         }
     }
-    signals.extend(derived_signal_snapshots(standard, profile_values));
+    signals.extend(derived_signal_snapshots(standard));
     signals
 }
 
@@ -1390,6 +1335,7 @@ fn display_signal_snapshot(
     profile_signals: &[SignalDefinition],
     standard: &StandardSignalValues,
     profile_values: &LivedataProfileValues<'_>,
+    display_values: &HashMap<String, RuntimeSignalValue>,
 ) -> SignalSnapshot {
     match definition.source {
         SignalDisplaySource::ProfileSignal(key) => profile_signals
@@ -1422,9 +1368,17 @@ fn display_signal_snapshot(
             input_keys,
             standard,
             profile_values,
+            display_values,
             signal_composition_from_profile(definition.composition),
         ),
     }
+}
+
+#[derive(Clone)]
+struct RuntimeSignalValue {
+    value: Option<f32>,
+    state: &'static str,
+    unit: String,
 }
 
 fn apply_display_definition(
@@ -1739,41 +1693,13 @@ fn profile_signal_runtime(
     signal: SignalDefinition,
     values: &LivedataProfileValues<'_>,
 ) -> (Option<f32>, &'static str, Option<SignalEvidence>) {
-    match signal_did(signal) {
-        Some(LLY_BAROMETRIC_PRESSURE_DID) => {
-            profile_read_runtime(values.enhanced_baro_read, |value| value as f32)
-        }
-        Some(LLY_DESIRED_MAP_DID) => {
-            let (value, state, evidence) =
-                profile_read_runtime(values.desired_map_read, |value| value as f32);
-            if value.is_some() {
-                (value, state, evidence)
-            } else {
-                (
-                    values.desired_map_kpa.map(|value| value as f32),
-                    if values.desired_map_kpa.is_some() {
-                        "cached"
-                    } else {
-                        state
-                    },
-                    evidence,
-                )
-            }
-        }
-        Some(LLY_ACTUAL_FUEL_PRESSURE_DID) => {
-            profile_read_runtime(values.actual_fuel_rail_gm_read, |value| {
-                pressure_to_psi(value, "psi").unwrap_or(value) as f32
-            })
-        }
-        Some(LLY_DESIRED_FUEL_PRESSURE_DID) => {
-            profile_read_runtime(values.desired_fuel_rail_read, |value| {
-                pressure_to_psi(value, "psi").unwrap_or(value) as f32
-            })
-        }
-        Some(0x1543) => profile_read_runtime(values.vgt_actual_read, |value| value as f32),
-        Some(0x1540) => profile_read_runtime(values.vgt_desired_read, |value| value as f32),
-        Some(did @ 0x162F..=0x1636) => {
-            let idx = usize::from(did - 0x162F);
+    if let Some(reading) = values.profile_readings.get(signal.key) {
+        return profile_read_runtime(Some(reading), |value| value as f32);
+    }
+
+    match signal.composition_hint() {
+        SignalRuntimeHint::InjectorBalanceRow(row_index) => {
+            let idx = usize::from(row_index.saturating_sub(1));
             let value = values.cylinders.get(idx).map(|reading| reading.mm3);
             let state = values
                 .cylinder_states
@@ -1782,12 +1708,21 @@ fn profile_signal_runtime(
                 .unwrap_or("waiting");
             (value, state, None)
         }
-        _ => (None, "waiting", None),
+        SignalRuntimeHint::DesiredMapCandidate => (
+            values.desired_map_kpa.map(|value| value as f32),
+            if values.desired_map_kpa.is_some() {
+                "cached"
+            } else {
+                "waiting"
+            },
+            None,
+        ),
+        SignalRuntimeHint::Scalar => (None, "waiting", None),
     }
 }
 
 fn profile_read_runtime(
-    reading: Option<&GmSignalReading<f64>>,
+    reading: Option<&ProfileSignalReading<f64>>,
     convert: impl Fn(f64) -> f32,
 ) -> (Option<f32>, &'static str, Option<SignalEvidence>) {
     match reading {
@@ -1797,6 +1732,33 @@ fn profile_read_runtime(
             Some(reading.evidence.clone()),
         ),
         None => (None, "waiting", None),
+    }
+}
+
+enum SignalRuntimeHint {
+    Scalar,
+    DesiredMapCandidate,
+    InjectorBalanceRow(u8),
+}
+
+trait SignalRuntimeHints {
+    fn composition_hint(&self) -> SignalRuntimeHint;
+}
+
+impl SignalRuntimeHints for SignalDefinition {
+    fn composition_hint(&self) -> SignalRuntimeHint {
+        if label_matches_terms(self.label, &["injector", "balance", "cyl"]) {
+            let row = self
+                .label
+                .rsplit_once(' ')
+                .and_then(|(_, suffix)| suffix.parse::<u8>().ok())
+                .unwrap_or(0);
+            return SignalRuntimeHint::InjectorBalanceRow(row);
+        }
+        if label_matches_terms(self.label, &["desired", "map"]) {
+            return SignalRuntimeHint::DesiredMapCandidate;
+        }
+        SignalRuntimeHint::Scalar
     }
 }
 
@@ -1811,10 +1773,7 @@ fn profile_evidence_state(evidence: &SignalEvidence) -> &'static str {
     }
 }
 
-fn derived_signal_snapshots(
-    standard: &StandardSignalValues,
-    profile_values: &LivedataProfileValues<'_>,
-) -> Vec<SignalSnapshot> {
+fn derived_signal_snapshots(standard: &StandardSignalValues) -> Vec<SignalSnapshot> {
     let mut derived = Vec::with_capacity(4);
     derived.push(derived_signal_snapshot(
         "derived.boost_pressure",
@@ -1827,58 +1786,6 @@ fn derived_signal_snapshots(
         "map_pressure",
         vec!["sae.intake_map", "sae.barometric_pressure"],
     ));
-    derived.push(derived_signal_snapshot(
-        "derived.desired_map",
-        "Desired MAP",
-        ProfileSignalCategory::Turbo,
-        "psi",
-        standard.desired_map_psi,
-        standard.desired_map_state,
-        "profile_desired_map_to_psi",
-        "map_pressure",
-        vec!["lly.1542"],
-    ));
-
-    let vgt_actual = profile_values
-        .vgt_actual_read
-        .and_then(|reading| reading.value);
-    let vgt_desired = profile_values
-        .vgt_desired_read
-        .and_then(|reading| reading.value);
-    derived.push(pair_delta_signal_snapshot(
-        "derived.vgt_vane_error",
-        "VGT vane position error",
-        ProfileSignalCategory::Turbo,
-        "%",
-        vgt_actual
-            .zip(vgt_desired)
-            .map(|(actual, desired)| (actual - desired) as f32),
-        if vgt_actual.is_some() && vgt_desired.is_some() {
-            "ok"
-        } else {
-            "cached"
-        },
-        "vgt_vane_position",
-    ));
-
-    let desired_fuel = profile_values
-        .desired_fuel_rail_read
-        .and_then(|reading| reading.value)
-        .and_then(|value| pressure_to_psi(value, "psi"));
-    derived.push(pair_delta_signal_snapshot(
-        "derived.fuel_rail_delta",
-        "Fuel rail pressure delta",
-        ProfileSignalCategory::Fuel,
-        "psi",
-        desired_fuel.map(|desired| standard.fuel_rail_actual_psi - desired as f32),
-        if desired_fuel.is_some() {
-            "ok"
-        } else {
-            "waiting"
-        },
-        "fuel_rail_pressure",
-    ));
-
     derived
 }
 
@@ -1888,9 +1795,17 @@ fn derived_display_signal_snapshot(
     input_keys: &'static [&'static str],
     standard: &StandardSignalValues,
     profile_values: &LivedataProfileValues<'_>,
+    display_values: &HashMap<String, RuntimeSignalValue>,
     composition: SignalComposition,
 ) -> SignalSnapshot {
-    let (value, state) = display_formula_runtime(formula_key, input_keys, standard, profile_values);
+    let (value, state) = display_formula_runtime(
+        formula_key,
+        input_keys,
+        definition.unit,
+        standard,
+        profile_values,
+        display_values,
+    );
     SignalSnapshot {
         key: definition.key.to_string(),
         label: definition.label.to_string(),
@@ -1899,7 +1814,7 @@ fn derived_display_signal_snapshot(
         unit: definition.unit.to_string(),
         value,
         state: state.to_string(),
-        confidence: display_formula_confidence(input_keys).to_string(),
+        confidence: display_formula_confidence(formula_key, input_keys).to_string(),
         provenance: vec!["LocalFixture".to_string()],
         source_fields: None,
         request: None,
@@ -1915,65 +1830,201 @@ fn derived_display_signal_snapshot(
 fn display_formula_runtime(
     formula_key: &str,
     input_keys: &[&str],
+    output_unit: &str,
     standard: &StandardSignalValues,
     profile_values: &LivedataProfileValues<'_>,
+    display_values: &HashMap<String, RuntimeSignalValue>,
 ) -> (Option<f32>, &'static str) {
     match formula_key {
-        "actual_minus_desired" if input_keys == VGT_ERROR_DISPLAY_INPUTS => {
-            let actual = profile_values
-                .vgt_actual_read
-                .and_then(|reading| reading.value);
-            let desired = profile_values
-                .vgt_desired_read
-                .and_then(|reading| reading.value);
+        "actual_minus_desired" if input_keys.len() == 2 => {
+            let actual = resolve_formula_input(
+                input_keys[0],
+                output_unit,
+                standard,
+                profile_values,
+                display_values,
+            );
+            let desired = resolve_formula_input(
+                input_keys[1],
+                output_unit,
+                standard,
+                profile_values,
+                display_values,
+            );
             (
                 actual
-                    .zip(desired)
-                    .map(|(actual, desired)| (actual - desired) as f32),
-                if actual.is_some() && desired.is_some() {
-                    "ok"
-                } else {
-                    "waiting"
-                },
+                    .value
+                    .zip(desired.value)
+                    .map(|(actual, desired)| actual - desired),
+                combine_binary_state(&actual, &desired),
             )
         }
-        "actual_minus_desired" if input_keys == FUEL_RAIL_DELTA_DISPLAY_INPUTS => {
-            let desired = profile_values
-                .desired_fuel_rail_read
-                .and_then(|reading| reading.value)
-                .and_then(|value| pressure_to_psi(value, "psi"));
-            (
-                desired.map(|desired| standard.fuel_rail_actual_psi - desired as f32),
-                if desired.is_some() { "ok" } else { "waiting" },
-            )
-        }
-        "first_available" if input_keys == FUEL_RAIL_ACTUAL_DISPLAY_INPUTS => (
-            Some(standard.fuel_rail_actual_psi),
-            standard.fuel_rail_actual_state,
-        ),
-        "first_available" if input_keys == BAROMETRIC_DISPLAY_INPUTS => {
-            if standard.barometric_psi.is_some() {
-                (standard.barometric_psi, standard.barometric_state)
-            } else {
-                let (value, state, _) =
-                    profile_read_runtime(profile_values.enhanced_baro_read, |value| {
-                        (value * PSI_PER_KPA) as f32
-                    });
-                (value, state)
+        "first_available" => {
+            for key in input_keys {
+                let input = resolve_formula_input(
+                    key,
+                    output_unit,
+                    standard,
+                    profile_values,
+                    display_values,
+                );
+                if input.value.is_some() {
+                    return (input.value, input.state);
+                }
             }
+            (None, "waiting")
         }
-        "max_zero_subtract" if input_keys == BOOST_DISPLAY_INPUTS => {
-            (Some(standard.boost_psi), standard.boost_state)
+        "max_zero_subtract" if input_keys.len() == 2 => {
+            let minuend = resolve_formula_input(
+                input_keys[0],
+                output_unit,
+                standard,
+                profile_values,
+                display_values,
+            );
+            let subtrahend = resolve_formula_input(
+                input_keys[1],
+                output_unit,
+                standard,
+                profile_values,
+                display_values,
+            );
+            (
+                minuend
+                    .value
+                    .zip(subtrahend.value)
+                    .map(|(actual, desired)| (actual - desired).max(0.0)),
+                combine_binary_state(&minuend, &subtrahend),
+            )
         }
-        "profile_desired_map_to_psi" if input_keys == DESIRED_MAP_DISPLAY_INPUTS => {
-            (standard.desired_map_psi, standard.desired_map_state)
+        "profile_desired_map_to_psi" if input_keys.len() == 1 => {
+            let input = resolve_formula_input(
+                input_keys[0],
+                output_unit,
+                standard,
+                profile_values,
+                display_values,
+            );
+            if input.value.is_some() {
+                (input.value, input.state)
+            } else {
+                (
+                    convert_unit(
+                        profile_values.desired_map_kpa.map(|value| value as f32),
+                        "kPa abs",
+                        output_unit,
+                    ),
+                    if profile_values.desired_map_kpa.is_some() {
+                        "cached"
+                    } else {
+                        input.state
+                    },
+                )
+            }
         }
         _ => (None, "unsupported"),
     }
 }
 
-fn display_formula_confidence(input_keys: &[&str]) -> &'static str {
-    if input_keys.iter().any(|key| *key == "lly.1542") {
+fn resolve_formula_input(
+    key: &str,
+    output_unit: &str,
+    standard: &StandardSignalValues,
+    profile_values: &LivedataProfileValues<'_>,
+    display_values: &HashMap<String, RuntimeSignalValue>,
+) -> RuntimeSignalValue {
+    if let Some(value) = display_values.get(key) {
+        return RuntimeSignalValue {
+            value: convert_unit(value.value, &value.unit, output_unit),
+            state: value.state,
+            unit: output_unit.to_string(),
+        };
+    }
+
+    if let Some(pid) = standard_key_pid(key) {
+        let (value, state, _, _) = standard_pid_runtime(pid, standard);
+        return RuntimeSignalValue {
+            value: convert_unit(value, standard_pid_unit(pid), output_unit),
+            state,
+            unit: output_unit.to_string(),
+        };
+    }
+
+    if let Some(reading) = profile_values.profile_readings.get(key) {
+        return RuntimeSignalValue {
+            value: convert_unit(
+                reading.value.map(|value| value as f32),
+                &reading.evidence.unit,
+                output_unit,
+            ),
+            state: profile_evidence_state(&reading.evidence),
+            unit: output_unit.to_string(),
+        };
+    }
+
+    RuntimeSignalValue {
+        value: None,
+        state: "waiting",
+        unit: output_unit.to_string(),
+    }
+}
+
+fn standard_key_pid(key: &str) -> Option<u8> {
+    let hex = key.strip_prefix("standard:")?;
+    u8::from_str_radix(hex, 16).ok()
+}
+
+fn standard_pid_unit(pid: u8) -> &'static str {
+    match pid {
+        0x05 | 0x0F | 0x46 | 0x5C => "F",
+        0x0B | 0x23 | 0x33 => "psi",
+        0x0C => "rpm",
+        0x0D => "mph",
+        0x10 => "g/s",
+        _ => "",
+    }
+}
+
+fn convert_unit(value: Option<f32>, from_unit: &str, to_unit: &str) -> Option<f32> {
+    let value = value?;
+    if units_equivalent(from_unit, to_unit) {
+        return Some(value);
+    }
+    match (from_unit.trim(), to_unit.trim()) {
+        ("kPa", "psi") | ("kPa abs", "psi") => Some(value * PSI_PER_KPA as f32),
+        ("psi", "kPa") | ("psi", "kPa abs") => Some(value / PSI_PER_KPA as f32),
+        _ => Some(value),
+    }
+}
+
+fn units_equivalent(left: &str, right: &str) -> bool {
+    let left = left.trim();
+    let right = right.trim();
+    left == right || matches!((left, right), ("F", "deg F") | ("deg F", "F"))
+}
+
+fn combine_binary_state(left: &RuntimeSignalValue, right: &RuntimeSignalValue) -> &'static str {
+    if left.value.is_some() && right.value.is_some() {
+        "ok"
+    } else if matches!(left.state, "unsupported") || matches!(right.state, "unsupported") {
+        "unsupported"
+    } else {
+        "waiting"
+    }
+}
+
+fn runtime_state_label(state: &str) -> &'static str {
+    match state {
+        "ok" => "ok",
+        "cached" => "cached",
+        "unsupported" => "unsupported",
+        "error" => "error",
+        _ => "waiting",
+    }
+}
+
+fn display_formula_confidence(formula_key: &str, _input_keys: &[&str]) -> &'static str {
+    if formula_key == "profile_desired_map_to_psi" {
         "Candidate"
     } else {
         "LiveObserved"
@@ -2011,39 +2062,11 @@ fn derived_signal_snapshot(
         evidence: None,
         composition: SignalComposition::Derived {
             group_key: group_key.to_string(),
-            group_label: Some(title_from_group_key(group_key).to_string()),
+            group_label: Some(title_from_group_key(group_key)),
             formula_key: formula_key.to_string(),
             input_keys: input_keys.into_iter().map(str::to_string).collect(),
         },
     }
-}
-
-fn pair_delta_signal_snapshot(
-    key: &str,
-    label: &str,
-    category: ProfileSignalCategory,
-    unit: &str,
-    value: Option<f32>,
-    state: &str,
-    group_key: &str,
-) -> SignalSnapshot {
-    let mut signal = derived_signal_snapshot(
-        key,
-        label,
-        category,
-        unit,
-        value,
-        state,
-        "actual_minus_desired",
-        group_key,
-        Vec::new(),
-    );
-    signal.composition = SignalComposition::Pair {
-        group_key: group_key.to_string(),
-        group_label: Some(title_from_group_key(group_key).to_string()),
-        role: "delta".to_string(),
-    };
-    signal
 }
 
 fn signal_composition_from_profile(composition: ProfileSignalComposition) -> SignalComposition {
@@ -2051,7 +2074,7 @@ fn signal_composition_from_profile(composition: ProfileSignalComposition) -> Sig
         ProfileSignalComposition::Scalar => SignalComposition::Scalar,
         ProfileSignalComposition::Pair { group_key, role } => SignalComposition::Pair {
             group_key: group_key.to_string(),
-            group_label: Some(title_from_group_key(group_key).to_string()),
+            group_label: Some(title_from_group_key(group_key)),
             role: profile_pair_role_label(role).to_string(),
         },
         ProfileSignalComposition::TableRow {
@@ -2060,7 +2083,7 @@ fn signal_composition_from_profile(composition: ProfileSignalComposition) -> Sig
             row_label,
         } => SignalComposition::TableRow {
             table_key: table_key.to_string(),
-            table_label: Some(title_from_group_key(table_key).to_string()),
+            table_label: Some(title_from_group_key(table_key)),
             row_index,
             row_label: row_label.to_string(),
         },
@@ -2076,56 +2099,55 @@ fn profile_pair_role_label(role: ProfilePairRole) -> &'static str {
     }
 }
 
-fn title_from_group_key(group_key: &str) -> &'static str {
+fn title_from_group_key(group_key: &str) -> String {
     match group_key {
-        "fuel_rail_pressure" => "Fuel rail pressure",
-        "lly.fuel_rail" => "Fuel rail pressure",
-        "map_pressure" => "MAP pressure",
-        "lly.map_pressure" => "MAP pressure",
-        "vgt_vane_position" => "VGT vane position",
-        "lly.vgt_vane" => "VGT vane position",
-        "lly.injector_balance" => "Injector balance",
-        _ => "Signal group",
+        "fuel_rail_pressure" => "Fuel rail pressure".to_string(),
+        "map_pressure" => "MAP pressure".to_string(),
+        "vgt_vane_position" => "VGT vane position".to_string(),
+        _ => titleize_key_segment(group_key),
+    }
+}
+
+fn titleize_key_segment(key: &str) -> String {
+    let segment = key.rsplit('.').next().unwrap_or(key);
+    let mut out = String::with_capacity(segment.len());
+    let mut uppercase_next = true;
+    for ch in segment.chars() {
+        if matches!(ch, '_' | '-' | '.') {
+            if !out.ends_with(' ') {
+                out.push(' ');
+            }
+            uppercase_next = true;
+        } else if uppercase_next {
+            out.extend(ch.to_uppercase());
+            uppercase_next = false;
+        } else {
+            out.extend(ch.to_lowercase());
+        }
+    }
+
+    if out.is_empty() {
+        "Signal group".to_string()
+    } else {
+        out
     }
 }
 
 fn profile_signal_composition(signal: SignalDefinition) -> SignalComposition {
-    match signal_did(signal) {
-        Some(0x1543) => SignalComposition::Pair {
-            group_key: "vgt_vane_position".to_string(),
-            group_label: Some("VGT vane position".to_string()),
-            role: "actual".to_string(),
-        },
-        Some(0x1540) => SignalComposition::Pair {
-            group_key: "vgt_vane_position".to_string(),
-            group_label: Some("VGT vane position".to_string()),
-            role: "desired".to_string(),
-        },
-        Some(LLY_ACTUAL_FUEL_PRESSURE_DID) => SignalComposition::Pair {
-            group_key: "fuel_rail_pressure".to_string(),
-            group_label: Some("Fuel rail pressure".to_string()),
-            role: "actual".to_string(),
-        },
-        Some(LLY_DESIRED_FUEL_PRESSURE_DID) => SignalComposition::Pair {
-            group_key: "fuel_rail_pressure".to_string(),
-            group_label: Some("Fuel rail pressure".to_string()),
-            role: "desired".to_string(),
-        },
-        Some(LLY_DESIRED_MAP_DID) => SignalComposition::Pair {
-            group_key: "map_pressure".to_string(),
-            group_label: Some("MAP pressure".to_string()),
-            role: "desired".to_string(),
-        },
-        Some(did @ 0x162F..=0x1636) => {
-            let row_index = (did - 0x162F + 1) as u8;
-            SignalComposition::TableRow {
-                table_key: "injector_balance".to_string(),
-                table_label: Some("Injector balance".to_string()),
-                row_index,
-                row_label: format!("Cylinder {row_index}"),
-            }
+    if label_matches_terms(signal.label, &["injector", "balance", "cyl"]) {
+        let row_index = signal
+            .label
+            .rsplit_once(' ')
+            .and_then(|(_, suffix)| suffix.parse::<u8>().ok())
+            .unwrap_or(0);
+        SignalComposition::TableRow {
+            table_key: "injector_balance".to_string(),
+            table_label: Some("Injector balance".to_string()),
+            row_index,
+            row_label: format!("Cylinder {row_index}"),
         }
-        _ => SignalComposition::Scalar,
+    } else {
+        SignalComposition::Scalar
     }
 }
 
@@ -2292,25 +2314,8 @@ fn active_test_snapshot_v2(
     ) && !matches!(definition.safety_class, ProfileSafetyClass::Locked)
         && forbidden_module.is_none();
 
-    let (preconditions, last_result) = if definition.key == "gm.lly.vgt_vane_control" {
-        (
-            vgt_active_test_preconditions(runtime),
-            runtime.last_result.clone(),
-        )
-    } else {
-        (
-            definition
-                .preconditions
-                .iter()
-                .map(|precondition| GmActiveTestPrecondition {
-                    label: precondition.label.to_string(),
-                    satisfied: false,
-                    detail: precondition.detail.to_string(),
-                })
-                .collect(),
-            None,
-        )
-    };
+    let preconditions = active_test_preconditions(definition, runtime);
+    let last_result = runtime.last_result.clone();
 
     ActiveTestSnapshotV2 {
         key: definition.key.to_string(),
@@ -2319,7 +2324,11 @@ fn active_test_snapshot_v2(
         command_profile: command_profile.to_string(),
         actionable,
         lock_reason: active_test_lock_reason(definition, forbidden_module),
-        supported_modes: active_test_supported_modes(definition),
+        supported_modes: definition
+            .supported_modes
+            .iter()
+            .map(|mode| (*mode).to_string())
+            .collect(),
         safety_notes: active_test_safety_notes(definition),
         preconditions,
         timeout_ms: definition.timeout.as_millis() as u64,
@@ -2358,8 +2367,8 @@ fn active_test_lock_reason(
             "Resolved target module {module} is write-forbidden; command payload is disabled."
         ));
     }
-    if definition.key == "gm.lly.vgt_vane_control" {
-        Some(vgt_vane_control_definition().lock_reason)
+    if let Some(reason) = definition.lock_reason {
+        Some(reason.to_string())
     } else if matches!(
         definition.command_profile,
         ProfileActiveCommandProfile::Locked
@@ -2370,24 +2379,19 @@ fn active_test_lock_reason(
     }
 }
 
-fn active_test_supported_modes(definition: ActiveTestDefinition) -> Vec<String> {
-    if definition.key == "gm.lly.vgt_vane_control" {
-        vgt_vane_control_definition().supported_modes
-    } else {
-        Vec::new()
-    }
-}
-
 fn active_test_safety_notes(definition: ActiveTestDefinition) -> Vec<String> {
-    if definition.key == "gm.lly.vgt_vane_control" {
-        vgt_vane_control_definition().safety_notes
-    } else {
-        definition
+    if definition.safety_notes.is_empty() {
+        return definition
             .preconditions
             .iter()
             .map(|precondition| precondition.detail.to_string())
-            .collect()
+            .collect();
     }
+    definition
+        .safety_notes
+        .iter()
+        .map(|note| (*note).to_string())
+        .collect()
 }
 
 fn signal_category_label(category: ProfileSignalCategory) -> &'static str {
@@ -2487,7 +2491,7 @@ async fn scan_profile_dtcs(
     let mut modules = Vec::new();
 
     for planned in plan.requests {
-        let CapabilityId::DtcService(key) = planned.capability else {
+        let CapabilityId::DtcService(_key) = planned.capability else {
             continue;
         };
 
@@ -2495,24 +2499,19 @@ async fn scan_profile_dtcs(
         let module_label = module.0.clone();
         let standard_label = generic_standard_label(&generic, &module_label);
         let row = ensure_module_scan(&mut modules, &module_label, standard_label);
-        let label = execute_profile_dtc_request(
-            session,
-            &mut dtcs,
-            &runtime,
+        let request = GuiProfileDtcRequest {
+            dtcs: &mut dtcs,
+            runtime: &runtime,
             context,
             selected,
-            planned.capability,
-            planned.request,
-            &module,
+            capability: planned.capability,
+            request: planned.request,
+            fallback_module: &module,
             alerts,
-        )
-        .await;
+        };
+        let label = execute_profile_dtc_request(session, request).await;
 
-        match key {
-            "lly.class2.dtc.all" => row.gm_all = label,
-            "lly.class2.dtc.active" => row.gm_active = label,
-            _ => {}
-        }
+        assign_profile_scan_result(row, label);
     }
 
     if modules.is_empty() {
@@ -2520,6 +2519,25 @@ async fn scan_profile_dtcs(
     }
 
     GmClass2Scan { dtcs, modules }
+}
+
+struct GuiProfileDtcRequest<'a, 'runtime> {
+    dtcs: &'a mut Vec<DtcSnapshot>,
+    runtime: &'a ProfileRuntime<'runtime>,
+    context: &'a VehicleContext,
+    selected: &'a SelectedProfile,
+    capability: CapabilityId,
+    request: RequestId,
+    fallback_module: &'a ModuleId,
+    alerts: &'a mut Vec<String>,
+}
+
+fn assign_profile_scan_result(row: &mut ModuleScan, label: String) {
+    if row.gm_all == "pending" {
+        row.gm_all = label;
+    } else if row.gm_active == "pending" {
+        row.gm_active = label;
+    }
 }
 
 async fn scan_generic_dtcs(
@@ -2552,15 +2570,18 @@ async fn scan_generic_dtcs(
 
 async fn execute_profile_dtc_request(
     session: &mut Session<Elm327Adapter>,
-    dtcs: &mut Vec<DtcSnapshot>,
-    runtime: &ProfileRuntime<'_>,
-    context: &VehicleContext,
-    selected: &SelectedProfile,
-    capability: CapabilityId,
-    request: RequestId,
-    fallback_module: &ModuleId,
-    alerts: &mut Vec<String>,
+    request: GuiProfileDtcRequest<'_, '_>,
 ) -> String {
+    let GuiProfileDtcRequest {
+        dtcs,
+        runtime,
+        context,
+        selected,
+        capability,
+        request,
+        fallback_module,
+        alerts,
+    } = request;
     let mut sink = GuiDispatchSink::default();
     match runtime
         .execute_request(session, context, selected, capability, request, &mut sink)
@@ -2904,41 +2925,56 @@ fn status(
     }
 }
 
-fn vgt_active_test_preconditions(
+fn active_test_preconditions(
+    definition: ActiveTestDefinition,
     runtime: &ActiveTestRuntimeValues,
 ) -> Vec<GmActiveTestPrecondition> {
-    vec![
-        active_precondition(
-            "Verified command profile",
-            false,
-            "No verified GM Class 2 actuator-control bytes are loaded.",
-        ),
-        active_precondition(
-            "Stationary",
-            runtime.speed_kph < 0.5,
-            format!("{:.1} mph", runtime.speed_kph * MPH_PER_KPH),
-        ),
-        active_precondition(
-            "Idle speed",
-            (500.0..=900.0).contains(&runtime.rpm),
-            format!("{:.0} rpm", runtime.rpm),
-        ),
-        active_precondition(
-            "Warm coolant",
-            runtime.coolant_f >= 104.0,
-            format!("{:.1} F", runtime.coolant_f),
-        ),
-        active_precondition(
-            "Battery voltage",
-            runtime.voltage >= 12.0,
-            format!("{:.1} V", runtime.voltage),
-        ),
-        active_precondition(
-            "Park/Neutral and A/C off",
-            false,
-            "Not observable through current data; future enabled command must require operator confirmation.",
-        ),
-    ]
+    definition
+        .preconditions
+        .iter()
+        .map(|precondition| {
+            if label_matches_terms(precondition.label, &["verified", "command"]) {
+                active_precondition(
+                    precondition.label,
+                    matches!(
+                        definition.command_profile,
+                        ProfileActiveCommandProfile::Verified(_)
+                    ),
+                    precondition.detail,
+                )
+            } else if label_matches_terms(precondition.label, &["stationary"]) {
+                active_precondition(
+                    precondition.label,
+                    runtime.speed_kph < 0.5,
+                    format!("{:.1} mph", runtime.speed_kph * MPH_PER_KPH),
+                )
+            } else if label_matches_terms(precondition.label, &["idle"]) {
+                active_precondition(
+                    precondition.label,
+                    (500.0..=900.0).contains(&runtime.rpm),
+                    format!("{:.0} rpm", runtime.rpm),
+                )
+            } else if label_matches_terms(precondition.label, &["coolant"])
+                || label_matches_terms(precondition.label, &["warm"])
+            {
+                active_precondition(
+                    precondition.label,
+                    runtime.coolant_f >= 104.0,
+                    format!("{:.1} F", runtime.coolant_f),
+                )
+            } else if label_matches_terms(precondition.label, &["voltage"])
+                || label_matches_terms(precondition.label, &["battery"])
+            {
+                active_precondition(
+                    precondition.label,
+                    runtime.voltage >= 12.0,
+                    format!("{:.1} V", runtime.voltage),
+                )
+            } else {
+                active_precondition(precondition.label, false, precondition.detail)
+            }
+        })
+        .collect()
 }
 
 fn active_precondition(
@@ -3033,6 +3069,19 @@ fn empty_snapshot(connection: impl Into<String>) -> DiagnosticSnapshot {
     }
 }
 
+fn main() {
+    tauri::Builder::default()
+        .manage(GuiState {
+            backend: Mutex::new(LiveBackend::default()),
+        })
+        .invoke_handler(tauri::generate_handler![
+            diagnostic_snapshot,
+            request_active_test
+        ])
+        .run(tauri::generate_context!())
+        .expect("failed to run OBD2 Dash GUI");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3044,6 +3093,11 @@ mod tests {
         ProfileMatch, ProfileRequestDefinition, RouteDefinition, StandardPidOverride,
         StandardPidPolicy,
     };
+
+    const TEST_LLY_PROFILE_ID: &str = "gm.gmt800.lly.class2";
+    const TEST_LLY_DESIRED_FUEL_PRESSURE_DID: u16 = 0x163D;
+    const TEST_LLY_BAROMETRIC_PRESSURE_DID: u16 = 0x1251;
+    const TEST_LLY_DESIRED_MAP_DID: u16 = 0x1542;
 
     static TEST_BUSES: &[BusDefinition] = &[BusDefinition {
         key: BusKey::new("test"),
@@ -3080,6 +3134,9 @@ mod tests {
             request_data: &[0x01],
         }),
         preconditions: TEST_ACTIVE_PRECONDITIONS,
+        lock_reason: Some("fixture lock reason"),
+        supported_modes: &["fixture mode"],
+        safety_notes: &["fixture safety note"],
         timeout: std::time::Duration::from_millis(500),
         cancel_command: None,
         evidence_policy: ProfileEvidencePolicy::OnError,
@@ -3175,8 +3232,6 @@ mod tests {
             intake_air_state: "ok",
             map_psi: 13.9,
             map_state: "ok",
-            desired_map_psi: Some(14.9),
-            desired_map_state: "ok",
             barometric_psi: Some(14.2),
             barometric_state: "ok",
             boost_psi: 0.0,
@@ -3200,8 +3255,13 @@ mod tests {
         }
     }
 
-    fn test_reading(key: &str, label: &str, unit: &str, value: f64) -> GmSignalReading<f64> {
-        GmSignalReading {
+    fn test_reading(
+        key: &'static str,
+        label: &str,
+        unit: &str,
+        value: f64,
+    ) -> ProfileSignalReading<f64> {
+        ProfileSignalReading {
             value: Some(value),
             evidence: profile_signal_evidence(
                 key,
@@ -3262,7 +3322,7 @@ mod tests {
     fn decode_profile_signal(did: u16, payload: &[u8]) -> obd2_dash::profiles::DecodedSignal {
         let registry = ProfileRegistry::with_builtins();
         let profile = registry
-            .get(ProfileId::new(LLY_PROFILE_ID))
+            .get(ProfileId::new(TEST_LLY_PROFILE_ID))
             .expect("LLY profile registered");
         let signal = profile_signal_by_did(profile.signals(), did).expect("profile signal");
         profile
@@ -3272,7 +3332,7 @@ mod tests {
 
     #[test]
     fn decodes_lly_fuel_pressure_from_profile_stripped_payload() {
-        let decoded = decode_profile_signal(LLY_DESIRED_FUEL_PRESSURE_DID, &[0x26, 0x00]);
+        let decoded = decode_profile_signal(TEST_LLY_DESIRED_FUEL_PRESSURE_DID, &[0x26, 0x00]);
 
         assert_eq!(decoded.selected_raw, vec![0x26]);
         assert!((decoded.value - 551.0).abs() < 0.1);
@@ -3282,7 +3342,7 @@ mod tests {
     #[test]
     fn decodes_lly_fuel_pressure_from_profile_full_mode_22_payload() {
         let decoded = decode_profile_signal(
-            LLY_DESIRED_FUEL_PRESSURE_DID,
+            TEST_LLY_DESIRED_FUEL_PRESSURE_DID,
             &[0x62, 0x16, 0x3D, 0x26, 0x00],
         );
 
@@ -3292,7 +3352,7 @@ mod tests {
 
     #[test]
     fn decodes_gm_mode22_u8_from_profile_stripped_payload() {
-        let decoded = decode_profile_signal(LLY_BAROMETRIC_PRESSURE_DID, &[0x61]);
+        let decoded = decode_profile_signal(TEST_LLY_BAROMETRIC_PRESSURE_DID, &[0x61]);
 
         assert_eq!(decoded.selected_raw, vec![97]);
         assert_eq!(decoded.value, 97.0);
@@ -3300,7 +3360,8 @@ mod tests {
 
     #[test]
     fn decodes_gm_mode22_u8_from_profile_full_mode_22_payload() {
-        let decoded = decode_profile_signal(LLY_BAROMETRIC_PRESSURE_DID, &[0x62, 0x12, 0x51, 0x61]);
+        let decoded =
+            decode_profile_signal(TEST_LLY_BAROMETRIC_PRESSURE_DID, &[0x62, 0x12, 0x51, 0x61]);
 
         assert_eq!(decoded.selected_raw, vec![97]);
         assert_eq!(decoded.value, 97.0);
@@ -3308,7 +3369,7 @@ mod tests {
 
     #[test]
     fn decodes_desired_map_candidate_from_mode_22_payload() {
-        let decoded = decode_profile_signal(LLY_DESIRED_MAP_DID, &[0x62, 0x15, 0x42, 0x67]);
+        let decoded = decode_profile_signal(TEST_LLY_DESIRED_MAP_DID, &[0x62, 0x15, 0x42, 0x67]);
 
         assert_eq!(decoded.selected_raw, vec![103]);
         assert_eq!(decoded.value, 103.0);
@@ -3317,7 +3378,7 @@ mod tests {
     #[test]
     fn decodes_lly_fuel_pressure_with_echoed_selector_byte() {
         let decoded = decode_profile_signal(
-            LLY_DESIRED_FUEL_PRESSURE_DID,
+            TEST_LLY_DESIRED_FUEL_PRESSURE_DID,
             &[0x62, 0x16, 0x3D, 0x01, 0x26, 0x00],
         );
 
@@ -3329,9 +3390,9 @@ mod tests {
     fn rejects_short_lly_fuel_pressure_payload() {
         let registry = ProfileRegistry::with_builtins();
         let profile = registry
-            .get(ProfileId::new(LLY_PROFILE_ID))
+            .get(ProfileId::new(TEST_LLY_PROFILE_ID))
             .expect("LLY profile registered");
-        let signal = profile_signal_by_did(profile.signals(), LLY_DESIRED_FUEL_PRESSURE_DID)
+        let signal = profile_signal_by_did(profile.signals(), TEST_LLY_DESIRED_FUEL_PRESSURE_DID)
             .expect("profile signal");
         let err = profile.decode_signal(&signal, &[0x01]).unwrap_err();
 
@@ -3412,13 +3473,9 @@ mod tests {
             .expect("selected profile registered");
         let cylinders: [CylinderBalance; 0] = [];
         let cylinder_states: [&'static str; 0] = [];
+        let profile_readings = HashMap::new();
         let profile_values = LivedataProfileValues {
-            enhanced_baro_read: None,
-            desired_map_read: None,
-            actual_fuel_rail_gm_read: None,
-            desired_fuel_rail_read: None,
-            vgt_actual_read: None,
-            vgt_desired_read: None,
+            profile_readings: &profile_readings,
             cylinders: &cylinders,
             cylinder_states: &cylinder_states,
             desired_map_kpa: Some(103.0),
@@ -3455,7 +3512,9 @@ mod tests {
             .iter()
             .find(|signal| signal.key == "lly.desired_map")
             .expect("desired MAP display signal");
-        assert_eq!(desired_map.value, Some(14.9));
+        assert!(desired_map
+            .value
+            .is_some_and(|value| (value - 14.9).abs() < 0.05));
         assert_eq!(desired_map.confidence, "Candidate");
         assert!(matches!(
             &desired_map.composition,
@@ -3487,10 +3546,23 @@ mod tests {
         let registry = ProfileRegistry::with_builtins();
         let state = registry.select(&embedded_lly_context());
         let selected = state.selected.expect("LLY profile selected");
-        let vgt_actual = test_reading("vgt_actual", "VGT actual", "%", 88.2);
-        let vgt_desired = test_reading("vgt_desired", "VGT desired", "%", 88.6);
-        let desired_fuel = test_reading("fuel_rail_desired", "Desired fuel rail", "psi", 5_510.0);
-        let baro = test_reading("barometric_pressure_gm", "Barometer", "kPa abs", 98.0);
+        let mut profile_readings = HashMap::new();
+        profile_readings.insert(
+            "lly.1543",
+            test_reading("lly.1543", "VGT actual", "%", 88.2),
+        );
+        profile_readings.insert(
+            "lly.1540",
+            test_reading("lly.1540", "VGT desired", "%", 88.6),
+        );
+        profile_readings.insert(
+            "lly.163D",
+            test_reading("lly.163D", "Desired fuel rail", "psi", 5_510.0),
+        );
+        profile_readings.insert(
+            "lly.1251",
+            test_reading("lly.1251", "Barometer", "kPa abs", 98.0),
+        );
         let cylinders = [
             CylinderBalance {
                 cylinder: 1,
@@ -3527,12 +3599,7 @@ mod tests {
         ];
         let cylinder_states = ["ok"; 8];
         let profile_values = LivedataProfileValues {
-            enhanced_baro_read: Some(&baro),
-            desired_map_read: None,
-            actual_fuel_rail_gm_read: None,
-            desired_fuel_rail_read: Some(&desired_fuel),
-            vgt_actual_read: Some(&vgt_actual),
-            vgt_desired_read: Some(&vgt_desired),
+            profile_readings: &profile_readings,
             cylinders: &cylinders,
             cylinder_states: &cylinder_states,
             desired_map_kpa: Some(103.0),
@@ -3570,17 +3637,4 @@ mod tests {
             );
         }
     }
-}
-
-fn main() {
-    tauri::Builder::default()
-        .manage(GuiState {
-            backend: Mutex::new(LiveBackend::default()),
-        })
-        .invoke_handler(tauri::generate_handler![
-            diagnostic_snapshot,
-            request_active_test
-        ])
-        .run(tauri::generate_context!())
-        .expect("failed to run OBD2 Dash GUI");
 }

@@ -24,6 +24,25 @@ const SCAN_DIRS: &[&str] = &["src/tui", "src/widget"];
 
 const ALLOWLIST: &[(&str, &str, usize)] = &[("src/session_runner.rs", ".raw_request(", 1)];
 
+// Regression guard: live-session LLY gates were moved behind selected-profile
+// state and the profile scheduler. These counts should stay at zero.
+const SESSION_RUNNER_LLY_GATE_ALLOWLIST: &[(&str, usize)] = &[
+    ("is_lly_spec_identity", 0),
+    ("lly_profile_matches", 0),
+    ("fn session_matches_lly_profile", 0),
+    ("session_matches_lly_profile(", 0),
+    ("fn should_force_standard_poll", 0),
+    ("should_force_standard_poll(", 0),
+];
+
+const RENDERER_PROFILE_MIGRATED_FILES: &[&str] = &["src/widget/renderers.rs", "src/tui/ui.rs"];
+
+const FORBIDDEN_RENDERER_LLY_DIDS: &[&str] = &[
+    "0x1251", "0x1542", "0x1170", "0x1171", "0x1540", "0x1543", "0x162E", "0x162F", "0x1636",
+    "0x163D", "0x163E",
+];
+const FORBIDDEN_RENDERER_PROFILE_SYMBOLS: &[&str] = &["GM_LLY_CLASS2_PROFILE"];
+
 #[test]
 fn live_dashboard_has_no_new_raw_routed_callers() {
     for path in live_dashboard_files() {
@@ -87,6 +106,42 @@ fn session_runner_does_not_own_gm_class2_dtc_decode() {
             !content.contains(needle),
             "session_runner.rs must not reference profile-owned GM Class 2 DTC symbol `{needle}`"
         );
+    }
+}
+
+#[test]
+fn session_runner_lly_live_gates_stay_behind_selected_profile() {
+    let path = manifest_dir().join("src/session_runner.rs");
+    let content = fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", relative_source_path(&path)));
+
+    for (needle, max) in SESSION_RUNNER_LLY_GATE_ALLOWLIST {
+        let actual = count_occurrences(&content, needle);
+        assert!(
+            actual <= *max,
+            "session_runner.rs contains {actual} occurrences of `{needle}`; max is {max}. LLY live gates must stay behind selected-profile state/scheduler."
+        );
+    }
+}
+
+#[test]
+fn renderers_and_ui_do_not_own_lly_did_literals() {
+    for rel in RENDERER_PROFILE_MIGRATED_FILES {
+        let path = manifest_dir().join(rel);
+        let content = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", relative_source_path(&path)));
+        for needle in FORBIDDEN_RENDERER_LLY_DIDS {
+            assert!(
+                !content.contains(needle),
+                "{rel} owns LLY DID literal `{needle}`; use profile display metadata, evidence keys, or profile helpers instead."
+            );
+        }
+        for needle in FORBIDDEN_RENDERER_PROFILE_SYMBOLS {
+            assert!(
+                !content.contains(needle),
+                "{rel} imports profile singleton `{needle}`; resolve display metadata from selected profile state instead."
+            );
+        }
     }
 }
 

@@ -1725,12 +1725,25 @@ fn handle_toggle_recording(state: &mut AppState) {
                 let vehicle_name = state.domain.vehicle_info.as_ref().map(|v| v.display_name());
                 let recordings_dir = storage.recordings_dir().to_path_buf();
 
-                match recording::writer::RecordingWriter::new(
+                let profile_id = state
+                    .profile_state
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.selected_profile_id)
+                    .map(str::to_string);
+                let identity_confidence = state
+                    .profile_state
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.vin_confidence)
+                    .map(|confidence| format!("{confidence:?}").to_ascii_lowercase());
+
+                match recording::writer::RecordingWriter::new_v3_with_profile(
                     &recordings_dir,
                     &session_id,
                     vin,
                     vehicle_name,
                     state.domain.poll_interval_ms,
+                    profile_id,
+                    identity_confidence,
                 ) {
                     Ok(writer) => {
                         tracing::info!("Recording started: {}", session_id);
@@ -1771,6 +1784,7 @@ fn handle_toggle_recording(state: &mut AppState) {
                                 .vehicle_info
                                 .as_ref()
                                 .map(|v| v.display_name()),
+                            profile_id: None,
                             duration_secs,
                             frame_count,
                             file_path: path,

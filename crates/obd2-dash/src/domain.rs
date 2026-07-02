@@ -9,7 +9,6 @@ use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::service::ReadinessStatus;
 use obd2_core::session::discovery::{DiscoveryProfile, VisibleEcu};
 use obd2_core::vehicle::{ModuleId, Protocol};
-use obd2_dash::gm_evidence::GmEvidenceRecord;
 use obd2_dash::profiles::ProfileEvidenceRecord;
 
 use crate::analysis::driving::DrivingBehavior;
@@ -177,7 +176,6 @@ pub enum DomainMessage {
     O2MonitoringUpdate(Vec<O2Reading>),
     ReadinessUpdate(ReadinessStatus),
     ProfileEvidence(Box<ProfileEvidenceRecord>),
-    ActiveTestAttempt(Box<GmEvidenceRecord>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -333,9 +331,6 @@ impl DomainState {
                 }
                 DomainMessage::ProfileEvidence(record) => {
                     let _ = writer.write_profile_evidence(offset_ms, record);
-                }
-                DomainMessage::ActiveTestAttempt(record) => {
-                    let _ = writer.write_active_test_attempt(offset_ms, record);
                 }
                 _ => {}
             }
@@ -518,7 +513,6 @@ impl DomainState {
                 self.readiness = Some(status);
             }
             DomainMessage::ProfileEvidence(_) => {}
-            DomainMessage::ActiveTestAttempt(_) => {}
         }
     }
 

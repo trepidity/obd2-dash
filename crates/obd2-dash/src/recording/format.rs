@@ -20,6 +20,7 @@ pub const FRAME_PROFILE_VALUE: u8 = 0x20;
 pub const FRAME_PROFILE_DTC: u8 = 0x21;
 pub const FRAME_PROFILE_DISPATCH: u8 = 0x22;
 pub const FRAME_ACTIVE_TEST_ATTEMPT: u8 = 0x23;
+pub const FRAME_PROFILE_ACTIVE_TEST: u8 = 0x24;
 
 const MAX_V3_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
@@ -31,6 +32,10 @@ pub struct SessionHeader {
     pub vin: Option<String>,
     pub vehicle_name: Option<String>,
     pub poll_interval_ms: u64,
+    #[serde(default)]
+    pub profile_id: Option<String>,
+    #[serde(default)]
+    pub identity_confidence: Option<String>,
 }
 
 /// A single recorded frame (14 bytes on disk for v1; 14 + 1 + N for v2 with raw bytes).
@@ -191,6 +196,9 @@ impl RecordingFrame {
         let frame_type = match &record.decoded {
             Some(obd2_dash::profiles::ProfileDecodedEvidence::Signal { .. }) => FRAME_PROFILE_VALUE,
             Some(obd2_dash::profiles::ProfileDecodedEvidence::Dtcs { .. }) => FRAME_PROFILE_DTC,
+            Some(obd2_dash::profiles::ProfileDecodedEvidence::ActiveTest { .. }) => {
+                FRAME_PROFILE_ACTIVE_TEST
+            }
             None => FRAME_PROFILE_DISPATCH,
         };
         Ok(Self {
@@ -205,7 +213,10 @@ impl RecordingFrame {
     pub fn decode_profile_evidence(&self) -> Option<obd2_dash::profiles::ProfileEvidenceRecord> {
         if !matches!(
             self.frame_type,
-            FRAME_PROFILE_VALUE | FRAME_PROFILE_DTC | FRAME_PROFILE_DISPATCH
+            FRAME_PROFILE_VALUE
+                | FRAME_PROFILE_DTC
+                | FRAME_PROFILE_DISPATCH
+                | FRAME_PROFILE_ACTIVE_TEST
         ) {
             return None;
         }
@@ -426,6 +437,43 @@ pub fn read_file_header<R: Read>(reader: &mut R) -> io::Result<(SessionHeader, u
 #[cfg(test)]
 mod tests {
     use super::*;
+    use obd2_dash::profiles::{
+        ProfileDecodedEvidence, ProfileEvidenceError, ProfileEvidenceRecord, RouteEvidence,
+    };
+
+    fn profile_active_test_record() -> ProfileEvidenceRecord {
+        ProfileEvidenceRecord {
+            timestamp: Utc::now(),
+            profile_id: "gm.gmt800.lly.class2".to_string(),
+            capability_id: "gm.lly.vgt_vane_control".to_string(),
+            capability_kind: "active_test".to_string(),
+            module: "ecm".to_string(),
+            route: RouteEvidence::J1850 {
+                node: 0x10,
+                header: vec![0x6C, 0x10, 0xF1],
+            },
+            service_id: 0,
+            request_data: Vec::new(),
+            raw_adapter_write_text: None,
+            raw_adapter_read_text: None,
+            parsed_response_bytes: Vec::new(),
+            decoder_id: "gm-active-test-vgt-vane-control".to_string(),
+            identity_confidence: Some("confirmed".to_string()),
+            manual_confirmation: false,
+            probe: false,
+            source_fields: None,
+            decoded: Some(ProfileDecodedEvidence::ActiveTest {
+                test_id: "vgt_vane_control".to_string(),
+                command: "manual_percent 35".to_string(),
+                accepted: false,
+                status: "unverified_command_profile".to_string(),
+            }),
+            error: Some(ProfileEvidenceError {
+                kind: "unverified_command".to_string(),
+                detail: "missing verified command profile".to_string(),
+            }),
+        }
+    }
 
     #[test]
     fn test_frame_roundtrip_no_raw() {
@@ -498,6 +546,8 @@ mod tests {
             vin: Some("WMW12345".to_string()),
             vehicle_name: Some("Test Car".to_string()),
             poll_interval_ms: 250,
+            profile_id: None,
+            identity_confidence: None,
         };
 
         let mut buf = Vec::new();
@@ -518,6 +568,8 @@ mod tests {
             vin: None,
             vehicle_name: None,
             poll_interval_ms: 250,
+            profile_id: Some("fixture.can11.readonly.v1".to_string()),
+            identity_confidence: Some("confirmed".to_string()),
         };
 
         let mut buf = Vec::new();
@@ -527,6 +579,27 @@ mod tests {
         let (decoded, version) = read_file_header(&mut cursor).unwrap();
         assert_eq!(version, 3);
         assert_eq!(decoded.session_id, "test-v3");
+        assert_eq!(
+            decoded.profile_id.as_deref(),
+            Some("fixture.can11.readonly.v1")
+        );
+        assert_eq!(decoded.identity_confidence.as_deref(), Some("confirmed"));
+    }
+
+    #[test]
+    fn test_legacy_header_json_defaults_profile_metadata() {
+        let json = br#"{
+            "session_id":"legacy",
+            "start_time":"2026-01-01T00:00:00Z",
+            "vin":null,
+            "vehicle_name":null,
+            "poll_interval_ms":250
+        }"#;
+        let header: SessionHeader = serde_json::from_slice(json).unwrap();
+
+        assert_eq!(header.session_id, "legacy");
+        assert!(header.profile_id.is_none());
+        assert!(header.identity_confidence.is_none());
     }
 
     #[test]
@@ -574,6 +647,51 @@ mod tests {
         assert_eq!(decoded.offset_ms, 123);
         assert_eq!(decoded.raw_bytes.len(), 512);
         assert_eq!(decoded.raw_bytes[0], 0xAB);
+    }
+
+    #[test]
+    fn test_v3_unknown_future_frame_roundtrip_then_pid() {
+        let mut buf = Vec::new();
+        RecordingFrame {
+            frame_type: 0xFE,
+            offset_ms: 100,
+            pid_code: 0,
+            value: 0.0,
+            raw_bytes: vec![0xAA; 2048],
+        }
+        .write_v3_to(&mut buf)
+        .unwrap();
+        RecordingFrame::pid(200, 0x0C, 900.0)
+            .write_v3_to(&mut buf)
+            .unwrap();
+
+        let mut cursor = io::Cursor::new(buf);
+        let unknown = RecordingFrame::read_from(&mut cursor, 3).unwrap().unwrap();
+        assert_eq!(unknown.frame_type, 0xFE);
+        assert_eq!(unknown.raw_bytes.len(), 2048);
+
+        let pid = RecordingFrame::read_from(&mut cursor, 3).unwrap().unwrap();
+        assert_eq!(pid.frame_type, FRAME_PID);
+        assert_eq!(pid.pid_code, 0x0C);
+        assert_eq!(pid.value, 900.0);
+    }
+
+    #[test]
+    fn test_profile_active_test_evidence_uses_active_attempt_frame() {
+        let frame = RecordingFrame::profile_evidence(300, &profile_active_test_record()).unwrap();
+
+        assert_eq!(frame.frame_type, FRAME_PROFILE_ACTIVE_TEST);
+        let decoded = frame.decode_profile_evidence().expect("profile evidence");
+        assert_eq!(decoded.profile_id, "gm.gmt800.lly.class2");
+        assert_eq!(decoded.capability_id, "gm.lly.vgt_vane_control");
+        assert!(matches!(
+            decoded.decoded,
+            Some(ProfileDecodedEvidence::ActiveTest {
+                accepted: false,
+                ref status,
+                ..
+            }) if status == "unverified_command_profile"
+        ));
     }
 
     #[test]
@@ -660,6 +778,8 @@ mod tests {
             vin: Some("1GCHK23164F000001".to_string()),
             vehicle_name: Some("Test Duramax".to_string()),
             poll_interval_ms: 250,
+            profile_id: None,
+            identity_confidence: None,
         };
         write_file_header(&mut buf, &header).unwrap();
 
