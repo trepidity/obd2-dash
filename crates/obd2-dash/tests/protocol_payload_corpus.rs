@@ -1,7 +1,7 @@
 mod corpus_support;
 
 use corpus_support::{corpus_dir, hex_to_bytes, load_jsonl, PayloadGolden};
-use obd2_core::protocol::codec::decode_elm_response_payload_for_command;
+use obd2_core::adapter::elm_codec::decode_elm_response_payload_for_command;
 use obd2_core::protocol::BusFamily;
 
 #[test]

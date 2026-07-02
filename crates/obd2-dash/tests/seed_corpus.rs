@@ -8,7 +8,7 @@ use corpus_support::{
     bytes_to_hex, corpus_dir, hex_to_bytes, DtcExpected, DtcGolden, PayloadGolden, SignalExpected,
     SignalGolden,
 };
-use obd2_core::protocol::codec::decode_elm_response_payload_for_command;
+use obd2_core::adapter::elm_codec::decode_elm_response_payload_for_command;
 use obd2_core::protocol::BusFamily;
 use obd2_core::transport::parse_raw_capture;
 use obd2_dash::gm_class2::decode_class2_dtcs;
