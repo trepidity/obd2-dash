@@ -6,11 +6,6 @@ export interface StatusValue {
   state: StateKind;
 }
 
-export interface CylinderBalance {
-  cylinder: number;
-  mm3: number;
-}
-
 export interface ModuleScan {
   module: string;
   standard: string;
@@ -41,34 +36,82 @@ export interface SignalEvidence {
   notes: string | null;
 }
 
-export interface TemperatureSnapshot {
-  coolant_f: number;
-  intake_air_f: number;
-  oil_f: number | null;
-  trans_f: number | null;
-  ambient_f: number | null;
+export type SignalCategory =
+  | "Powertrain"
+  | "Turbo"
+  | "Fuel"
+  | "Transmission"
+  | "Body"
+  | "Chassis"
+  | "Emissions"
+  | "Other";
+
+export type Confidence =
+  | "Candidate"
+  | "LiveObserved"
+  | "Community"
+  | "Verified"
+  | "Rejected";
+
+export type SignalRuntimeState = "ok" | "waiting" | "cached" | "unsupported" | "error";
+
+export interface SignalRxdSource {
+  raw: string;
+  bit_width: number | null;
 }
 
-export interface FuelRailSnapshot {
-  actual_psi: number;
-  desired_psi: number | null;
-  delta_psi: number | null;
+export interface SignalSourceFields {
+  txd: string;
+  rxf: string | null;
+  rxd: SignalRxdSource | null;
+  raw_mth: string | null;
+  source_ref: string | null;
 }
 
-export interface VgtSnapshot {
-  actual_pct: number;
-  desired_pct: number;
-  error_pct: number;
-}
+export type SignalComposition =
+  | { kind: "scalar" }
+  | { kind: "pair"; group_key: string; group_label?: string; role: "actual" | "desired" | "error" | "delta" }
+  | { kind: "table_row"; table_key: string; table_label?: string; row_index: number; row_label: string }
+  | { kind: "derived"; group_key: string; group_label?: string; formula_key: string; input_keys: string[] };
 
-export interface ActiveTestDefinition {
-  id: "vgt_vane_control";
+export interface SignalSnapshot {
+  key: string;
   label: string;
-  locked: boolean;
-  lock_reason: string;
-  command_profile: string;
-  supported_modes: string[];
-  safety_notes: string[];
+  category: SignalCategory;
+  module: string;
+  unit: string;
+  value: number | null;
+  state: SignalRuntimeState;
+  confidence: Confidence;
+  provenance: string[];
+  source_fields?: SignalSourceFields | null;
+  request?: string | null;
+  decoder_id?: string | null;
+  evidence_policy: string;
+  failure_policy: string;
+  preferred_over: string | null;
+  evidence: SignalEvidence | null;
+  composition: SignalComposition;
+}
+
+export type CapabilitySectionCategory =
+  | SignalCategory
+  | "Discovery"
+  | "Diagnostics"
+  | "ActiveTests"
+  | "Evidence"
+  | "Replay"
+  | "Raw"
+  | "Settings";
+
+export interface CapabilitySection {
+  id?: string;
+  category: CapabilitySectionCategory;
+  label: string;
+  signal_keys: string[];
+  active_test_keys?: string[];
+  diagnostic_service_keys?: string[];
+  visible: boolean;
 }
 
 export interface ActiveTestPrecondition {
@@ -78,7 +121,7 @@ export interface ActiveTestPrecondition {
 }
 
 export interface ActiveTestResult {
-  test_id: "vgt_vane_control";
+  test_id: string;
   label: string;
   accepted: boolean;
   status: string;
@@ -88,14 +131,20 @@ export interface ActiveTestResult {
   timestamp: string;
 }
 
-export interface VgtActiveTestSnapshot {
-  definition: ActiveTestDefinition;
+export interface ActiveTestSnapshotV2 {
+  key: string;
+  label: string;
+  safety_class: string;
+  command_profile: "Locked" | "Verified";
+  actionable: boolean;
+  lock_reason: string | null;
+  supported_modes: string[];
+  safety_notes: string[];
   preconditions: ActiveTestPrecondition[];
+  timeout_ms?: number;
+  cancel_available?: boolean;
+  evidence_policy?: string;
   last_result: ActiveTestResult | null;
-}
-
-export interface ActiveTestsSnapshot {
-  vgt_vane: VgtActiveTestSnapshot;
 }
 
 export interface DiagnosticSnapshot {
@@ -112,15 +161,8 @@ export interface DiagnosticSnapshot {
   alerts: string[];
   dtcs: DtcSnapshot[];
   modules: ModuleScan[];
-  cylinders: CylinderBalance[];
-  vgt: VgtSnapshot;
-  fuel_rail: FuelRailSnapshot;
-  temperatures: TemperatureSnapshot;
-  map_psi: number;
-  desired_map_psi: number | null;
-  barometric_psi: number | null;
-  boost_psi: number;
-  maf_g_s: number;
   source_confidence: SignalEvidence[];
-  active_tests: ActiveTestsSnapshot;
+  signals: SignalSnapshot[];
+  capability_sections: CapabilitySection[];
+  active_tests_v2: ActiveTestSnapshotV2[];
 }

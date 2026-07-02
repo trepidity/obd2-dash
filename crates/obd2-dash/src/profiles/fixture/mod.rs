@@ -7,8 +7,9 @@ use crate::profiles::model::{
     DecodedDtc, DecodedSignal, DiagnosticProfile, DtcServiceDefinition, EvidencePolicy,
     FailurePolicy, Manufacturer, MatchConfidence, ModuleDefinition, ModuleKey, ModuleMap,
     ModuleSafetyClass, PassiveMonitorDefinition, PollCadence, ProfileDecodeError, ProfileId,
-    ProfileMatch, Provenance, RouteDefinition, RouteSet, SignalCategory, SignalDefinition,
-    SourceFields, StandardPidOverride, StandardPidPolicy, VehicleContext,
+    ProfileMatch, Provenance, RouteDefinition, RouteSet, SignalCategory, SignalComposition,
+    SignalDefinition, SignalDisplayDefinition, SignalDisplaySource, SourceFields,
+    StandardPidOverride, StandardPidPolicy, VehicleContext,
 };
 
 pub const FIXTURE_PROFILE_ID: ProfileId = ProfileId::new("fixture.can11.readonly.v1");
@@ -65,6 +66,15 @@ const FIXTURE_SIGNALS: &[SignalDefinition] = &[SignalDefinition {
     evidence_policy: EvidencePolicy::BoundedLive,
     failure_policy: FailurePolicy::SurfaceUnavailable,
     preferred_over: None,
+}];
+
+pub const FIXTURE_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[SignalDisplayDefinition {
+    key: FIXTURE_SIGNAL_KEY,
+    label: "Fixture Coolant",
+    category: SignalCategory::Powertrain,
+    unit: "C",
+    source: SignalDisplaySource::ProfileSignal(FIXTURE_SIGNAL_KEY),
+    composition: SignalComposition::Scalar,
 }];
 
 const FIXTURE_DTC_SERVICES: &[DtcServiceDefinition] = &[DtcServiceDefinition {
@@ -126,6 +136,10 @@ impl DiagnosticProfile for FixtureProfile {
 
     fn signals(&self) -> &[SignalDefinition] {
         FIXTURE_SIGNALS
+    }
+
+    fn signal_display(&self) -> &[SignalDisplayDefinition] {
+        FIXTURE_SIGNAL_DISPLAY
     }
 
     fn dtc_services(&self) -> &[DtcServiceDefinition] {
@@ -318,5 +332,18 @@ mod tests {
     #[test]
     fn fixture_has_no_active_tests() {
         assert!(FIXTURE_PROFILE.active_tests().is_empty());
+    }
+
+    #[test]
+    fn fixture_display_is_scalar_and_non_lly_shaped() {
+        let display = FIXTURE_PROFILE.signal_display();
+
+        assert_eq!(display.len(), 1);
+        assert_eq!(display[0].key, FIXTURE_SIGNAL_KEY);
+        assert_eq!(
+            display[0].source,
+            SignalDisplaySource::ProfileSignal(FIXTURE_SIGNAL_KEY)
+        );
+        assert_eq!(display[0].composition, SignalComposition::Scalar);
     }
 }

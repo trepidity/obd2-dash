@@ -425,6 +425,48 @@ pub struct SignalDefinition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignalDisplaySource {
+    ProfileSignal(&'static str),
+    StandardPid(u8),
+    Derived {
+        formula_key: &'static str,
+        input_keys: &'static [&'static str],
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PairRole {
+    Actual,
+    Desired,
+    Error,
+    Delta,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignalComposition {
+    Scalar,
+    Pair {
+        group_key: &'static str,
+        role: PairRole,
+    },
+    TableRow {
+        table_key: &'static str,
+        row_index: u8,
+        row_label: &'static str,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SignalDisplayDefinition {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub category: SignalCategory,
+    pub unit: &'static str,
+    pub source: SignalDisplaySource,
+    pub composition: SignalComposition,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DtcServiceDefinition {
     pub key: &'static str,
     pub label: &'static str,
@@ -539,6 +581,9 @@ pub trait DiagnosticProfile: Sync {
         StandardPidPolicy::EMPTY
     }
     fn signals(&self) -> &[SignalDefinition];
+    fn signal_display(&self) -> &[SignalDisplayDefinition] {
+        &[]
+    }
     fn dtc_services(&self) -> &[DtcServiceDefinition];
     fn active_tests(&self) -> &[ActiveTestDefinition];
     fn passive_monitors(&self) -> &[PassiveMonitorDefinition];
@@ -927,6 +972,74 @@ mod tests {
 
         assert_eq!(SIGNAL.service_id, 0x22);
         assert_eq!(SIGNAL.request_data, &[0x15, 0x42, 0x01]);
+    }
+
+    #[test]
+    fn signal_display_definition_is_pure_static_data() {
+        const INPUTS: &[&str] = &["signal.actual", "signal.desired"];
+        const DISPLAY: &[SignalDisplayDefinition] = &[
+            SignalDisplayDefinition {
+                key: "signal.actual",
+                label: "Actual",
+                category: SignalCategory::Fuel,
+                unit: "psi",
+                source: SignalDisplaySource::StandardPid(0x23),
+                composition: SignalComposition::Pair {
+                    group_key: "signal.group",
+                    role: PairRole::Actual,
+                },
+            },
+            SignalDisplayDefinition {
+                key: "signal.delta",
+                label: "Delta",
+                category: SignalCategory::Fuel,
+                unit: "psi",
+                source: SignalDisplaySource::Derived {
+                    formula_key: "subtract",
+                    input_keys: INPUTS,
+                },
+                composition: SignalComposition::Pair {
+                    group_key: "signal.group",
+                    role: PairRole::Delta,
+                },
+            },
+            SignalDisplayDefinition {
+                key: "signal.row.1",
+                label: "Row",
+                category: SignalCategory::Fuel,
+                unit: "mm3",
+                source: SignalDisplaySource::ProfileSignal("signal.row.1"),
+                composition: SignalComposition::TableRow {
+                    table_key: "signal.table",
+                    row_index: 0,
+                    row_label: "1",
+                },
+            },
+        ];
+
+        assert_eq!(DISPLAY[0].source, SignalDisplaySource::StandardPid(0x23));
+        assert_eq!(
+            DISPLAY[1].source,
+            SignalDisplaySource::Derived {
+                formula_key: "subtract",
+                input_keys: INPUTS,
+            }
+        );
+        assert_eq!(
+            DISPLAY[2].composition,
+            SignalComposition::TableRow {
+                table_key: "signal.table",
+                row_index: 0,
+                row_label: "1",
+            }
+        );
+    }
+
+    #[test]
+    fn diagnostic_profile_default_signal_display_is_empty() {
+        let profile = ObjectSafeProfile;
+
+        assert!(profile.signal_display().is_empty());
     }
 
     #[test]

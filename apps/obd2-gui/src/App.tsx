@@ -3,7 +3,6 @@ import {
   Activity,
   AlertTriangle,
   Cable,
-  CircleDot,
   Database,
   FileText,
   Fuel,
@@ -20,22 +19,40 @@ import {
   SlidersHorizontal,
   Square,
   Table2,
-  Thermometer,
   Wind,
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fallbackSnapshot } from "./mockData";
-import type { ActiveTestResult, CylinderBalance, DiagnosticSnapshot, DtcSnapshot, ModuleScan, SignalEvidence, StateKind } from "./types";
+import { fallbackSnapshot, gasNoTurboSnapshot, genericObdSnapshot, transmissionSnapshot } from "./mockData";
+import type {
+  CapabilitySection,
+  CapabilitySectionCategory,
+  DiagnosticSnapshot,
+  DtcSnapshot,
+  ModuleScan,
+  SignalEvidence,
+  SignalSnapshot as CapabilitySignalSnapshot,
+  StateKind,
+} from "./types";
 
 type UnitMode = "us" | "metric";
-type TabId = "overview" | "air" | "fuel" | "active" | "diagnostics" | "thermal" | "replay" | "raw" | "settings";
+type UtilityTabId = "overview" | "active" | "diagnostics" | "replay" | "raw" | "settings";
+type CapabilityTabId = `cap:${string}`;
+type TabId = UtilityTabId | CapabilityTabId;
 
 type RecordingKind = "structured" | "raw" | "compressed" | "unknown";
 
-type ActiveTestCommand =
-  | { kind: "vgt_tc_learn"; enabled: boolean }
-  | { kind: "vgt_manual_percent"; percent: number; hold_ms: number };
+interface DiagnosticServiceSnapshot {
+  key: string;
+  label: string;
+  module: string;
+  state: string;
+  detail: string;
+}
+
+type CapabilitySnapshot = DiagnosticSnapshot & {
+  diagnostic_services?: DiagnosticServiceSnapshot[];
+};
 
 interface CategoryTab {
   id: TabId;
@@ -80,12 +97,121 @@ const stateClasses: Record<StateKind, string> = {
 const panelClass =
   "rounded-md border border-zinc-700 bg-zinc-900/60 ring-1 ring-white/5";
 
+function capabilitySnapshot(snapshot: DiagnosticSnapshot): CapabilitySnapshot {
+  return snapshot as CapabilitySnapshot;
+}
+
+function capabilitySignals(snapshot: DiagnosticSnapshot): CapabilitySignalSnapshot[] {
+  return capabilitySnapshot(snapshot).signals ?? [];
+}
+
+function capabilitySections(snapshot: DiagnosticSnapshot): CapabilitySection[] {
+  return capabilitySnapshot(snapshot).capability_sections?.filter((section) => section.visible) ?? [];
+}
+
+function sectionKey(category: string): string {
+  return category
+    .replace(/([a-z])([A-Z])/g, "$1-$2")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+}
+
+function capabilityTabId(category: CapabilitySectionCategory): CapabilityTabId {
+  return `cap:${sectionKey(category)}` as CapabilityTabId;
+}
+
+function isCapabilityTab(tab: TabId): tab is CapabilityTabId {
+  return tab.startsWith("cap:");
+}
+
+function signalMap(signals: CapabilitySignalSnapshot[]): Map<string, CapabilitySignalSnapshot> {
+  return new Map(signals.map((signal) => [signal.key, signal]));
+}
+
+function isOperationalSignal(signal: CapabilitySignalSnapshot): boolean {
+  return signal.confidence !== "Candidate" && signal.confidence !== "Rejected" && signal.failure_policy !== "DoNotPoll";
+}
+
+function signalsForSection(section: CapabilitySection, signals: CapabilitySignalSnapshot[]): CapabilitySignalSnapshot[] {
+  const byKey = signalMap(signals);
+  const selected = section.signal_keys
+    .map((key) => byKey.get(key))
+    .filter((signal): signal is CapabilitySignalSnapshot => signal != null);
+
+  if (section.category === "Discovery") {
+    return selected.filter((signal) => signal.confidence === "Candidate");
+  }
+  if (section.category === "Evidence") {
+    return selected;
+  }
+  if (section.category === "Diagnostics" || section.category === "ActiveTests") {
+    return selected;
+  }
+  return selected.filter(isOperationalSignal);
+}
+
+function capabilitySectionForTab(snapshot: DiagnosticSnapshot, tab: TabId): CapabilitySection | undefined {
+  if (!isCapabilityTab(tab)) return undefined;
+  const suffix = tab.replace(/^cap:/, "");
+  return capabilitySections(snapshot).find((section) => sectionKey(section.category) === suffix);
+}
+
+function capabilitySectionIcon(category: CapabilitySectionCategory): React.ReactNode {
+  switch (category) {
+    case "Powertrain":
+      return <Gauge size={14} />;
+    case "Turbo":
+      return <Activity size={14} />;
+    case "Fuel":
+      return <Fuel size={14} />;
+    case "Transmission":
+      return <Table2 size={14} />;
+    case "Body":
+      return <Cable size={14} />;
+    case "Chassis":
+      return <ShieldAlert size={14} />;
+    case "Emissions":
+      return <Wind size={14} />;
+    case "Discovery":
+      return <ListTree size={14} />;
+    case "Diagnostics":
+      return <FileText size={14} />;
+    case "ActiveTests":
+      return <LockKeyhole size={14} />;
+    case "Evidence":
+      return <Database size={14} />;
+    case "Replay":
+      return <Play size={14} />;
+    case "Raw":
+      return <Database size={14} />;
+    case "Settings":
+      return <Settings size={14} />;
+    default:
+      return <Gauge size={14} />;
+  }
+}
+
+function runtimeTone(signal: CapabilitySignalSnapshot): "ok" | "warn" | "crit" | "muted" {
+  if (signal.confidence === "Rejected" || signal.failure_policy === "DoNotPoll") return "muted";
+  if (signal.state === "ok") return "ok";
+  if (signal.state === "cached" || signal.state === "waiting" || signal.confidence === "Candidate") return "warn";
+  if (signal.state === "error") return "crit";
+  return "muted";
+}
+
 function isTauriRuntime(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
 
 function initialSnapshot(): DiagnosticSnapshot {
-  if (!isTauriRuntime()) return fallbackSnapshot;
+  if (!isTauriRuntime()) {
+    const fixture = new URLSearchParams(window.location.search).get("fixture");
+    if (fixture === "generic-obd") return genericObdSnapshot;
+    if (fixture === "gas-no-turbo") return gasNoTurboSnapshot;
+    if (fixture === "transmission") return transmissionSnapshot;
+    return fallbackSnapshot;
+  }
   return {
     ...fallbackSnapshot,
     connection: "connecting live",
@@ -117,6 +243,12 @@ function pressure(valuePsi: number | null, units: UnitMode): string {
   return `${valuePsi.toFixed(1)} psi`;
 }
 
+function pressureFromKpa(valueKpa: number | null, units: UnitMode): string {
+  if (valueKpa == null) return "--";
+  if (units === "metric") return `${valueKpa.toFixed(0)} kPa`;
+  return `${(valueKpa / 6.894757).toFixed(1)} psi`;
+}
+
 function temperature(valueF: number | null, units: UnitMode): string {
   if (valueF == null) return "--";
   if (units === "metric") return `${fahrenheitToCelsius(valueF).toFixed(1)} C`;
@@ -125,6 +257,47 @@ function temperature(valueF: number | null, units: UnitMode): string {
 
 function maf(valueGramsPerSec: number): string {
   return `${valueGramsPerSec.toFixed(1)} g/s`;
+}
+
+function signalDisplayValue(signal: CapabilitySignalSnapshot, units: UnitMode): string {
+  if (signal.value == null) {
+    if (signal.state === "unsupported") return "unsupported";
+    if (signal.state === "error") return "ERR";
+    return "--";
+  }
+
+  const unit = signal.unit.trim();
+  if (unit === "psi") return pressure(signal.value, units);
+  if (unit === "kPa" || unit === "kPa abs") return pressureFromKpa(signal.value, units);
+  if (unit === "F") return temperature(signal.value, units);
+  if (unit === "g/s") return maf(signal.value);
+  if (unit === "%") return `${signal.value.toFixed(1)}%`;
+  if (unit === "V") return `${signal.value.toFixed(1)} V`;
+  if (unit === "rpm") return `${signal.value.toFixed(0)} rpm`;
+  if (unit === "mph") return `${signal.value.toFixed(1)} mph`;
+  if (unit === "mm3") return `${formatSigned(signal.value, 1)} mm3`;
+  if (unit.length === 0) return signal.value.toFixed(1);
+  return `${signal.value.toFixed(1)} ${unit}`;
+}
+
+function signalSummary(signal: CapabilitySignalSnapshot, units: UnitMode): string {
+  return `${signal.label} ${signalDisplayValue(signal, units)}`;
+}
+
+type PairSignal = CapabilitySignalSnapshot & {
+  composition: Extract<CapabilitySignalSnapshot["composition"], { kind: "pair" }>;
+};
+
+type TableRowSignal = CapabilitySignalSnapshot & {
+  composition: Extract<CapabilitySignalSnapshot["composition"], { kind: "table_row" }>;
+};
+
+function isPairSignal(signal: CapabilitySignalSnapshot): signal is PairSignal {
+  return signal.composition.kind === "pair";
+}
+
+function isTableRowSignal(signal: CapabilitySignalSnapshot): signal is TableRowSignal {
+  return signal.composition.kind === "table_row";
 }
 
 function formatBytes(bytes: number): string {
@@ -559,6 +732,50 @@ function CategoryRail({
   );
 }
 
+function capabilitySectionSummary(
+  section: CapabilitySection,
+  sectionSignals: CapabilitySignalSnapshot[],
+  snapshot: DiagnosticSnapshot,
+  unitMode: UnitMode,
+  replayMode: boolean,
+  replayRunning: boolean,
+  replayPaused: boolean,
+  selectedRecording: RecordingSummary | null,
+): string {
+  if (section.category === "Diagnostics") {
+    const alertLabel = snapshot.alerts.length === 1 ? "alert" : "alerts";
+    return `${snapshot.dtcs.length} DTC / ${snapshot.alerts.length} ${alertLabel}`;
+  }
+  if (section.category === "ActiveTests") {
+    const tests = capabilitySnapshot(snapshot).active_tests_v2 ?? [];
+    if (tests.length === 0) return "none";
+    const locked = tests.filter((test) => test.command_profile === "Locked" || !test.actionable).length;
+    return locked === tests.length ? "locked" : `${tests.length - locked} ready / ${locked} locked`;
+  }
+  if (section.category === "Evidence") {
+    return `${snapshot.poll_ms} ms snapshot`;
+  }
+  if (section.category === "Discovery") {
+    return `${sectionSignals.length} candidate${sectionSignals.length === 1 ? "" : "s"}`;
+  }
+  if (sectionSignals.length === 0) return "no live signals";
+  if (sectionSignals.length === 1) return signalSummary(sectionSignals[0], unitMode);
+  return sectionSignals.slice(0, 2).map((signal) => signalDisplayValue(signal, unitMode)).join(" / ");
+}
+
+function replaySummary(
+  replayMode: boolean,
+  replayRunning: boolean,
+  replayPaused: boolean,
+  selectedRecording: RecordingSummary | null,
+): string {
+  if (selectedRecording) {
+    if (replayRunning) return replayPaused ? "paused" : "playing";
+    return "loaded";
+  }
+  return replayMode ? "active" : "open file";
+}
+
 function StatusStrip({
   snapshot,
   recording,
@@ -622,285 +839,98 @@ function StatusStrip({
   );
 }
 
-function VgtPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
-  const errorState =
-    Math.abs(snapshot.vgt.error_pct) <= 3
-      ? "text-emerald-300"
-      : Math.abs(snapshot.vgt.error_pct) <= 5
-        ? "text-amber-300"
-        : "text-red-400";
+function GenericActiveTestsPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
+  const tests = capabilitySnapshot(snapshot).active_tests_v2 ?? [];
+
+  if (tests.length === 0) {
+    return (
+      <Panel title="Active tests" icon={<SlidersHorizontal size={14} />}>
+        <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-3 text-sm text-zinc-400">
+          No active tests are exposed by this vehicle profile.
+        </div>
+      </Panel>
+    );
+  }
 
   return (
-    <Panel title="Enhanced PIDs" icon={<Activity size={14} />} className="min-h-[430px]">
-      <div className="grid min-h-[340px] content-start gap-3">
-        <div className="rounded-md border border-zinc-800 bg-black/25 p-3">
-          <div className="text-[11px] uppercase text-zinc-400">VGT vane position</div>
-          <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-            <GaugeMetric label="Actual" value={`${snapshot.vgt.actual_pct.toFixed(1)}%`} tone="cyan" />
-            <GaugeMetric label="Desired" value={`${snapshot.vgt.desired_pct.toFixed(1)}%`} tone="emerald" />
-            <div>
-              <div className="text-[11px] text-zinc-400">Error</div>
-              <div className={`mt-1 text-2xl font-semibold ${errorState}`}>
-                {formatSigned(snapshot.vgt.error_pct, 1)}%
+    <div className="grid gap-3 xl:grid-cols-2">
+      {tests.map((test) => {
+        const locked = test.command_profile !== "Verified" || !test.actionable;
+        const lockReason = locked
+          ? `Command profile is ${test.command_profile}; evidence policy ${test.evidence_policy}.`
+          : `${test.safety_class} command profile is available.`;
+        return (
+          <Panel title={test.label} icon={<SlidersHorizontal size={14} />} key={test.key} className="min-h-[420px]">
+            <div className={`rounded-md border px-3 py-3 ${
+              locked
+                ? "border-amber-500/30 bg-amber-500/10"
+                : "border-emerald-500/30 bg-emerald-500/10"
+            }`}>
+              <div className={`flex items-center gap-2 text-sm font-semibold ${locked ? "text-amber-100" : "text-emerald-100"}`}>
+                {locked ? <LockKeyhole size={15} /> : <ShieldAlert size={15} />}
+                {locked ? "Locked active test" : "Verified active test"}
+              </div>
+              <div className={`mt-2 text-xs leading-5 ${locked ? "text-amber-200" : "text-emerald-200"}`}>
+                {lockReason}
               </div>
             </div>
-          </div>
-        </div>
-        <CylinderTable cylinders={snapshot.cylinders} />
-      </div>
-    </Panel>
-  );
-}
 
-function ActiveTestsPanel({
-  snapshot,
-  latestResult,
-  setLatestResult,
-}: {
-  snapshot: DiagnosticSnapshot;
-  latestResult: ActiveTestResult | null;
-  setLatestResult: (result: ActiveTestResult | null) => void;
-}) {
-  const [manualPercent, setManualPercent] = useState("35.0");
-  const [pending, setPending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const vgt = snapshot.active_tests.vgt_vane;
-  const displayedResult = latestResult ?? vgt.last_result;
-
-  const recordAttempt = useCallback(
-    async (command: ActiveTestCommand) => {
-      setPending(true);
-      setError(null);
-      try {
-        const result = await invoke<ActiveTestResult>("request_active_test", { command });
-        setLatestResult(result);
-      } catch (caught) {
-        setError(caught instanceof Error ? caught.message : String(caught));
-      } finally {
-        setPending(false);
-      }
-    },
-    [setLatestResult],
-  );
-
-  const parsedPercent = Number.parseFloat(manualPercent);
-  const manualShapeValid = Number.isFinite(parsedPercent) && parsedPercent >= 0 && parsedPercent <= 100;
-  const locked = vgt.definition.locked;
-
-  return (
-    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
-      <Panel title="VGT active test" icon={<SlidersHorizontal size={14} />} className="min-h-[520px]">
-        <div className="grid gap-3 lg:grid-cols-3">
-          <Readout label="Actual vane" value={`${snapshot.vgt.actual_pct.toFixed(1)}%`} />
-          <Readout label="Desired vane" value={`${snapshot.vgt.desired_pct.toFixed(1)}%`} />
-          <Readout label="Vane error" value={`${formatSigned(snapshot.vgt.error_pct, 1)}%`} />
-        </div>
-        <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-          <Readout label="Coolant" value={temperature(snapshot.temperatures.coolant_f, "us")} />
-          <Readout label="RPM" value={`${snapshot.rpm}`} />
-          <Readout label="Speed" value={`${snapshot.speed_mph} mph`} />
-          <Readout label="Voltage" value={`${snapshot.voltage.toFixed(1)} V`} />
-        </div>
-
-        <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
-          <div className="flex items-center gap-2 text-sm font-semibold text-amber-100">
-            <LockKeyhole size={15} />
-            Locked: {vgt.definition.command_profile}
-          </div>
-          <div className="mt-2 text-xs leading-5 text-amber-200">{vgt.definition.lock_reason}</div>
-        </div>
-
-        <div className="mt-4 grid gap-3 lg:grid-cols-2">
-          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-400">TC Learn ON/OFF</div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-300 hover:border-zinc-500 disabled:cursor-wait disabled:text-zinc-600"
-                disabled={pending}
-                onClick={() => void recordAttempt({ kind: "vgt_tc_learn", enabled: true })}
-              >
-                <LockKeyhole size={14} />
-                Record blocked ON
-              </button>
-              <button
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-300 hover:border-zinc-500 disabled:cursor-wait disabled:text-zinc-600"
-                disabled={pending}
-                onClick={() => void recordAttempt({ kind: "vgt_tc_learn", enabled: false })}
-              >
-                <LockKeyhole size={14} />
-                Record blocked OFF
-              </button>
-            </div>
-          </section>
-
-          <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
-            <div className="text-[11px] font-semibold uppercase text-zinc-400">Manual vane percent</div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <input
-                aria-label="Manual VGT vane percent"
-                className="h-9 w-28 rounded-md border border-zinc-700 bg-zinc-950 px-3 text-sm font-semibold text-zinc-100 outline-none focus:border-cyan-400/70"
-                inputMode="decimal"
-                value={manualPercent}
-                onChange={(event) => setManualPercent(event.currentTarget.value)}
-              />
-              <span className="text-sm text-zinc-400">%</span>
-              <button
-                className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-300 hover:border-zinc-500 disabled:cursor-not-allowed disabled:text-zinc-600"
-                disabled={pending || !manualShapeValid}
-                onClick={() =>
-                  void recordAttempt({
-                    kind: "vgt_manual_percent",
-                    percent: parsedPercent,
-                    hold_ms: 1_000,
-                  })
-                }
-              >
-                <LockKeyhole size={14} />
-                Record blocked request
-              </button>
-            </div>
-            {!manualShapeValid ? <div className="mt-2 text-xs text-red-400">Enter 0.0 to 100.0.</div> : null}
-          </section>
-        </div>
-
-        {error ? (
-          <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
-            {error}
-          </div>
-        ) : null}
-        {displayedResult ? (
-          <div className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3 text-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <span className={displayedResult.accepted ? "font-semibold text-emerald-300" : "font-semibold text-amber-300"}>
-                {displayedResult.accepted ? "Accepted" : "Blocked"}: {displayedResult.label}
-              </span>
-              <span className="font-mono text-xs text-zinc-400">{displayedResult.status}</span>
-            </div>
-            <div className="mt-2 text-xs leading-5 text-zinc-400">{displayedResult.detail}</div>
-            {displayedResult.evidence_path ? (
-              <div className="mt-2 break-all font-mono text-[11px] text-cyan-200">{displayedResult.evidence_path}</div>
-            ) : null}
-          </div>
-        ) : null}
-      </Panel>
-
-      <Panel title="Safety gates" icon={<ShieldAlert size={14} />} className="min-h-[520px]">
-        <div className="space-y-2">
-          {vgt.preconditions.map((item) => (
-            <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-2" key={item.label}>
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-sm font-semibold text-zinc-200">{item.label}</span>
-                <span className={item.satisfied ? "text-xs font-semibold text-emerald-300" : "text-xs font-semibold text-amber-300"}>
-                  {item.satisfied ? "ready" : "blocked"}
-                </span>
-              </div>
-              <div className="mt-1 text-xs leading-5 text-zinc-400">{item.detail}</div>
-            </div>
-          ))}
-        </div>
-        <div className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3">
-          <div className="text-[11px] font-semibold uppercase text-zinc-400">Supported modes</div>
-          <div className="mt-2 space-y-1 text-xs leading-5 text-zinc-400">
-            {vgt.definition.supported_modes.map((mode) => (
-              <div key={mode}>{mode}</div>
-            ))}
-          </div>
-        </div>
-        <div className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3">
-          <div className="text-[11px] font-semibold uppercase text-zinc-400">Execution guardrails</div>
-          <div className="mt-2 space-y-1 text-xs leading-5 text-zinc-400">
-            {vgt.definition.safety_notes.map((note) => (
-              <div key={note}>{note}</div>
-            ))}
-          </div>
-        </div>
-        {locked ? null : (
-          <div className="mt-4 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
-            Command profile loaded.
-          </div>
-        )}
-      </Panel>
-    </div>
-  );
-}
-
-function GaugeMetric({ label, value, tone }: { label: string; value: string; tone: "cyan" | "emerald" }) {
-  const color = tone === "cyan" ? "text-cyan-200" : "text-emerald-300";
-  return (
-    <div>
-      <div className="text-[11px] text-zinc-400">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold ${color}`}>{value}</div>
-    </div>
-  );
-}
-
-function CylinderTable({ cylinders }: { cylinders: CylinderBalance[] }) {
-  return (
-    <div className="rounded-md border border-zinc-800 bg-black/25 p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-[11px] uppercase text-zinc-400">Injector balance</div>
-        <div className="text-[11px] text-zinc-400">mm3</div>
-      </div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[520px] table-fixed border-collapse text-sm">
-          <thead>
-            <tr>
-              <th className="border border-zinc-800 px-2 py-1 text-left text-[11px] font-medium text-zinc-400">
-                Cyl
-              </th>
-              {cylinders.map((item) => (
-                <th
-                  className="border border-zinc-800 px-2 py-1 text-center text-[11px] font-medium text-zinc-400"
-                  key={item.cylinder}
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+                <div className="text-[11px] font-semibold uppercase text-zinc-400">Command profile</div>
+                <div className="mt-2 space-y-1 text-xs leading-5 text-zinc-400">
+                  <div>Safety class: {test.safety_class}</div>
+                  <div>Timeout: {test.timeout_ms} ms</div>
+                  <div>Cancel available: {test.cancel_available ? "yes" : "no"}</div>
+                </div>
+                <button
+                  className="mt-3 inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-500 disabled:cursor-not-allowed"
+                  disabled
+                  type="button"
                 >
-                  {item.cylinder}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            <tr>
-              <td className="border border-zinc-800 px-2 py-2 text-xs text-zinc-400">mm3</td>
-              {cylinders.map((item) => {
-                const tone =
-                  Math.abs(item.mm3) >= 4
-                    ? "text-red-400"
-                    : Math.abs(item.mm3) >= 2
-                      ? "text-amber-300"
-                      : "text-cyan-200";
-                return (
-                  <td className={`border border-zinc-800 px-2 py-2 text-center font-semibold ${tone}`} key={item.cylinder}>
-                    {formatSigned(item.mm3)}
-                  </td>
-                );
-              })}
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+                  <LockKeyhole size={14} />
+                  {locked ? "Command disabled" : "Command UI pending"}
+                </button>
+              </section>
 
-function FuelRailPanel({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot; unitMode: UnitMode }) {
-  return (
-    <Panel title="Fuel rail" icon={<Fuel size={14} />}>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-        <Readout label="Actual" value={pressure(snapshot.fuel_rail.actual_psi, unitMode)} />
-        <Readout label="Desired" value={pressure(snapshot.fuel_rail.desired_psi, unitMode)} muted={snapshot.fuel_rail.desired_psi == null} />
-        <Readout label="Delta" value={pressure(snapshot.fuel_rail.delta_psi, unitMode)} muted={snapshot.fuel_rail.delta_psi == null} />
-      </div>
-      {snapshot.fuel_rail.desired_psi == null ? (
-        <div className="mt-3 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-          Waiting for GM Class 2 $22 163D 01.
-        </div>
-      ) : null}
-      <div className="mt-3 grid gap-2">
-        <EvidenceLine evidence={evidenceFor(snapshot, "fuel_rail_actual")} />
-        <EvidenceLine evidence={evidenceFor(snapshot, "fuel_rail_actual_gm")} />
-        <EvidenceLine evidence={evidenceFor(snapshot, "fuel_rail_desired")} />
-      </div>
-    </Panel>
+              <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
+                <div className="text-[11px] font-semibold uppercase text-zinc-400">Evidence policy</div>
+                <div className="mt-2 space-y-1 text-xs leading-5 text-zinc-400">
+                  <div>{test.evidence_policy}</div>
+                  <div>{locked ? "No request payload can be constructed from this card." : "Commands must record request and response bytes."}</div>
+                </div>
+              </section>
+            </div>
+
+            <section className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3">
+              <div className="text-[11px] font-semibold uppercase text-zinc-400">Safety gates</div>
+              <div className="mt-2 space-y-2">
+                {test.preconditions.map((item) => (
+                  <div className="rounded-md border border-zinc-800 px-3 py-2" key={item.label}>
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-zinc-200">{item.label}</span>
+                      <span className={item.satisfied ? "text-xs font-semibold text-emerald-300" : "text-xs font-semibold text-amber-300"}>
+                        {item.satisfied ? "ready" : "blocked"}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-xs leading-5 text-zinc-400">{item.detail}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {test.last_result ? (
+              <div className="mt-4 rounded-md border border-zinc-800 bg-black/25 p-3 text-sm">
+                <div className={test.last_result.accepted ? "font-semibold text-emerald-300" : "font-semibold text-amber-300"}>
+                  {test.last_result.accepted ? "Accepted" : "Blocked"}: {test.last_result.label}
+                </div>
+                <div className="mt-2 text-xs leading-5 text-zinc-400">{test.last_result.detail}</div>
+              </div>
+            ) : null}
+          </Panel>
+        );
+      })}
+    </div>
   );
 }
 
@@ -940,8 +970,49 @@ function scanClass(value: string): string {
   return "py-2 text-amber-300";
 }
 
-function evidenceFor(snapshot: DiagnosticSnapshot, key: string): SignalEvidence | undefined {
-  return snapshot.source_confidence.find((item) => item.key === key);
+function DiagnosticServicesPanel({ services }: { services: DiagnosticServiceSnapshot[] }) {
+  if (services.length === 0) return null;
+  return (
+    <Panel title="Diagnostic services" icon={<FileText size={14} />}>
+      <div className="space-y-2">
+        {services.map((service) => (
+          <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-2 text-sm" key={service.key}>
+            <div className="flex items-center justify-between gap-3">
+              <span className="font-semibold text-zinc-200">{service.label}</span>
+              <span className={service.state === "ok" ? "text-xs font-semibold text-emerald-300" : "text-xs font-semibold text-amber-300"}>
+                {service.state}
+              </span>
+            </div>
+            <div className="mt-1 text-xs text-zinc-400">{service.module}</div>
+            <div className="mt-1 text-xs leading-5 text-zinc-400">{service.detail}</div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function DiagnosticsView({ snapshot }: { snapshot: DiagnosticSnapshot }) {
+  const services = capabilitySnapshot(snapshot).diagnostic_services ?? [];
+  return (
+    <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
+      <div className="flex flex-col gap-3">
+        <DtcPanel dtcs={snapshot.dtcs} />
+        <Panel title="Diagnostic status" icon={<ShieldAlert size={14} />}>
+          <div className="space-y-3 text-sm">
+            <SettingRow label="MIL" value={snapshot.statuses.find((item) => item.label === "MIL")?.value ?? "--"} />
+            <SettingRow label="DTC count" value={snapshot.dtcs.length.toString()} />
+            <SettingRow label="Modules" value={snapshot.modules.length.toString()} />
+          </div>
+        </Panel>
+      </div>
+      <div className="flex min-w-0 flex-col gap-3">
+        <ModuleScanPanel modules={snapshot.modules} />
+        <DiagnosticServicesPanel services={services} />
+      </div>
+      <AlertsPanel alerts={snapshot.alerts} />
+    </div>
+  );
 }
 
 function EvidenceLine({ evidence }: { evidence: SignalEvidence | undefined }) {
@@ -963,6 +1034,277 @@ function EvidenceLine({ evidence }: { evidence: SignalEvidence | undefined }) {
       </div>
       <div className="mt-1 font-mono text-[11px] text-cyan-200">{evidence.request}</div>
       {evidence.response ? <div className="mt-1 font-mono text-[11px] text-zinc-400">response {evidence.response}</div> : null}
+    </div>
+  );
+}
+
+function titleFromKey(key: string): string {
+  return key
+    .replace(/[_-]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .replace(/\bVgt\b/g, "VGT")
+    .replace(/\bMaf\b/g, "MAF")
+    .replace(/\bDtc\b/g, "DTC");
+}
+
+function GenericSignalReadout({ signal, unitMode }: { signal: CapabilitySignalSnapshot; unitMode: UnitMode }) {
+  const tone = runtimeTone(signal);
+  return (
+    <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-[11px] uppercase text-zinc-400" title={signal.label}>
+            {signal.label}
+          </div>
+          <div className={`mt-2 whitespace-nowrap text-xl font-semibold ${stateClasses[tone]}`}>
+            {signalDisplayValue(signal, unitMode)}
+          </div>
+        </div>
+        <span
+          className={`rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase ${
+            signal.confidence === "Candidate"
+              ? "border-amber-500/40 text-amber-300"
+              : signal.confidence === "Rejected"
+                ? "border-zinc-700 text-zinc-500"
+                : "border-zinc-700 text-zinc-400"
+          }`}
+        >
+          {signal.state}
+        </span>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-zinc-500">
+        <span>{signal.module}</span>
+        <span>{signal.confidence}</span>
+      </div>
+      {signal.evidence ? (
+        <div className="mt-3">
+          <EvidenceLine evidence={signal.evidence} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function GenericScalarGrid({
+  signals,
+  unitMode,
+}: {
+  signals: CapabilitySignalSnapshot[];
+  unitMode: UnitMode;
+}) {
+  return (
+    <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+      {signals.map((signal) => (
+        <GenericSignalReadout key={signal.key} signal={signal} unitMode={unitMode} />
+      ))}
+    </div>
+  );
+}
+
+function GenericPairPanel({
+  groupKey,
+  signals,
+  unitMode,
+}: {
+  groupKey: string;
+  signals: CapabilitySignalSnapshot[];
+  unitMode: UnitMode;
+}) {
+  const roleOrder: Record<string, number> = { actual: 0, desired: 1, error: 2, delta: 3 };
+  const sorted = [...signals].sort((a, b) => {
+    const aRole = a.composition.kind === "pair" ? a.composition.role : "";
+    const bRole = b.composition.kind === "pair" ? b.composition.role : "";
+    return (roleOrder[aRole] ?? 99) - (roleOrder[bRole] ?? 99);
+  });
+  const title = sorted.find((signal): signal is PairSignal => isPairSignal(signal) && signal.composition.group_label != null)
+    ?.composition.group_label ?? titleFromKey(groupKey);
+
+  return (
+    <Panel title={title} icon={<Activity size={14} />}>
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {sorted.map((signal) => (
+          <GenericSignalReadout key={signal.key} signal={signal} unitMode={unitMode} />
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
+function GenericTablePanel({
+  tableKey,
+  signals,
+  unitMode,
+}: {
+  tableKey: string;
+  signals: CapabilitySignalSnapshot[];
+  unitMode: UnitMode;
+}) {
+  const sorted = [...signals].sort((a, b) => {
+    const aIndex = a.composition.kind === "table_row" ? a.composition.row_index : 0;
+    const bIndex = b.composition.kind === "table_row" ? b.composition.row_index : 0;
+    return aIndex - bIndex;
+  });
+  const title = sorted.find((signal): signal is TableRowSignal => isTableRowSignal(signal) && signal.composition.table_label != null)
+    ?.composition.table_label ?? titleFromKey(tableKey);
+  const unit = sorted.find((signal) => signal.unit)?.unit ?? "";
+
+  return (
+    <Panel title={title} icon={<Table2 size={14} />}>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[520px] table-fixed border-collapse text-sm">
+          <thead>
+            <tr>
+              <th className="border border-zinc-800 px-2 py-1 text-left text-[11px] font-medium text-zinc-400">
+                Signal
+              </th>
+              {sorted.map((signal) => {
+                const row = signal.composition.kind === "table_row" ? signal.composition.row_label : signal.label;
+                return (
+                  <th
+                    className="border border-zinc-800 px-2 py-1 text-center text-[11px] font-medium text-zinc-400"
+                    key={signal.key}
+                  >
+                    {row}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td className="border border-zinc-800 px-2 py-2 text-xs text-zinc-400">{unit}</td>
+              {sorted.map((signal) => (
+                <td className={`border border-zinc-800 px-2 py-2 text-center font-semibold ${stateClasses[runtimeTone(signal)]}`} key={signal.key}>
+                  {signalDisplayValue(signal, unitMode)}
+                </td>
+              ))}
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </Panel>
+  );
+}
+
+function GenericDerivedPanel({
+  signals,
+  unitMode,
+}: {
+  signals: CapabilitySignalSnapshot[];
+  unitMode: UnitMode;
+}) {
+  return (
+    <Panel title="Derived signals" icon={<Zap size={14} />}>
+      <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-3">
+        {signals.map((signal) => {
+          const formula = signal.composition.kind === "derived" ? signal.composition.formula_key : "derived";
+          return (
+            <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-3" key={signal.key}>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[11px] uppercase text-zinc-400">{signal.label}</span>
+                <span className="font-mono text-[10px] text-zinc-500">{formula}</span>
+              </div>
+              <div className={`mt-2 text-xl font-semibold ${stateClasses[runtimeTone(signal)]}`}>
+                {signalDisplayValue(signal, unitMode)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+function CapabilitySectionView({
+  section,
+  signals,
+  unitMode,
+}: {
+  section: CapabilitySection;
+  signals: CapabilitySignalSnapshot[];
+  unitMode: UnitMode;
+}) {
+  const sectionSignals = signalsForSection(section, signals);
+  const pairs = new Map<string, CapabilitySignalSnapshot[]>();
+  const tables = new Map<string, CapabilitySignalSnapshot[]>();
+  const derived: CapabilitySignalSnapshot[] = [];
+  const scalars: CapabilitySignalSnapshot[] = [];
+
+  for (const signal of sectionSignals) {
+    if (signal.composition.kind === "pair") {
+      const group = pairs.get(signal.composition.group_key) ?? [];
+      group.push(signal);
+      pairs.set(signal.composition.group_key, group);
+    } else if (signal.composition.kind === "table_row") {
+      const group = tables.get(signal.composition.table_key) ?? [];
+      group.push(signal);
+      tables.set(signal.composition.table_key, group);
+    } else if (signal.composition.kind === "derived") {
+      derived.push(signal);
+    } else {
+      scalars.push(signal);
+    }
+  }
+
+  if (sectionSignals.length === 0) {
+    return (
+      <Panel title={section.label} icon={capabilitySectionIcon(section.category)}>
+        <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-3 text-sm text-zinc-400">
+          No supported signals in this section.
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-3" data-testid={`capability-section-${sectionKey(section.category)}`}>
+      {scalars.length > 0 ? (
+        <Panel title={section.label} icon={capabilitySectionIcon(section.category)}>
+          <GenericScalarGrid signals={scalars} unitMode={unitMode} />
+        </Panel>
+      ) : null}
+      {[...pairs.entries()].map(([groupKey, groupSignals]) => (
+        <GenericPairPanel groupKey={groupKey} key={groupKey} signals={groupSignals} unitMode={unitMode} />
+      ))}
+      {[...tables.entries()].map(([tableKey, tableSignals]) => (
+        <GenericTablePanel key={tableKey} tableKey={tableKey} signals={tableSignals} unitMode={unitMode} />
+      ))}
+      {derived.length > 0 ? <GenericDerivedPanel signals={derived} unitMode={unitMode} /> : null}
+    </div>
+  );
+}
+
+function CapabilityOverviewView({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot; unitMode: UnitMode }) {
+  const signals = capabilitySignals(snapshot);
+  const sections = capabilitySections(snapshot).filter((section) => {
+    if (section.category === "Diagnostics" || section.category === "ActiveTests" || section.category === "Evidence") {
+      return false;
+    }
+    return signalsForSection(section, signals).length > 0;
+  });
+
+  if (sections.length === 0) {
+    return (
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <AlertsPanel alerts={snapshot.alerts} />
+        <DtcPanel dtcs={snapshot.dtcs} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="flex min-w-0 flex-col gap-3">
+          {sections.slice(0, 3).map((section) => (
+            <CapabilitySectionView key={section.category} section={section} signals={signals} unitMode={unitMode} />
+          ))}
+        </div>
+        <div className="flex flex-col gap-3">
+          <DtcPanel dtcs={snapshot.dtcs} />
+          <AlertsPanel alerts={snapshot.alerts} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -1004,67 +1346,6 @@ function Readout({
   );
 }
 
-function LiveReadouts({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot; unitMode: UnitMode }) {
-  return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-      <Panel title="Intake MAP" icon={<Gauge size={14} />}>
-        <Readout label="Manifold absolute" value={pressure(snapshot.map_psi, unitMode)} />
-      </Panel>
-      <Panel title="Desired MAP" icon={<Gauge size={14} />}>
-        <Readout
-          label="GM $22 1542 01 candidate"
-          value={snapshot.desired_map_psi == null ? "unverified" : pressure(snapshot.desired_map_psi, unitMode)}
-          muted={snapshot.desired_map_psi == null}
-        />
-        <div className="mt-3">
-          <EvidenceLine evidence={evidenceFor(snapshot, "desired_map")} />
-        </div>
-      </Panel>
-      <Panel title="Barometer" icon={<Gauge size={14} />}>
-        <Readout
-          label="GM $22 1251 01 candidate"
-          value={pressure(snapshot.barometric_psi, unitMode)}
-          muted={snapshot.barometric_psi == null}
-        />
-        <div className="mt-3">
-          <EvidenceLine evidence={evidenceFor(snapshot, "barometric_pressure_gm")} />
-        </div>
-      </Panel>
-      <Panel title="Boost" icon={<Zap size={14} />}>
-        <Readout label="Derived boost" value={pressure(snapshot.boost_psi, unitMode)} />
-      </Panel>
-      <Panel title="MAF" icon={<Wind size={14} />}>
-        <Readout label="Mass air flow" value={maf(snapshot.maf_g_s)} />
-      </Panel>
-    </div>
-  );
-}
-
-function TemperaturePanel({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot; unitMode: UnitMode }) {
-  const rows = [
-    ["Coolant", snapshot.temperatures.coolant_f],
-    ["Intake Air", snapshot.temperatures.intake_air_f],
-    ["Oil", snapshot.temperatures.oil_f],
-    ["Trans", snapshot.temperatures.trans_f],
-    ["Ambient", snapshot.temperatures.ambient_f],
-  ] as const;
-
-  return (
-    <Panel title="Temperatures" icon={<Thermometer size={14} />}>
-      <div className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
-        {rows.map(([label, value]) => (
-          <div className="flex items-center justify-between border-b border-zinc-800 pb-2" key={label}>
-            <span className="text-sm text-zinc-400">{label}</span>
-            <span className={value == null ? "text-sm font-semibold text-zinc-400" : "text-sm font-semibold text-emerald-300"}>
-              {temperature(value, unitMode)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </Panel>
-  );
-}
-
 function DtcPanel({ dtcs }: { dtcs: DtcSnapshot[] }) {
   const pendingCount = dtcs.filter((dtc) => dtc.status.includes("pending")).length;
   const currentCount = dtcs.filter((dtc) => dtc.status.includes("current")).length;
@@ -1103,52 +1384,13 @@ function DtcPanel({ dtcs }: { dtcs: DtcSnapshot[] }) {
   );
 }
 
-function ReadinessPanel() {
-  return (
-    <Panel title="Readiness" icon={<CircleDot size={14} />}>
-      <div className="flex items-center justify-between">
-        <span className="text-sm text-zinc-400">MIL</span>
-        <span className="text-sm font-semibold text-emerald-300">OFF</span>
-      </div>
-      <div className="mt-3 flex items-center justify-between">
-        <span className="text-sm text-zinc-400">Monitor data</span>
-        <span className="text-sm font-semibold text-zinc-400">waiting</span>
-      </div>
-      <div className="mt-4 h-2 rounded-full bg-zinc-900">
-        <div className="h-2 w-1/5 rounded-full bg-cyan-300" />
-      </div>
-    </Panel>
-  );
-}
-
-function ProtocolPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
-  return (
-    <Panel title="Protocol" icon={<Table2 size={14} />}>
-      <div className="space-y-3 text-sm">
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-          <span className="text-zinc-400">Bus</span>
-          <span className="font-semibold text-cyan-200">{snapshot.protocol}</span>
-        </div>
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-          <span className="text-zinc-400">Header</span>
-          <span className="font-semibold text-zinc-200">68 6A F1</span>
-        </div>
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-          <span className="text-zinc-400">Enhanced DTC</span>
-          <span className="font-semibold text-emerald-300">GM $19 live</span>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
 function RawPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
   const payload = useMemo(() => JSON.stringify(snapshot, null, 2), [snapshot]);
   return (
     <Panel
       title="Raw snapshot"
       icon={<Database size={14} />}
-      className="flex h-[calc(100vh-210px)] min-h-[520px] flex-col lg:h-[calc(100vh-156px)]"
+      className="flex h-[calc(100vh-144px)] min-h-[560px] flex-col"
       bodyClassName="flex min-h-0 flex-1 p-3"
       testId="raw-snapshot-panel"
     >
@@ -1414,7 +1656,6 @@ function App() {
   const [replayRunning, setReplayRunning] = useState(false);
   const [selectedRecording, setSelectedRecording] = useState<RecordingSummary | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
-  const [activeTestResult, setActiveTestResult] = useState<ActiveTestResult | null>(null);
 
   const refresh = useCallback(async () => {
     if (isTauriRuntime()) {
@@ -1476,57 +1717,67 @@ function App() {
   const tabs = useMemo<CategoryTab[]>(() => {
     const alertLabel = snapshot.alerts.length === 1 ? "alert" : "alerts";
     const dtcAlertSummary = `${snapshot.dtcs.length} DTC / ${snapshot.alerts.length} ${alertLabel}`;
-    const replaySummary = selectedRecording
-      ? replayRunning
-        ? replayPaused
-          ? "paused"
-          : "playing"
-        : "loaded"
-      : replayMode
-        ? "active"
-        : "open file";
+    const replayStateSummary = replaySummary(replayMode, replayRunning, replayPaused, selectedRecording);
 
-    return [
+    const signals = capabilitySignals(snapshot);
+    const nextTabs: CategoryTab[] = [
       {
         id: "overview",
         label: "Overview",
         summary: dtcAlertSummary,
         icon: <Gauge size={14} />,
       },
-      {
-        id: "air",
-        label: "Air / Boost",
-        summary: `${pressure(snapshot.boost_psi, unitMode)} / ${maf(snapshot.maf_g_s)}`,
-        icon: <Wind size={14} />,
-      },
-      {
-        id: "fuel",
-        label: "Fuel / VGT",
-        summary: `rail delta ${pressure(snapshot.fuel_rail.delta_psi, unitMode)}`,
-        icon: <Fuel size={14} />,
-      },
-      {
-        id: "active",
-        label: "Active Tests",
-        summary: snapshot.active_tests.vgt_vane.definition.locked ? "locked" : "ready",
-        icon: <LockKeyhole size={14} />,
-      },
-      {
-        id: "diagnostics",
-        label: "Diagnostics",
-        summary: dtcAlertSummary,
-        icon: <FileText size={14} />,
-      },
-      {
-        id: "thermal",
-        label: "Thermal / System",
-        summary: `${snapshot.voltage.toFixed(1)} V / ${temperature(snapshot.temperatures.coolant_f, unitMode)}`,
-        icon: <Thermometer size={14} />,
-      },
+    ];
+    const seen = new Set<TabId>(["overview"]);
+
+    for (const section of capabilitySections(snapshot)) {
+      const sectionSignals = signalsForSection(section, signals);
+      let id: TabId;
+      if (section.category === "Diagnostics") {
+        id = "diagnostics";
+      } else if (section.category === "ActiveTests") {
+        id = "active";
+      } else if (section.category === "Evidence") {
+        id = "raw";
+      } else if (section.category === "Replay") {
+        id = "replay";
+      } else if (section.category === "Raw") {
+        id = "raw";
+      } else if (section.category === "Settings") {
+        id = "settings";
+      } else {
+        id = capabilityTabId(section.category);
+      }
+
+      const hasSectionContent =
+        section.category === "Diagnostics" ||
+        section.category === "Evidence" ||
+        (section.category === "ActiveTests" && (capabilitySnapshot(snapshot).active_tests_v2?.length ?? 0) > 0) ||
+        sectionSignals.length > 0;
+      if (!hasSectionContent || seen.has(id)) continue;
+      seen.add(id);
+      nextTabs.push({
+        id,
+        label: section.label,
+        summary: capabilitySectionSummary(
+          section,
+          sectionSignals,
+          snapshot,
+          unitMode,
+          replayMode,
+          replayRunning,
+          replayPaused,
+          selectedRecording,
+        ),
+        icon: capabilitySectionIcon(section.category),
+      });
+    }
+
+    const utilityTabs: CategoryTab[] = [
       {
         id: "replay",
         label: "Replay",
-        summary: replaySummary,
+        summary: replayStateSummary,
         icon: replayMode ? <Radio size={14} /> : <Play size={14} />,
       },
       {
@@ -1542,8 +1793,21 @@ function App() {
         icon: <Settings size={14} />,
       },
     ];
+
+    for (const tab of utilityTabs) {
+      if (!seen.has(tab.id)) nextTabs.push(tab);
+    }
+
+    return nextTabs;
   }, [replayMode, replayPaused, replayRunning, selectedRecording, snapshot, unitMode]);
   const activeTabMeta = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
+  const activeCapabilitySection = capabilitySectionForTab(snapshot, activeTab);
+
+  useEffect(() => {
+    if (!tabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab("overview");
+    }
+  }, [activeTab, tabs]);
 
   return (
     <div className="min-h-screen bg-[#090b0d] text-zinc-100">
@@ -1569,7 +1833,15 @@ function App() {
             role="tabpanel"
             tabIndex={0}
           >
-            {activeTab === "raw" ? (
+            {activeTab === "overview" ? (
+              <CapabilityOverviewView snapshot={snapshot} unitMode={unitMode} />
+            ) : activeCapabilitySection ? (
+              <CapabilitySectionView
+                section={activeCapabilitySection}
+                signals={capabilitySignals(snapshot)}
+                unitMode={unitMode}
+              />
+            ) : activeTab === "raw" ? (
               <RawPanel snapshot={snapshot} />
             ) : activeTab === "settings" ? (
               <SettingsPanel snapshot={snapshot} unitMode={unitMode} setUnitMode={setUnitMode} />
@@ -1585,47 +1857,12 @@ function App() {
                 setReplayRunning={setReplayRunning}
                 exitReplay={exitReplay}
               />
-            ) : activeTab === "air" ? (
-              <div className="flex min-w-0 flex-col gap-3">
-                <LiveReadouts snapshot={snapshot} unitMode={unitMode} />
-              </div>
-            ) : activeTab === "fuel" ? (
-              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_420px]">
-                <VgtPanel snapshot={snapshot} />
-                <FuelRailPanel snapshot={snapshot} unitMode={unitMode} />
-              </div>
             ) : activeTab === "active" ? (
-              <ActiveTestsPanel
-                snapshot={snapshot}
-                latestResult={activeTestResult}
-                setLatestResult={setActiveTestResult}
-              />
+              <GenericActiveTestsPanel snapshot={snapshot} />
             ) : activeTab === "diagnostics" ? (
-              <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
-                <div className="flex flex-col gap-3">
-                  <DtcPanel dtcs={snapshot.dtcs} />
-                  <ReadinessPanel />
-                </div>
-                <ModuleScanPanel modules={snapshot.modules} />
-                <AlertsPanel alerts={snapshot.alerts} />
-              </div>
-            ) : activeTab === "thermal" ? (
-              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <TemperaturePanel snapshot={snapshot} unitMode={unitMode} />
-                <ProtocolPanel snapshot={snapshot} />
-              </div>
+              <DiagnosticsView snapshot={snapshot} />
             ) : (
-              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="flex min-w-0 flex-col gap-3">
-                  <LiveReadouts snapshot={snapshot} unitMode={unitMode} />
-                  <FuelRailPanel snapshot={snapshot} unitMode={unitMode} />
-                  <TemperaturePanel snapshot={snapshot} unitMode={unitMode} />
-                </div>
-                <div className="flex flex-col gap-3">
-                  <DtcPanel dtcs={snapshot.dtcs} />
-                  <AlertsPanel alerts={snapshot.alerts} />
-                </div>
-              </div>
+              <CapabilityOverviewView snapshot={snapshot} unitMode={unitMode} />
             )}
           </section>
         </div>

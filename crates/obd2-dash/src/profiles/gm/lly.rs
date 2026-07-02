@@ -14,9 +14,10 @@ use super::super::model::{
     ActiveTestDefinition, AddressState, AddressTemplate, BackoffPolicy, BusDefinition, BusKey,
     Confidence, DecodedDtc, DecodedSignal, DiagnosticProfile, DtcServiceDefinition, EvidencePolicy,
     FailurePolicy, J1850HeaderConvention, Manufacturer, ModuleDefinition, ModuleKey, ModuleMap,
-    ModuleSafetyClass, PassiveMonitorDefinition, PollCadence, ProfileDecodeError, ProfileId,
-    ProfileMatch, Provenance, RouteDefinition, RouteSet, RxdSource, SignalCategory,
-    SignalDefinition, SourceFields, StandardPidOverride, StandardPidPolicy, VehicleContext,
+    ModuleSafetyClass, PairRole, PassiveMonitorDefinition, PollCadence, ProfileDecodeError,
+    ProfileId, ProfileMatch, Provenance, RouteDefinition, RouteSet, RxdSource, SignalCategory,
+    SignalComposition, SignalDefinition, SignalDisplayDefinition, SignalDisplaySource,
+    SourceFields, StandardPidOverride, StandardPidPolicy, VehicleContext,
 };
 use super::super::selection::validate_vin_charset;
 use super::active;
@@ -148,6 +149,56 @@ macro_rules! lly_signal {
             evidence_policy: EvidencePolicy::OnError,
             failure_policy: $failure,
             preferred_over: $preferred_over,
+        }
+    };
+}
+
+macro_rules! display_profile {
+    ($key:literal, $label:literal, $category:expr, $unit:literal, $composition:expr) => {
+        SignalDisplayDefinition {
+            key: $key,
+            label: $label,
+            category: $category,
+            unit: $unit,
+            source: SignalDisplaySource::ProfileSignal($key),
+            composition: $composition,
+        }
+    };
+}
+
+macro_rules! display_standard {
+    ($key:literal, $label:literal, $category:expr, $pid:expr, $unit:literal, $composition:expr) => {
+        SignalDisplayDefinition {
+            key: $key,
+            label: $label,
+            category: $category,
+            unit: $unit,
+            source: SignalDisplaySource::StandardPid($pid),
+            composition: $composition,
+        }
+    };
+}
+
+macro_rules! display_derived {
+    (
+        $key:literal,
+        $label:literal,
+        $category:expr,
+        $unit:literal,
+        $formula:literal,
+        $inputs:expr,
+        $composition:expr
+    ) => {
+        SignalDisplayDefinition {
+            key: $key,
+            label: $label,
+            category: $category,
+            unit: $unit,
+            source: SignalDisplaySource::Derived {
+                formula_key: $formula,
+                input_keys: $inputs,
+            },
+            composition: $composition,
         }
     };
 }
@@ -577,6 +628,265 @@ pub const LLY_SIGNALS: &[SignalDefinition] = &[
     ),
 ];
 
+const VGT_ERROR_INPUTS: &[&str] = &["lly.1543", "lly.1540"];
+const FUEL_RAIL_ACTUAL_INPUTS: &[&str] = &["standard:23", "lly.163E"];
+const FUEL_RAIL_DELTA_INPUTS: &[&str] = &["lly.fuel_rail.actual", "lly.163D"];
+const BAROMETRIC_INPUTS: &[&str] = &["standard:33", "lly.1251"];
+const BOOST_INPUTS: &[&str] = &["standard:0B", "lly.barometric_pressure"];
+const DESIRED_MAP_INPUTS: &[&str] = &["lly.1542"];
+
+pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
+    display_profile!(
+        "lly.1543",
+        "VGT vane actual",
+        SignalCategory::Turbo,
+        "%",
+        SignalComposition::Pair {
+            group_key: "lly.vgt_vane",
+            role: PairRole::Actual,
+        }
+    ),
+    display_profile!(
+        "lly.1540",
+        "VGT vane desired",
+        SignalCategory::Turbo,
+        "%",
+        SignalComposition::Pair {
+            group_key: "lly.vgt_vane",
+            role: PairRole::Desired,
+        }
+    ),
+    display_derived!(
+        "lly.vgt_vane.error",
+        "VGT vane error",
+        SignalCategory::Turbo,
+        "%",
+        "actual_minus_desired",
+        VGT_ERROR_INPUTS,
+        SignalComposition::Pair {
+            group_key: "lly.vgt_vane",
+            role: PairRole::Error,
+        }
+    ),
+    display_derived!(
+        "lly.fuel_rail.actual",
+        "actual fuel rail pressure",
+        SignalCategory::Fuel,
+        "psi",
+        "first_available",
+        FUEL_RAIL_ACTUAL_INPUTS,
+        SignalComposition::Pair {
+            group_key: "lly.fuel_rail",
+            role: PairRole::Actual,
+        }
+    ),
+    display_profile!(
+        "lly.163D",
+        "desired fuel rail pressure",
+        SignalCategory::Fuel,
+        "psi",
+        SignalComposition::Pair {
+            group_key: "lly.fuel_rail",
+            role: PairRole::Desired,
+        }
+    ),
+    display_derived!(
+        "lly.fuel_rail.delta",
+        "fuel rail delta",
+        SignalCategory::Fuel,
+        "psi",
+        "actual_minus_desired",
+        FUEL_RAIL_DELTA_INPUTS,
+        SignalComposition::Pair {
+            group_key: "lly.fuel_rail",
+            role: PairRole::Delta,
+        }
+    ),
+    display_profile!(
+        "lly.162F",
+        "injector balance cyl 1",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 0,
+            row_label: "1",
+        }
+    ),
+    display_profile!(
+        "lly.1630",
+        "injector balance cyl 2",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 1,
+            row_label: "2",
+        }
+    ),
+    display_profile!(
+        "lly.1631",
+        "injector balance cyl 3",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 2,
+            row_label: "3",
+        }
+    ),
+    display_profile!(
+        "lly.1632",
+        "injector balance cyl 4",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 3,
+            row_label: "4",
+        }
+    ),
+    display_profile!(
+        "lly.1633",
+        "injector balance cyl 5",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 4,
+            row_label: "5",
+        }
+    ),
+    display_profile!(
+        "lly.1634",
+        "injector balance cyl 6",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 5,
+            row_label: "6",
+        }
+    ),
+    display_profile!(
+        "lly.1635",
+        "injector balance cyl 7",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 6,
+            row_label: "7",
+        }
+    ),
+    display_profile!(
+        "lly.1636",
+        "injector balance cyl 8",
+        SignalCategory::Fuel,
+        "mm3",
+        SignalComposition::TableRow {
+            table_key: "lly.injector_balance",
+            row_index: 7,
+            row_label: "8",
+        }
+    ),
+    display_standard!(
+        "standard:0B",
+        "Intake MAP",
+        SignalCategory::Turbo,
+        0x0B,
+        "psi",
+        SignalComposition::Pair {
+            group_key: "lly.map_pressure",
+            role: PairRole::Actual,
+        }
+    ),
+    display_derived!(
+        "lly.desired_map",
+        "desired MAP",
+        SignalCategory::Turbo,
+        "psi",
+        "profile_desired_map_to_psi",
+        DESIRED_MAP_INPUTS,
+        SignalComposition::Pair {
+            group_key: "lly.map_pressure",
+            role: PairRole::Desired,
+        }
+    ),
+    display_derived!(
+        "lly.barometric_pressure",
+        "barometric pressure",
+        SignalCategory::Turbo,
+        "psi",
+        "first_available",
+        BAROMETRIC_INPUTS,
+        SignalComposition::Scalar
+    ),
+    display_derived!(
+        "lly.boost_pressure",
+        "boost pressure",
+        SignalCategory::Turbo,
+        "psi",
+        "max_zero_subtract",
+        BOOST_INPUTS,
+        SignalComposition::Scalar
+    ),
+    display_standard!(
+        "standard:10",
+        "MAF",
+        SignalCategory::Turbo,
+        0x10,
+        "g/s",
+        SignalComposition::Scalar
+    ),
+    display_standard!(
+        "standard:05",
+        "coolant temperature",
+        SignalCategory::Powertrain,
+        0x05,
+        "F",
+        SignalComposition::Scalar
+    ),
+    display_standard!(
+        "standard:0F",
+        "intake air temperature",
+        SignalCategory::Powertrain,
+        0x0F,
+        "F",
+        SignalComposition::Scalar
+    ),
+    display_standard!(
+        "standard:5C",
+        "engine oil temperature",
+        SignalCategory::Powertrain,
+        0x5C,
+        "F",
+        SignalComposition::Scalar
+    ),
+    display_standard!(
+        "standard:46",
+        "ambient air temperature",
+        SignalCategory::Body,
+        0x46,
+        "F",
+        SignalComposition::Scalar
+    ),
+    display_profile!(
+        "lly.1940",
+        "transmission temperature",
+        SignalCategory::Transmission,
+        "F",
+        SignalComposition::Scalar
+    ),
+    display_profile!(
+        "lly.1470",
+        "oil pressure",
+        SignalCategory::Powertrain,
+        "psi",
+        SignalComposition::Scalar
+    ),
+];
+
 const LLY_DTC_BACKOFF: BackoffPolicy = BackoffPolicy {
     skip_after_misses: 1,
     max_skips: 3,
@@ -672,6 +982,10 @@ impl DiagnosticProfile for GmLlyClass2Profile {
 
     fn signals(&self) -> &[SignalDefinition] {
         LLY_SIGNALS
+    }
+
+    fn signal_display(&self) -> &[SignalDisplayDefinition] {
+        LLY_SIGNAL_DISPLAY
     }
 
     fn dtc_services(&self) -> &[DtcServiceDefinition] {
@@ -852,6 +1166,7 @@ mod tests {
         Provenance as GmProvenance, ECM_NODE, LLY_ENHANCED_DIDS, LLY_REJECTED_DIDS, TCM_NODE,
     };
     use crate::profiles::runtime::resolve_route;
+    use std::collections::HashSet;
 
     #[test]
     fn lly_signals_match_backing_registry() {
@@ -1043,11 +1358,178 @@ mod tests {
         assert_eq!(find_signal(0x1542).confidence, Confidence::Candidate);
     }
 
+    #[test]
+    fn lly_display_definitions_cover_expected_compositions() {
+        assert_eq!(GM_LLY_CLASS2_PROFILE.signal_display(), LLY_SIGNAL_DISPLAY);
+
+        assert_pair_role("lly.1543", "lly.vgt_vane", PairRole::Actual);
+        assert_pair_role("lly.1540", "lly.vgt_vane", PairRole::Desired);
+        assert_pair_role("lly.vgt_vane.error", "lly.vgt_vane", PairRole::Error);
+        assert_eq!(
+            find_display("lly.vgt_vane.error").source,
+            SignalDisplaySource::Derived {
+                formula_key: "actual_minus_desired",
+                input_keys: VGT_ERROR_INPUTS,
+            }
+        );
+
+        assert_pair_role("lly.fuel_rail.actual", "lly.fuel_rail", PairRole::Actual);
+        assert_pair_role("lly.163D", "lly.fuel_rail", PairRole::Desired);
+        assert_pair_role("lly.fuel_rail.delta", "lly.fuel_rail", PairRole::Delta);
+        assert_eq!(
+            find_display("lly.fuel_rail.actual").source,
+            SignalDisplaySource::Derived {
+                formula_key: "first_available",
+                input_keys: FUEL_RAIL_ACTUAL_INPUTS,
+            }
+        );
+        assert_eq!(
+            find_display("lly.fuel_rail.delta").source,
+            SignalDisplaySource::Derived {
+                formula_key: "actual_minus_desired",
+                input_keys: FUEL_RAIL_DELTA_INPUTS,
+            }
+        );
+
+        assert_eq!(
+            find_display("lly.barometric_pressure").source,
+            SignalDisplaySource::Derived {
+                formula_key: "first_available",
+                input_keys: BAROMETRIC_INPUTS,
+            }
+        );
+        assert_eq!(
+            find_display("lly.boost_pressure").source,
+            SignalDisplaySource::Derived {
+                formula_key: "max_zero_subtract",
+                input_keys: BOOST_INPUTS,
+            }
+        );
+    }
+
+    #[test]
+    fn lly_injector_balance_display_is_eight_row_table() {
+        let rows: Vec<_> = LLY_SIGNAL_DISPLAY
+            .iter()
+            .filter_map(|display| match display.composition {
+                SignalComposition::TableRow {
+                    table_key: "lly.injector_balance",
+                    row_index,
+                    row_label,
+                } => Some((display.key, row_index, row_label)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(rows.len(), 8);
+        for (idx, (key, row_index, row_label)) in rows.iter().enumerate() {
+            assert_eq!(*row_index, idx as u8);
+            assert_eq!(*row_label, (idx + 1).to_string());
+            assert!(
+                find_signal_by_key(key).is_some(),
+                "missing signal for {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn lly_display_includes_standard_scalars_without_profile_signal_fork() {
+        for (key, pid, unit) in [
+            ("standard:10", 0x10, "g/s"),
+            ("standard:05", 0x05, "F"),
+            ("standard:0F", 0x0F, "F"),
+            ("standard:5C", 0x5C, "F"),
+            ("standard:46", 0x46, "F"),
+        ] {
+            let display = find_display(key);
+            assert_eq!(display.source, SignalDisplaySource::StandardPid(pid));
+            assert_eq!(display.unit, unit);
+            assert_eq!(display.composition, SignalComposition::Scalar);
+        }
+
+        let map = find_display("standard:0B");
+        assert_eq!(map.source, SignalDisplaySource::StandardPid(0x0B));
+        assert_eq!(map.unit, "psi");
+        assert_eq!(
+            map.composition,
+            SignalComposition::Pair {
+                group_key: "lly.map_pressure",
+                role: PairRole::Actual,
+            }
+        );
+        assert_eq!(
+            find_display("lly.desired_map").source,
+            SignalDisplaySource::Derived {
+                formula_key: "profile_desired_map_to_psi",
+                input_keys: DESIRED_MAP_INPUTS,
+            }
+        );
+        assert_eq!(
+            find_display("lly.1940").category,
+            SignalCategory::Transmission
+        );
+    }
+
+    #[test]
+    fn lly_display_profile_signal_refs_are_owned_by_lly_profile() {
+        let profile_signal_keys: HashSet<&str> =
+            LLY_SIGNALS.iter().map(|signal| signal.key).collect();
+        let display_keys: HashSet<&str> = LLY_SIGNAL_DISPLAY
+            .iter()
+            .map(|display| display.key)
+            .collect();
+
+        for display in LLY_SIGNAL_DISPLAY {
+            match display.source {
+                SignalDisplaySource::ProfileSignal(signal_key) => {
+                    assert!(
+                        profile_signal_keys.contains(signal_key),
+                        "display {} points at missing signal {}",
+                        display.key,
+                        signal_key
+                    );
+                }
+                SignalDisplaySource::StandardPid(_) => {}
+                SignalDisplaySource::Derived { input_keys, .. } => {
+                    for input in input_keys {
+                        assert!(
+                            profile_signal_keys.contains(input)
+                                || display_keys.contains(input)
+                                || input.starts_with("standard:"),
+                            "display {} derived input {} is not known",
+                            display.key,
+                            input
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn find_signal(did: u16) -> &'static SignalDefinition {
         LLY_SIGNALS
             .iter()
             .find(|signal| signal_did(signal) == did)
             .unwrap_or_else(|| panic!("missing signal 0x{did:04X}"))
+    }
+
+    fn find_signal_by_key(key: &str) -> Option<&'static SignalDefinition> {
+        LLY_SIGNALS.iter().find(|signal| signal.key == key)
+    }
+
+    fn find_display(key: &str) -> &'static SignalDisplayDefinition {
+        LLY_SIGNAL_DISPLAY
+            .iter()
+            .find(|display| display.key == key)
+            .unwrap_or_else(|| panic!("missing display definition {key}"))
+    }
+
+    fn assert_pair_role(key: &str, group_key: &'static str, role: PairRole) {
+        let display = find_display(key);
+        assert_eq!(
+            display.composition,
+            SignalComposition::Pair { group_key, role }
+        );
     }
 
     fn find_dtc_service(key: &str) -> &'static DtcServiceDefinition {

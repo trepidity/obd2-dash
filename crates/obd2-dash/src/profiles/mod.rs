@@ -27,11 +27,12 @@ pub use model::{
     BackoffPolicy, BusDefinition, BusKey, Confidence, DecodedDtc, DecodedSignal, DiagnosticProfile,
     DtcServiceDefinition, EvidencePolicy, EvidenceRef, FailurePolicy, IdentityConfidence,
     J1850HeaderConvention, Manufacturer, MatchConfidence, ModuleDefinition, ModuleEvidenceState,
-    ModuleKey, ModuleMap, ModuleSafetyClass, PassiveCapabilityState, PassiveMonitorDefinition,
-    PollCadence, ProfileDecodeError, ProfileId, ProfileMatch, ProfileRequestDefinition, Provenance,
-    RouteDefinition, RouteScope, RouteSet, RxdSource, SafetyClass, SelectedProfile, Selection,
-    SignalCategory, SignalDefinition, SourceFields, StandardPidOverride, StandardPidPolicy,
-    VehicleContext,
+    ModuleKey, ModuleMap, ModuleSafetyClass, PairRole, PassiveCapabilityState,
+    PassiveMonitorDefinition, PollCadence, ProfileDecodeError, ProfileId, ProfileMatch,
+    ProfileRequestDefinition, Provenance, RouteDefinition, RouteScope, RouteSet, RxdSource,
+    SafetyClass, SelectedProfile, Selection, SignalCategory, SignalComposition, SignalDefinition,
+    SignalDisplayDefinition, SignalDisplaySource, SourceFields, StandardPidOverride,
+    StandardPidPolicy, VehicleContext,
 };
 pub use registry::{ManualConfirmError, ProfileRegistry};
 pub use runtime::{
