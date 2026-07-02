@@ -264,7 +264,7 @@ git commit -m "refactor(core): rename byte-level Transport trait to Link (frees 
 - Modify: `crates/obd2-core/src/protocol/codec.rs` (delete ELM-text fns + their tests; keep pure frame decoders)
 - Modify: `crates/obd2-core/src/adapter/mod.rs` (`pub mod elm_codec;`)
 - Modify: `crates/obd2-core/src/adapter/elm327.rs:318,661` (call `elm_codec::…`)
-- Modify: `crates/obd2-dash/crates/obd2-dash/tests/protocol_payload_corpus.rs:4` and `tests/seed_corpus.rs:11` (import path)
+- Modify: `crates/obd2-dash/tests/protocol_payload_corpus.rs:4` and `tests/seed_corpus.rs:11` (import path)
 
 **Interfaces:**
 - Consumes: `protocol::codec::{BusFamily}` (frame decoders stay in codec).
@@ -326,7 +326,7 @@ git commit -m "refactor(core): move ELM ASCII parsing from protocol/codec to ada
       async fn request(&mut self, kind: RequestKind) -> Result<DiagResponse, crate::error::Obd2Error>;
   }
   pub enum RequestKind { Mode01Pid(u8), Did16 { service: u8, did: u16 }, Raw { service: u8, data: Vec<u8> } }
-  pub struct DiagResponse { pub service: u8, pub payload: Vec<u8> }
+  pub struct DiagResponse { pub expected_positive_service: u8, pub payload: Vec<u8> }
   pub struct J1979Client<T: crate::transport::framed::Transport> { transport: T }
   ```
 - `adapter::elm_transport`: `ElmTransport` wraps `Elm327Adapter` and implements `transport::framed::Transport` — the adapter→transport bridge lives here (adapter may depend on transport; transport may not depend on adapter).
@@ -348,7 +348,7 @@ mod tests {
         let adapter = Elm327Adapter::new(Box::new(mock));
         let mut client = J1979Client::new(ElmTransport::new(adapter));
         let resp = client.request(RequestKind::Mode01Pid(0x05)).await.unwrap();
-        assert_eq!(resp.service, 0x41);
+        assert_eq!(resp.expected_positive_service, 0x41);
         assert_eq!(resp.payload, vec![0x7B]); // raw byte; SAE scaling is a higher layer
     }
 }
@@ -404,8 +404,11 @@ impl<T: Transport> ProtocolClient for J1979Client<T> {
             RequestKind::Did16 { service, did } => (service, did.to_be_bytes().to_vec()),
             RequestKind::Raw { service, data } => (service, data),
         };
+        let expected_positive_service = service_id
+            .checked_add(0x40)
+            .ok_or_else(|| crate::error::Obd2Error::ParseError(format!("service id 0x{service_id:02X} cannot form a positive-response id")))?;
         let payload = self.transport.exchange(&TransportRequest { service_id, data }).await?;
-        Ok(DiagResponse { service: service_id + 0x40, payload })
+        Ok(DiagResponse { expected_positive_service, payload })
     }
 }
 ```
