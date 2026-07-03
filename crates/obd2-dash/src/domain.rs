@@ -66,8 +66,7 @@ pub enum DtcService {
     Stored,
     Pending,
     Permanent,
-    GmClass2All,
-    GmClass2Active,
+    Profile { service_id: u8, label: &'static str },
 }
 
 impl DtcService {
@@ -76,7 +75,7 @@ impl DtcService {
             Self::Stored => 0x03,
             Self::Pending => 0x07,
             Self::Permanent => 0x0A,
-            Self::GmClass2All | Self::GmClass2Active => 0x19,
+            Self::Profile { service_id, .. } => service_id,
         }
     }
 
@@ -85,8 +84,7 @@ impl DtcService {
             Self::Stored => "03",
             Self::Pending => "07",
             Self::Permanent => "0A",
-            Self::GmClass2All => "19ff",
-            Self::GmClass2Active => "1992",
+            Self::Profile { label, .. } => label,
         }
     }
 }

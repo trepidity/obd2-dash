@@ -3,6 +3,8 @@
 use std::{
     collections::{HashMap, HashSet},
     env,
+    fs,
+    path::PathBuf,
 };
 
 use obd2_core::{
@@ -31,7 +33,7 @@ use obd2_dash::profiles::{
     SignalDefinition, SignalDisplayDefinition, SignalDisplaySource, VehicleContext,
 };
 use serde::Serialize;
-use tauri::State;
+use tauri::{Manager, State};
 use tokio::{sync::Mutex, time::Duration};
 
 const DEFAULT_BAUD: u32 = 115_200;
@@ -40,6 +42,7 @@ const GUI_EXTRA_VIN_READS: u8 = 2;
 const PROFILE_DTC_SCAN_CYCLE: u64 = 60;
 const PSI_PER_KPA: f64 = 0.145_037_737_7;
 const MPH_PER_KPH: f64 = 0.621_371;
+const MAX_RECORDING_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize)]
 struct StatusValue {
@@ -412,21 +415,19 @@ impl LiveBackend {
             }
         }
 
-        let enhanced_baro_kpa = profile_reading_value_by_label(&profile_readings, &["barometric"]);
+        let enhanced_baro_kpa = profile_reading_value_by_key(&profile_readings, "lly.1251");
         let desired_map_kpa =
-            profile_reading_value_by_label(&profile_readings, &["desired", "map"]).or_else(|| {
+            profile_reading_value_by_key(&profile_readings, "lly.1542").or_else(|| {
                 self.last_values
                     .desired_map_psi
                     .map(|value| f64::from(value) / PSI_PER_KPA)
             });
-        let actual_fuel_rail_gm_psi =
-            profile_reading_by_label(&profile_readings, &["actual", "fuel", "rail"]).and_then(
-                |reading| {
-                    reading
-                        .value
-                        .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
-                },
-            );
+        let actual_fuel_rail_gm_psi = profile_reading_by_key(&profile_readings, "lly.163E")
+            .and_then(|reading| {
+                reading
+                    .value
+                    .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
+            });
         let fuel_rail_actual_psi = fuel_rail_kpa
             .map(|value| value * PSI_PER_KPA)
             .or(actual_fuel_rail_gm_psi)
@@ -450,17 +451,16 @@ impl LiveBackend {
             Some("Full-range gauge pressure; preferred over GM $22 163E X-Gauge scaling."),
         );
         source_confidence.push(actual_fuel_rail_evidence.clone());
-        let desired_fuel_rail_psi =
-            profile_reading_by_label(&profile_readings, &["desired", "fuel", "rail"])
-                .and_then(|reading| {
-                    reading
-                        .value
-                        .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
-                })
-                .or(self.last_values.fuel_rail_desired_psi.map(f64::from));
-        let vgt_actual = profile_reading_value_by_label(&profile_readings, &["vgt", "actual"])
+        let desired_fuel_rail_psi = profile_reading_by_key(&profile_readings, "lly.163D")
+            .and_then(|reading| {
+                reading
+                    .value
+                    .and_then(|value| pressure_to_psi(value, &reading.evidence.unit))
+            })
+            .or(self.last_values.fuel_rail_desired_psi.map(f64::from));
+        let vgt_actual = profile_reading_value_by_key(&profile_readings, "lly.1543")
             .unwrap_or(f64::from(self.last_values.vgt_actual_pct));
-        let vgt_desired = profile_reading_value_by_label(&profile_readings, &["vgt", "desired"])
+        let vgt_desired = profile_reading_value_by_key(&profile_readings, "lly.1540")
             .unwrap_or(f64::from(self.last_values.vgt_desired_pct));
 
         let (cylinders, cylinder_states) = profile_cylinder_values(
@@ -796,6 +796,36 @@ async fn diagnostic_snapshot(state: State<'_, GuiState>) -> Result<DiagnosticSna
 }
 
 #[tauri::command]
+fn recordings_directory(app: tauri::AppHandle) -> Result<String, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("failed to resolve app data directory: {error}"))?
+        .join("recordings");
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("failed to create recordings directory {}: {error}", dir.display()))?;
+    Ok(dir.display().to_string())
+}
+
+#[tauri::command]
+fn read_recording_file(path: String) -> Result<Vec<u8>, String> {
+    let path = PathBuf::from(path);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("failed to inspect recording file {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!("recording path is not a file: {}", path.display()));
+    }
+    if metadata.len() > MAX_RECORDING_FILE_BYTES {
+        return Err(format!(
+            "recording file is too large: {} bytes (limit {} bytes)",
+            metadata.len(),
+            MAX_RECORDING_FILE_BYTES
+        ));
+    }
+    fs::read(&path).map_err(|error| format!("failed to read recording file {}: {error}", path.display()))
+}
+
+#[tauri::command]
 async fn request_active_test(
     state: State<'_, GuiState>,
     command: GmActiveTestCommand,
@@ -1055,20 +1085,18 @@ fn profile_signal_confidence(signal: &SignalDefinition) -> String {
     label
 }
 
-fn profile_reading_by_label<'a>(
+fn profile_reading_by_key<'a>(
     readings: &'a HashMap<&'static str, ProfileSignalReading<f64>>,
-    terms: &[&str],
+    key: &'static str,
 ) -> Option<&'a ProfileSignalReading<f64>> {
-    readings
-        .values()
-        .find(|reading| label_matches_terms(&reading.evidence.label, terms))
+    readings.get(key)
 }
 
-fn profile_reading_value_by_label(
+fn profile_reading_value_by_key(
     readings: &HashMap<&'static str, ProfileSignalReading<f64>>,
-    terms: &[&str],
+    key: &'static str,
 ) -> Option<f64> {
-    profile_reading_by_label(readings, terms).and_then(|reading| reading.value)
+    profile_reading_by_key(readings, key).and_then(|reading| reading.value)
 }
 
 fn profile_cylinder_values(
@@ -3071,11 +3099,14 @@ fn empty_snapshot(connection: impl Into<String>) -> DiagnosticSnapshot {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(GuiState {
             backend: Mutex::new(LiveBackend::default()),
         })
         .invoke_handler(tauri::generate_handler![
             diagnostic_snapshot,
+            recordings_directory,
+            read_recording_file,
             request_active_test
         ])
         .run(tauri::generate_context!())

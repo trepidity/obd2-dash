@@ -47,7 +47,10 @@ use obd2_core::protocol::dtc::Dtc;
 use obd2_core::protocol::enhanced::Reading;
 use obd2_core::protocol::pid::Pid;
 use obd2_core::session::Session;
-use obd2_dash::profiles::{dtc_status_from_label, ProfileDecodedEvidence};
+use obd2_dash::profiles::{
+    dtc_status_from_label, next_generation, IdentityConfidence, ProfileDecodedEvidence,
+    ProfileRegistry, ProfileStateSnapshot,
+};
 use session_runner::{
     build_mock_capture_handle, prepare_session, run_prepared_session, run_session_task,
     SessionRunnerConfig,
@@ -1464,12 +1467,14 @@ fn handle_session_picker_key(state: &mut AppState, key: crossterm::event::KeyEve
             if let Some(ref storage) = state.domain.storage_manager {
                 let sessions = storage.index.sessions_sorted();
                 if let Some(session) = sessions.get(state.session_picker_selected) {
+                    let session = (*session).clone();
                     match recording::reader::read_recording(&session.file_path) {
-                        Ok((_header, frames)) => {
-                            let controller = recording::replay::ReplayController::new(
-                                (*session).clone(),
-                                frames,
-                            );
+                        Ok((header, frames)) => {
+                            if let Some(snapshot) = replay_profile_state_snapshot(&header) {
+                                state.update(Message::ProfileStateUpdate(snapshot));
+                            }
+                            let controller =
+                                recording::replay::ReplayController::new(session.clone(), frames);
                             state.domain.recording = RecordingState::Replaying(controller);
                             tracing::info!("Starting replay of session {}", session.session_id);
                         }
@@ -1716,6 +1721,42 @@ fn handle_clear_dtcs(state: &mut AppState) {
     }
 }
 
+fn replay_profile_state_snapshot(
+    header: &recording::format::SessionHeader,
+) -> Option<ProfileStateSnapshot> {
+    let profile_id = header.profile_id.as_deref()?;
+    let registry = ProfileRegistry::with_builtins();
+    let profile = registry
+        .profiles()
+        .iter()
+        .copied()
+        .find(|profile| profile.id().as_str() == profile_id)?;
+    let selected_profile_id = profile.id().as_str();
+
+    Some(ProfileStateSnapshot {
+        generation: next_generation(),
+        selected_profile_id: Some(selected_profile_id),
+        manual_confirmed: false,
+        vin_confidence: header
+            .identity_confidence
+            .as_deref()
+            .and_then(parse_recording_identity_confidence),
+        exact_matches: vec![selected_profile_id],
+        partial_matches: Vec::new(),
+        ambiguity: None,
+    })
+}
+
+fn parse_recording_identity_confidence(label: &str) -> Option<IdentityConfidence> {
+    match label {
+        "unread" => Some(IdentityConfidence::Unread),
+        "corrupted" => Some(IdentityConfidence::Corrupted),
+        "single" => Some(IdentityConfidence::Single),
+        "confirmed" => Some(IdentityConfidence::Confirmed),
+        _ => None,
+    }
+}
+
 fn handle_toggle_recording(state: &mut AppState) {
     match &state.domain.recording {
         RecordingState::Idle => {
@@ -1769,6 +1810,7 @@ fn handle_toggle_recording(state: &mut AppState) {
                 let duration_secs = start_instant.elapsed().as_secs();
                 let frame_count = writer.frame_count;
                 let session_id = writer.session_id.clone();
+                let profile_id = writer.profile_id().map(str::to_string);
 
                 match writer.finish() {
                     Ok(path) => {
@@ -1784,7 +1826,7 @@ fn handle_toggle_recording(state: &mut AppState) {
                                 .vehicle_info
                                 .as_ref()
                                 .map(|v| v.display_name()),
-                            profile_id: None,
+                            profile_id,
                             duration_secs,
                             frame_count,
                             file_path: path,

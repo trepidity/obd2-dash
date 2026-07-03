@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   Activity,
   AlertTriangle,
   Cable,
+  ChevronDown,
   Database,
   FileText,
   Fuel,
@@ -13,7 +15,6 @@ import {
   Play,
   Radio,
   RotateCcw,
-  Save,
   Settings,
   ShieldAlert,
   SlidersHorizontal,
@@ -36,7 +37,8 @@ import type {
 } from "./types";
 
 type UnitMode = "us" | "metric";
-type UtilityTabId = "overview" | "active" | "diagnostics" | "replay" | "raw" | "settings";
+type SessionMode = "live" | "recording" | "replay";
+type UtilityTabId = "overview" | "active" | "diagnostics" | "raw" | "settings";
 type CapabilityTabId = `cap:${string}`;
 type TabId = UtilityTabId | CapabilityTabId;
 
@@ -300,20 +302,6 @@ function isTableRowSignal(signal: CapabilitySignalSnapshot): signal is TableRowS
   return signal.composition.kind === "table_row";
 }
 
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDuration(ms: number | undefined): string {
-  if (ms == null) return "--";
-  const totalSeconds = Math.max(0, Math.round(ms / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-}
-
 function matchesMagic(bytes: Uint8Array, magic: string): boolean {
   if (bytes.length < magic.length) return false;
   for (let i = 0; i < magic.length; i += 1) {
@@ -322,19 +310,29 @@ function matchesMagic(bytes: Uint8Array, magic: string): boolean {
   return true;
 }
 
+interface RecordingFileSource {
+  name: string;
+  size: number;
+}
+
 async function inspectRecordingFile(file: File): Promise<RecordingSummary> {
   const bytes = new Uint8Array(await file.arrayBuffer());
+  return inspectRecordingBytes({ name: file.name, size: file.size }, bytes);
+}
+
+function inspectRecordingBytes(source: RecordingFileSource, bytes: Uint8Array): RecordingSummary {
+  const name = source.name;
 
   if (matchesMagic(bytes, "OBD2REC\u0001")) {
-    return parseStructuredRecording(file, bytes, 1);
+    return parseStructuredRecording(source, bytes, 1);
   }
   if (matchesMagic(bytes, "OBD2REC\u0002")) {
-    return parseStructuredRecording(file, bytes, 2);
+    return parseStructuredRecording(source, bytes, 2);
   }
-  if (file.name.endsWith(".obd2rec.gz")) {
+  if (name.endsWith(".obd2rec.gz")) {
     return {
-      name: file.name,
-      sizeBytes: file.size,
+      name,
+      sizeBytes: source.size,
       kind: "compressed",
       detail: "compressed recording",
       preview: [],
@@ -344,12 +342,12 @@ async function inspectRecordingFile(file: File): Promise<RecordingSummary> {
 
   const text = new TextDecoder().decode(bytes);
   if (text.startsWith("# obd2-raw")) {
-    return parseRawCapture(file, text);
+    return parseRawCapture(source, text);
   }
 
   return {
-    name: file.name,
-    sizeBytes: file.size,
+    name,
+    sizeBytes: source.size,
     kind: "unknown",
     detail: "unknown file",
     preview: text.split(/\r?\n/).slice(0, 16),
@@ -357,7 +355,16 @@ async function inspectRecordingFile(file: File): Promise<RecordingSummary> {
   };
 }
 
-function parseStructuredRecording(file: File, bytes: Uint8Array, version: 1 | 2): RecordingSummary {
+function fileNameFromPath(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+async function inspectRecordingPath(path: string): Promise<RecordingSummary> {
+  const bytes = new Uint8Array(await invoke<number[]>("read_recording_file", { path }));
+  return inspectRecordingBytes({ name: fileNameFromPath(path), size: bytes.byteLength }, bytes);
+}
+
+function parseStructuredRecording(source: RecordingFileSource, bytes: Uint8Array, version: 1 | 2): RecordingSummary {
   if (bytes.length < 12) {
     throw new Error("recording is too short to contain a header");
   }
@@ -417,8 +424,8 @@ function parseStructuredRecording(file: File, bytes: Uint8Array, version: 1 | 2)
   const warning = offset === bytes.length ? undefined : "Trailing bytes were left after frame parsing.";
 
   return {
-    name: file.name,
-    sizeBytes: file.size,
+    name: source.name,
+    sizeBytes: source.size,
     kind: "structured",
     detail: `OBD2REC v${version}`,
     sessionId: header.session_id,
@@ -438,7 +445,7 @@ function parseStructuredRecording(file: File, bytes: Uint8Array, version: 1 | 2)
   };
 }
 
-function parseRawCapture(file: File, text: string): RecordingSummary {
+function parseRawCapture(source: RecordingFileSource, text: string): RecordingSummary {
   const lines = text.split(/\r?\n/);
   const headerLines = lines.filter((line) => line.startsWith("#"));
   const dataLines = lines.filter((line) => line.trim() !== "" && !line.startsWith("#"));
@@ -480,8 +487,8 @@ function parseRawCapture(file: File, text: string): RecordingSummary {
   }
 
   return {
-    name: file.name,
-    sizeBytes: file.size,
+    name: source.name,
+    sizeBytes: source.size,
     kind: "raw",
     detail: firstHeader,
     started,
@@ -522,27 +529,161 @@ function Panel({
   );
 }
 
+function SessionMenuButton({
+  icon,
+  label,
+  detail,
+  onClick,
+  disabled = false,
+  tone = "default",
+}: {
+  icon: React.ReactNode;
+  label: string;
+  detail?: string;
+  onClick: () => void;
+  disabled?: boolean;
+  tone?: "default" | "ok" | "warn" | "crit";
+}) {
+  const toneClass =
+    tone === "ok"
+      ? "text-emerald-200 hover:border-emerald-400/50"
+      : tone === "warn"
+        ? "text-amber-200 hover:border-amber-400/50"
+        : tone === "crit"
+          ? "text-red-200 hover:border-red-400/50"
+          : "text-zinc-200 hover:border-zinc-500";
+
+  return (
+    <button
+      className={`flex w-full items-start gap-3 rounded-md border border-zinc-800 bg-zinc-950/80 px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:text-zinc-600 disabled:hover:border-zinc-800 ${toneClass}`}
+      disabled={disabled}
+      onClick={onClick}
+      role="menuitem"
+      type="button"
+    >
+      <span className="mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded border border-zinc-800 bg-black/30">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-xs font-semibold">{label}</span>
+        {detail ? <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">{detail}</span> : null}
+      </span>
+    </button>
+  );
+}
+
 function Toolbar({
   snapshot,
   unitMode,
   setUnitMode,
   refresh,
   lastRefresh,
-  recording,
-  replayMode,
-  onToggleRecording,
-  onToggleReplay,
+  sessionMode,
+  selectedRecording,
+  replayRunning,
+  replayPaused,
+  replayError,
+  onStartRecording,
+  onStopRecording,
+  openRecordingFile,
+  openRecordingPath,
+  setReplayRunning,
+  setReplayPaused,
+  exitReplay,
 }: {
   snapshot: DiagnosticSnapshot;
   unitMode: UnitMode;
   setUnitMode: (mode: UnitMode) => void;
   refresh: () => void;
   lastRefresh: Date;
-  recording: boolean;
-  replayMode: boolean;
-  onToggleRecording: () => void;
-  onToggleReplay: () => void;
+  sessionMode: SessionMode;
+  selectedRecording: RecordingSummary | null;
+  replayRunning: boolean;
+  replayPaused: boolean;
+  replayError: string | null;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
+  openRecordingFile: (file: File) => void;
+  openRecordingPath: (path: string) => void;
+  setReplayRunning: (running: boolean) => void;
+  setReplayPaused: (paused: boolean) => void;
+  exitReplay: () => void;
 }) {
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const sessionMenuRef = useRef<HTMLDivElement | null>(null);
+  const recordingInputRef = useRef<HTMLInputElement | null>(null);
+  const isReplay = sessionMode === "replay";
+  const isRecording = sessionMode === "recording";
+  const modeTitle = isReplay
+    ? selectedRecording?.name
+      ? `Replay: ${selectedRecording.name}`
+      : "Replay"
+    : isRecording
+      ? "Recording"
+      : snapshot.vehicle;
+  const modeProtocol = isReplay ? "local playback" : snapshot.protocol;
+  const modeCadence = isReplay ? "recording controls" : `${snapshot.poll_ms} ms poll`;
+  const modeLabel = isReplay ? "Replay" : isRecording ? "Recording" : "Live";
+  const modeButtonClass = isReplay
+    ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
+    : isRecording
+      ? "border-red-400/50 bg-red-500/15 text-red-100"
+      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+  const modeIcon = isReplay ? <Radio size={14} /> : isRecording ? <Square size={14} /> : <Cable size={14} />;
+  const replayState = selectedRecording == null ? "No file loaded" : replayRunning ? (replayPaused ? "Paused" : "Playing") : "Loaded";
+
+  useEffect(() => {
+    if (!sessionMenuOpen) return;
+
+    const closeOnPointerDown = (event: PointerEvent) => {
+      if (sessionMenuRef.current?.contains(event.target as Node)) return;
+      setSessionMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSessionMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnPointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnPointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [sessionMenuOpen]);
+
+  const openRecordingPicker = async () => {
+    if (!isTauriRuntime()) {
+      recordingInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const defaultPath = await invoke<string>("recordings_directory");
+      const selected = await openDialog({
+        defaultPath,
+        directory: false,
+        multiple: false,
+        filters: [
+          {
+            name: "OBD recordings",
+            extensions: ["obd2rec", "obd2raw", "gz"],
+          },
+        ],
+      });
+      if (typeof selected === "string") {
+        openRecordingPath(selected);
+        setSessionMenuOpen(false);
+      }
+    } catch (error) {
+      console.error("open recording dialog failed", error);
+    }
+  };
+
+  const runMenuAction = (action: () => void, close = true) => {
+    action();
+    if (close) setSessionMenuOpen(false);
+  };
+
   return (
     <header className="sticky top-0 z-10 border-b border-zinc-800 bg-[#111416]/96 px-4 py-3 backdrop-blur">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
@@ -551,48 +692,141 @@ function Toolbar({
             <Gauge size={19} />
           </div>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold text-cyan-200">{snapshot.vehicle}</div>
+            <div className="truncate text-sm font-semibold text-cyan-200">{modeTitle}</div>
             <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-400">
               <span>VIN {snapshot.vin}</span>
-              <span>{snapshot.protocol}</span>
-              <span>{snapshot.poll_ms} ms poll</span>
+              <span>{modeProtocol}</span>
+              <span>{modeCadence}</span>
             </div>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button className="inline-flex h-8 items-center gap-2 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 text-xs font-semibold text-emerald-200">
-            <Cable size={14} />
-            Connected
-          </button>
+          <div className="relative" ref={sessionMenuRef}>
+            <input
+              ref={recordingInputRef}
+              aria-label="Open recording file"
+              accept=".obd2rec,.obd2rec.gz,.obd2raw"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) openRecordingFile(file);
+                event.currentTarget.value = "";
+                setSessionMenuOpen(false);
+              }}
+              type="file"
+            />
+            <button
+              aria-expanded={sessionMenuOpen}
+              aria-haspopup="menu"
+              aria-label="Session menu"
+              className={`inline-flex h-8 min-w-[128px] items-center justify-center gap-2 rounded-md border px-3 text-xs font-semibold ${modeButtonClass}`}
+              onClick={() => setSessionMenuOpen((open) => !open)}
+              type="button"
+            >
+              {modeIcon}
+              Session: {modeLabel}
+              <ChevronDown size={13} />
+            </button>
+            {sessionMenuOpen ? (
+              <div
+                className="absolute right-0 z-30 mt-2 w-[320px] rounded-md border border-zinc-700 bg-[#101316] p-3 shadow-2xl shadow-black/40"
+                role="menu"
+              >
+                <div className="mb-3 border-b border-zinc-800 pb-3">
+                  <div className="text-[11px] font-semibold uppercase text-zinc-500">Session</div>
+                  <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-zinc-100">
+                    {modeIcon}
+                    {modeLabel}
+                  </div>
+                  <div className="mt-1 text-[11px] leading-4 text-zinc-500">
+                    {isReplay
+                      ? selectedRecording?.name ?? replayState
+                      : isRecording
+                        ? "Capturing live data"
+                        : snapshot.connection}
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {isReplay ? (
+                    <>
+                      <SessionMenuButton
+                        icon={<FileText size={14} />}
+                        label="Open recording..."
+                        detail="Starts in the app recordings folder"
+                        onClick={openRecordingPicker}
+                      />
+                      <SessionMenuButton
+                        icon={replayRunning && !replayPaused ? <Pause size={14} /> : <Play size={14} />}
+                        label={replayRunning && !replayPaused ? "Pause" : replayRunning ? "Resume" : "Play loaded"}
+                        detail={selectedRecording ? replayState : "Choose a recording first"}
+                        disabled={selectedRecording == null}
+                        tone="ok"
+                        onClick={() =>
+                          runMenuAction(() => {
+                            if (replayRunning) {
+                              setReplayPaused(!replayPaused);
+                            } else {
+                              setReplayRunning(true);
+                              setReplayPaused(false);
+                            }
+                          }, false)
+                        }
+                      />
+                      <SessionMenuButton
+                        icon={<Radio size={14} />}
+                        label="Exit replay"
+                        detail="Return to live diagnostics"
+                        onClick={() => runMenuAction(exitReplay)}
+                      />
+                    </>
+                  ) : isRecording ? (
+                    <>
+                      <SessionMenuButton
+                        icon={<Square size={14} />}
+                        label="Stop recording"
+                        detail="Keep live diagnostics running"
+                        tone="crit"
+                        onClick={() => runMenuAction(onStopRecording)}
+                      />
+                      <SessionMenuButton
+                        icon={<FileText size={14} />}
+                        label="Open recording..."
+                        detail="Available after recording stops"
+                        disabled
+                        onClick={openRecordingPicker}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <SessionMenuButton
+                        icon={<Square size={14} />}
+                        label="Start recording"
+                        detail={`${snapshot.poll_ms} ms live polling`}
+                        tone="crit"
+                        onClick={() => runMenuAction(onStartRecording)}
+                      />
+                      <SessionMenuButton
+                        icon={<FileText size={14} />}
+                        label="Open recording..."
+                        detail="Starts in the app recordings folder"
+                        onClick={openRecordingPicker}
+                      />
+                    </>
+                  )}
+                </div>
+                {replayError ? (
+                  <div className="mt-3 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
+                    {replayError}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
           <button
             className="inline-flex h-8 items-center rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:border-zinc-500"
             onClick={() => setUnitMode(unitMode === "us" ? "metric" : "us")}
           >
             {unitMode === "us" ? "US" : "Metric"}
-          </button>
-          <button
-            aria-pressed={recording}
-            className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-semibold ${
-              recording
-                ? "border-red-400/50 bg-red-500/15 text-red-100"
-                : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-zinc-500"
-            }`}
-            onClick={onToggleRecording}
-          >
-            {recording ? <Square size={14} /> : <Save size={14} />}
-            {recording ? "Stop Rec" : "Record"}
-          </button>
-          <button
-            aria-pressed={replayMode}
-            className={`inline-flex h-8 items-center gap-2 rounded-md border px-3 text-xs font-semibold ${
-              replayMode
-                ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
-                : "border-zinc-700 bg-zinc-900 text-zinc-200 hover:border-zinc-500"
-            }`}
-            onClick={onToggleReplay}
-          >
-            {replayMode ? <Radio size={14} /> : <Play size={14} />}
-            {replayMode ? "Live" : "Replay"}
           </button>
           <button
             className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:border-zinc-500"
@@ -622,12 +856,10 @@ function CategoryRail({
   tabs,
   activeTab,
   onSelect,
-  connection,
 }: {
   tabs: CategoryTab[];
   activeTab: TabId;
   onSelect: (tab: TabId) => void;
-  connection: string;
 }) {
   const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
 
@@ -665,9 +897,6 @@ function CategoryRail({
         <div className="flex min-w-0 items-center gap-2 text-xs font-semibold uppercase text-zinc-400">
           <Radio size={14} />
           <span>Categories</span>
-        </div>
-        <div className="mt-1 truncate text-[11px] text-zinc-400">
-          Live serial owned by Rust session / {connection}
         </div>
       </div>
       <div
@@ -737,10 +966,6 @@ function capabilitySectionSummary(
   sectionSignals: CapabilitySignalSnapshot[],
   snapshot: DiagnosticSnapshot,
   unitMode: UnitMode,
-  replayMode: boolean,
-  replayRunning: boolean,
-  replayPaused: boolean,
-  selectedRecording: RecordingSummary | null,
 ): string {
   if (section.category === "Diagnostics") {
     const alertLabel = snapshot.alerts.length === 1 ? "alert" : "alerts";
@@ -763,27 +988,12 @@ function capabilitySectionSummary(
   return sectionSignals.slice(0, 2).map((signal) => signalDisplayValue(signal, unitMode)).join(" / ");
 }
 
-function replaySummary(
-  replayMode: boolean,
-  replayRunning: boolean,
-  replayPaused: boolean,
-  selectedRecording: RecordingSummary | null,
-): string {
-  if (selectedRecording) {
-    if (replayRunning) return replayPaused ? "paused" : "playing";
-    return "loaded";
-  }
-  return replayMode ? "active" : "open file";
-}
-
 function StatusStrip({
   snapshot,
   recording,
-  replayMode,
 }: {
   snapshot: DiagnosticSnapshot;
   recording: boolean;
-  replayMode: boolean;
 }) {
   const statuses = snapshot.statuses.map((item) =>
     item.label === "Record"
@@ -794,13 +1004,6 @@ function StatusStrip({
         }
       : item,
   );
-  if (replayMode) {
-    statuses.push({
-      label: "Replay",
-      value: "ON",
-      state: "warn",
-    });
-  }
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
@@ -1277,7 +1480,12 @@ function CapabilitySectionView({
 function CapabilityOverviewView({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot; unitMode: UnitMode }) {
   const signals = capabilitySignals(snapshot);
   const sections = capabilitySections(snapshot).filter((section) => {
-    if (section.category === "Diagnostics" || section.category === "ActiveTests" || section.category === "Evidence") {
+    if (
+      section.category === "Diagnostics" ||
+      section.category === "ActiveTests" ||
+      section.category === "Evidence" ||
+      section.category === "Replay"
+    ) {
       return false;
     }
     return signalsForSection(section, signals).length > 0;
@@ -1324,25 +1532,6 @@ function AlertsPanel({ alerts }: { alerts: string[] }) {
         )}
       </div>
     </Panel>
-  );
-}
-
-function Readout({
-  label,
-  value,
-  muted = false,
-}: {
-  label: string;
-  value: string;
-  muted?: boolean;
-}) {
-  return (
-    <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-3">
-      <div className="text-[11px] uppercase text-zinc-400">{label}</div>
-      <div className={`mt-2 whitespace-nowrap text-xl font-semibold ${muted ? "text-zinc-400" : "text-emerald-300"}`}>
-        {value}
-      </div>
-    </div>
   );
 }
 
@@ -1398,141 +1587,6 @@ function RawPanel({ snapshot }: { snapshot: DiagnosticSnapshot }) {
         {payload}
       </pre>
     </Panel>
-  );
-}
-
-function ReplayPanel({
-  snapshot,
-  selectedRecording,
-  openRecording,
-  replayError,
-  replayRunning,
-  replayPaused,
-  setReplayPaused,
-  setReplayRunning,
-  exitReplay,
-}: {
-  snapshot: DiagnosticSnapshot;
-  selectedRecording: RecordingSummary | null;
-  openRecording: (file: File) => void;
-  replayError: string | null;
-  replayRunning: boolean;
-  replayPaused: boolean;
-  setReplayPaused: (paused: boolean) => void;
-  setReplayRunning: (running: boolean) => void;
-  exitReplay: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement | null>(null);
-
-  const replayState = selectedRecording == null ? "No file" : replayRunning ? (replayPaused ? "Paused" : "Playing") : "Loaded";
-  const progressPct = replayRunning ? 42 : 0;
-
-  return (
-    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-      <Panel title="Replay controls" icon={<Play size={14} />} className="min-h-[420px]">
-        <div className="rounded-md border border-zinc-800 bg-black/25 p-3">
-          <div className="grid gap-3 md:grid-cols-3">
-            <Readout label="Session" value={selectedRecording?.sessionId ?? selectedRecording?.name ?? "--"} muted={selectedRecording == null} />
-            <Readout label="State" value={replayState} muted={selectedRecording == null} />
-            <Readout label="Progress" value={`${progressPct}%`} muted={!replayRunning} />
-          </div>
-          <div className="mt-4 h-2 rounded-full bg-zinc-900">
-            <div className="h-2 rounded-full bg-cyan-300" style={{ width: `${progressPct}%` }} />
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <input
-              ref={inputRef}
-              aria-label="Open recording file"
-              className="hidden"
-              type="file"
-              accept=".obd2rec,.obd2rec.gz,.obd2raw"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                if (file) openRecording(file);
-                event.currentTarget.value = "";
-              }}
-            />
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-4 text-sm font-semibold text-zinc-200 hover:border-zinc-500"
-              onClick={() => inputRef.current?.click()}
-            >
-              <FileText size={15} />
-              Open recording
-            </button>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-emerald-400/50 bg-emerald-400/15 px-4 text-sm font-semibold text-emerald-100 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-zinc-900 disabled:text-zinc-600"
-              disabled={selectedRecording == null}
-              onClick={() => {
-                setReplayRunning(true);
-                setReplayPaused(false);
-              }}
-            >
-              {replayRunning ? <RotateCcw size={15} /> : <Play size={15} />}
-              {replayRunning ? "Restart" : "Play loaded"}
-            </button>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-cyan-400/50 bg-cyan-400/15 px-4 text-sm font-semibold text-cyan-100 disabled:cursor-not-allowed disabled:border-zinc-800 disabled:bg-zinc-900 disabled:text-zinc-600"
-              disabled={selectedRecording == null || !replayRunning}
-              onClick={() => setReplayPaused(!replayPaused)}
-            >
-              {replayPaused ? <Play size={15} /> : <Pause size={15} />}
-              {replayPaused ? "Resume" : "Pause"}
-            </button>
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-4 text-sm font-semibold text-zinc-200 hover:border-zinc-500"
-              onClick={exitReplay}
-            >
-              <Radio size={15} />
-              Exit replay
-            </button>
-          </div>
-          {replayError ? (
-            <div className="mt-4 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs leading-5 text-red-200">
-              {replayError}
-            </div>
-          ) : null}
-          {selectedRecording?.warning ? (
-            <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
-              {selectedRecording.warning}
-            </div>
-          ) : null}
-          {selectedRecording?.preview.length ? (
-            <pre className="mt-4 max-h-44 overflow-auto rounded-md border border-zinc-800 bg-black/25 p-3 text-xs leading-5 text-zinc-400">
-              {selectedRecording.preview.join("\n")}
-            </pre>
-          ) : null}
-        </div>
-      </Panel>
-      <Panel title="Replay source" icon={<Database size={14} />} className="min-h-[420px]">
-        <div className="space-y-3 text-sm">
-          <SettingRow label="Vehicle" value={selectedRecording?.vehicle ?? snapshot.vehicle} />
-          <SettingRow label="VIN" value={selectedRecording?.vin ?? snapshot.vin} />
-          <SettingRow label="File" value={selectedRecording?.name ?? "none selected"} tone={selectedRecording ? "ok" : "warn"} />
-          <SettingRow label="Format" value={selectedRecording?.detail ?? "--"} />
-          <SettingRow label="Size" value={selectedRecording ? formatBytes(selectedRecording.sizeBytes) : "--"} />
-          <SettingRow label="Duration" value={formatDuration(selectedRecording?.durationMs)} />
-          {selectedRecording?.pollMs != null ? <SettingRow label="Poll interval" value={`${selectedRecording.pollMs} ms`} /> : null}
-          {selectedRecording?.frameCount != null ? <SettingRow label="Frames" value={selectedRecording.frameCount.toString()} /> : null}
-          {selectedRecording?.eventCount != null ? <SettingRow label="Raw events" value={selectedRecording.eventCount.toString()} /> : null}
-          {selectedRecording?.pidFrames != null ? <SettingRow label="PID frames" value={selectedRecording.pidFrames.toString()} /> : null}
-          {selectedRecording?.enhancedFrames != null ? <SettingRow label="Enhanced frames" value={selectedRecording.enhancedFrames.toString()} /> : null}
-          {selectedRecording?.dtcFrames != null ? <SettingRow label="DTC frames" value={selectedRecording.dtcFrames.toString()} /> : null}
-          {selectedRecording?.readEvents != null ? <SettingRow label="Read events" value={selectedRecording.readEvents.toString()} /> : null}
-          {selectedRecording?.writeEvents != null ? <SettingRow label="Write events" value={selectedRecording.writeEvents.toString()} /> : null}
-        </div>
-        {selectedRecording?.evidencePreview?.length ? (
-          <div className="mt-4 rounded-md border border-cyan-400/50 bg-cyan-400/10 p-3">
-            <div className="text-[11px] font-semibold uppercase text-cyan-200">Evidence metadata</div>
-            <pre className="mt-2 max-h-40 overflow-auto text-xs leading-5 text-zinc-300">
-              {selectedRecording.evidencePreview.join("\n")}
-            </pre>
-          </div>
-        ) : null}
-        <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
-          Opening old files is wired. Playback is still GUI-local until the Rust replay controller is attached to this shell.
-        </div>
-      </Panel>
-    </div>
   );
 }
 
@@ -1677,35 +1731,48 @@ function App() {
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const toggleRecording = useCallback(() => {
-    setRecording((current) => !current);
+  const sessionMode: SessionMode = replayMode ? "replay" : recording ? "recording" : "live";
+
+  const startRecording = useCallback(() => {
+    setReplayMode(false);
+    setReplayPaused(false);
+    setReplayRunning(false);
+    setRecording(true);
   }, []);
 
-  const toggleReplay = useCallback(() => {
-    setReplayMode((current) => {
-      const next = !current;
-      setReplayPaused(false);
-      if (!next) setReplayRunning(false);
-      setActiveTab(next ? "replay" : "overview");
-      return next;
-    });
+  const stopRecording = useCallback(() => {
+    setRecording(false);
   }, []);
 
-  const openRecording = useCallback((file: File) => {
+  const loadRecording = useCallback((loader: Promise<RecordingSummary>) => {
     setReplayError(null);
+    setRecording(false);
     setReplayRunning(false);
     setReplayPaused(false);
-    inspectRecordingFile(file)
+    loader
       .then((summary) => {
         setSelectedRecording(summary);
         setReplayMode(true);
-        setActiveTab("replay");
       })
       .catch((error: unknown) => {
         setSelectedRecording(null);
         setReplayError(error instanceof Error ? error.message : String(error));
       });
   }, []);
+
+  const openRecordingFile = useCallback(
+    (file: File) => {
+      loadRecording(inspectRecordingFile(file));
+    },
+    [loadRecording],
+  );
+
+  const openRecordingPath = useCallback(
+    (path: string) => {
+      loadRecording(inspectRecordingPath(path));
+    },
+    [loadRecording],
+  );
 
   const exitReplay = useCallback(() => {
     setReplayMode(false);
@@ -1717,7 +1784,6 @@ function App() {
   const tabs = useMemo<CategoryTab[]>(() => {
     const alertLabel = snapshot.alerts.length === 1 ? "alert" : "alerts";
     const dtcAlertSummary = `${snapshot.dtcs.length} DTC / ${snapshot.alerts.length} ${alertLabel}`;
-    const replayStateSummary = replaySummary(replayMode, replayRunning, replayPaused, selectedRecording);
 
     const signals = capabilitySignals(snapshot);
     const nextTabs: CategoryTab[] = [
@@ -1740,7 +1806,7 @@ function App() {
       } else if (section.category === "Evidence") {
         id = "raw";
       } else if (section.category === "Replay") {
-        id = "replay";
+        continue;
       } else if (section.category === "Raw") {
         id = "raw";
       } else if (section.category === "Settings") {
@@ -1764,22 +1830,12 @@ function App() {
           sectionSignals,
           snapshot,
           unitMode,
-          replayMode,
-          replayRunning,
-          replayPaused,
-          selectedRecording,
         ),
         icon: capabilitySectionIcon(section.category),
       });
     }
 
     const utilityTabs: CategoryTab[] = [
-      {
-        id: "replay",
-        label: "Replay",
-        summary: replayStateSummary,
-        icon: replayMode ? <Radio size={14} /> : <Play size={14} />,
-      },
       {
         id: "raw",
         label: "Raw",
@@ -1799,7 +1855,7 @@ function App() {
     }
 
     return nextTabs;
-  }, [replayMode, replayPaused, replayRunning, selectedRecording, snapshot, unitMode]);
+  }, [snapshot, unitMode]);
   const activeTabMeta = tabs.find((tab) => tab.id === activeTab) ?? tabs[0];
   const activeCapabilitySection = capabilitySectionForTab(snapshot, activeTab);
 
@@ -1817,15 +1873,23 @@ function App() {
         setUnitMode={setUnitMode}
         refresh={refresh}
         lastRefresh={lastRefresh}
-        recording={recording}
-        replayMode={replayMode}
-        onToggleRecording={toggleRecording}
-        onToggleReplay={toggleReplay}
+        sessionMode={sessionMode}
+        selectedRecording={selectedRecording}
+        replayRunning={replayRunning}
+        replayPaused={replayPaused}
+        replayError={replayError}
+        onStartRecording={startRecording}
+        onStopRecording={stopRecording}
+        openRecordingFile={openRecordingFile}
+        openRecordingPath={openRecordingPath}
+        setReplayRunning={setReplayRunning}
+        setReplayPaused={setReplayPaused}
+        exitReplay={exitReplay}
       />
       <main className="mx-auto flex max-w-[1760px] flex-col gap-3 px-4 py-4">
-        <StatusStrip snapshot={snapshot} recording={recording} replayMode={replayMode} />
+        <StatusStrip snapshot={snapshot} recording={recording} />
         <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start">
-          <CategoryRail tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} connection={snapshot.connection} />
+          <CategoryRail tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} />
           <section
             aria-labelledby={tabButtonId(activeTabMeta.id)}
             className="min-w-0 flex-1"
@@ -1845,18 +1909,6 @@ function App() {
               <RawPanel snapshot={snapshot} />
             ) : activeTab === "settings" ? (
               <SettingsPanel snapshot={snapshot} unitMode={unitMode} setUnitMode={setUnitMode} />
-            ) : activeTab === "replay" ? (
-              <ReplayPanel
-                snapshot={snapshot}
-                selectedRecording={selectedRecording}
-                openRecording={openRecording}
-                replayError={replayError}
-                replayRunning={replayRunning}
-                replayPaused={replayPaused}
-                setReplayPaused={setReplayPaused}
-                setReplayRunning={setReplayRunning}
-                exitReplay={exitReplay}
-              />
             ) : activeTab === "active" ? (
               <GenericActiveTestsPanel snapshot={snapshot} />
             ) : activeTab === "diagnostics" ? (

@@ -13,6 +13,7 @@ pub struct RecordingWriter {
     pub session_id: String,
     pub frame_count: u64,
     version: u8,
+    profile_id: Option<String>,
 }
 
 struct RecordingWriterConfig<'a> {
@@ -96,6 +97,7 @@ impl RecordingWriter {
         let file = File::create(&file_path)?;
         let mut writer = BufWriter::new(file);
 
+        let profile_id = config.profile_id.clone();
         let header = SessionHeader {
             session_id: config.session_id.to_string(),
             start_time: Utc::now(),
@@ -123,7 +125,12 @@ impl RecordingWriter {
             session_id: config.session_id.to_string(),
             frame_count: 0,
             version: config.version,
+            profile_id,
         })
+    }
+
+    pub fn profile_id(&self) -> Option<&str> {
+        self.profile_id.as_deref()
     }
 
     /// Write a PID frame with optional raw hex bytes.

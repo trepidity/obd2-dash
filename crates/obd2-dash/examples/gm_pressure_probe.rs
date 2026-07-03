@@ -3,7 +3,7 @@ use std::env;
 use obd2_core::adapter::elm327::Elm327Adapter;
 use obd2_core::adapter::{Adapter, PhysicalTarget, RoutedRequest};
 use obd2_core::transport::serial::SerialTransport;
-use obd2_core::transport::Transport;
+use obd2_core::transport::Link;
 use obd2_core::vehicle::PhysicalAddress;
 use obd2_dash::gm_enhanced::find_lly_did;
 use obd2_dash::gm_evidence::{
