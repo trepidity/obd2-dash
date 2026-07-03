@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+@theme {
+  --color-obd-bg: #090b0d;
+  --color-obd-surface: #111416;
+  --color-obd-panel: #101316;
+  --color-obd-text: #f2f5f2;
+  --font-mono: "SFMono-Regular", "Cascadia Mono", "Roboto Mono", "Liberation Mono",
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
 :root {
   color-scheme: dark;
   font-family:
@@ -26,4 +35,8 @@ select {
 
 * {
   box-sizing: border-box;
+}
+
+.telemetry-value {
+  font-variant-numeric: tabular-nums;
 }

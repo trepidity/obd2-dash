@@ -24,6 +24,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TelemetryBoard } from "./components/TelemetryBoard";
 import { fallbackSnapshot, gasNoTurboSnapshot, genericObdSnapshot, transmissionSnapshot } from "./mockData";
 import type {
   CapabilitySection,
@@ -566,7 +567,7 @@ function SessionMenuButton({
       </span>
       <span className="min-w-0">
         <span className="block text-xs font-semibold">{label}</span>
-        {detail ? <span className="mt-0.5 block text-[11px] leading-4 text-zinc-500">{detail}</span> : null}
+        {detail ? <span className="mt-0.5 block text-[11px] leading-4 text-zinc-400">{detail}</span> : null}
       </span>
     </button>
   );
@@ -685,7 +686,7 @@ function Toolbar({
   };
 
   return (
-    <header className="sticky top-0 z-10 border-b border-zinc-800 bg-[#111416]/96 px-4 py-3 backdrop-blur">
+    <header className="sticky top-0 z-10 border-b border-zinc-800 bg-obd-surface px-4 py-3">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex min-w-0 items-center gap-4">
           <div className="flex h-9 w-9 items-center justify-center rounded-md border border-cyan-400/40 bg-cyan-400/10 text-cyan-200">
@@ -733,12 +734,12 @@ function Toolbar({
                 role="menu"
               >
                 <div className="mb-3 border-b border-zinc-800 pb-3">
-                  <div className="text-[11px] font-semibold uppercase text-zinc-500">Session</div>
+                  <div className="text-[11px] font-semibold uppercase text-zinc-400">Session</div>
                   <div className="mt-1 flex items-center gap-2 text-sm font-semibold text-zinc-100">
                     {modeIcon}
                     {modeLabel}
                   </div>
-                  <div className="mt-1 text-[11px] leading-4 text-zinc-500">
+                  <div className="mt-1 text-[11px] leading-4 text-zinc-400">
                     {isReplay
                       ? selectedRecording?.name ?? replayState
                       : isRecording
@@ -1087,7 +1088,7 @@ function GenericActiveTestsPanel({ snapshot }: { snapshot: DiagnosticSnapshot })
                   <div>Cancel available: {test.cancel_available ? "yes" : "no"}</div>
                 </div>
                 <button
-                  className="mt-3 inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-500 disabled:cursor-not-allowed"
+                  className="mt-3 inline-flex h-9 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-sm font-semibold text-zinc-400 disabled:cursor-not-allowed"
                   disabled
                   type="button"
                 >
@@ -1268,14 +1269,14 @@ function GenericSignalReadout({ signal, unitMode }: { signal: CapabilitySignalSn
             signal.confidence === "Candidate"
               ? "border-amber-500/40 text-amber-300"
               : signal.confidence === "Rejected"
-                ? "border-zinc-700 text-zinc-500"
+                ? "border-zinc-700 text-zinc-400"
                 : "border-zinc-700 text-zinc-400"
           }`}
         >
           {signal.state}
         </span>
       </div>
-      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-zinc-500">
+      <div className="mt-2 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-zinc-400">
         <span>{signal.module}</span>
         <span>{signal.confidence}</span>
       </div>
@@ -1405,7 +1406,7 @@ function GenericDerivedPanel({
             <div className="rounded-md border border-zinc-800 bg-black/25 px-3 py-3" key={signal.key}>
               <div className="flex items-center justify-between gap-3">
                 <span className="text-[11px] uppercase text-zinc-400">{signal.label}</span>
-                <span className="font-mono text-[10px] text-zinc-500">{formula}</span>
+                <span className="font-mono text-[10px] text-zinc-400">{formula}</span>
               </div>
               <div className={`mt-2 text-xl font-semibold ${stateClasses[runtimeTone(signal)]}`}>
                 {signalDisplayValue(signal, unitMode)}
@@ -1478,40 +1479,12 @@ function CapabilitySectionView({
 }
 
 function CapabilityOverviewView({ snapshot, unitMode }: { snapshot: DiagnosticSnapshot; unitMode: UnitMode }) {
-  const signals = capabilitySignals(snapshot);
-  const sections = capabilitySections(snapshot).filter((section) => {
-    if (
-      section.category === "Diagnostics" ||
-      section.category === "ActiveTests" ||
-      section.category === "Evidence" ||
-      section.category === "Replay"
-    ) {
-      return false;
-    }
-    return signalsForSection(section, signals).length > 0;
-  });
-
-  if (sections.length === 0) {
-    return (
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <AlertsPanel alerts={snapshot.alerts} />
-        <DtcPanel dtcs={snapshot.dtcs} />
-      </div>
-    );
-  }
-
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="flex min-w-0 flex-col gap-3">
-          {sections.slice(0, 3).map((section) => (
-            <CapabilitySectionView key={section.category} section={section} signals={signals} unitMode={unitMode} />
-          ))}
-        </div>
-        <div className="flex flex-col gap-3">
-          <DtcPanel dtcs={snapshot.dtcs} />
-          <AlertsPanel alerts={snapshot.alerts} />
-        </div>
+    <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <TelemetryBoard snapshot={snapshot} unitMode={unitMode} />
+      <div className="flex flex-col gap-3">
+        <DtcPanel dtcs={snapshot.dtcs} />
+        <AlertsPanel alerts={snapshot.alerts} />
       </div>
     </div>
   );

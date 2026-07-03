@@ -1,7 +1,30 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+function sessionMenuButton(page: Page) {
+  return page.getByRole("button", { name: "Session menu" });
+}
+
+async function openSessionMenu(page: Page) {
+  const button = sessionMenuButton(page);
+  await button.click();
+  await expect(button).toHaveAttribute("aria-expanded", "true");
+  return page.getByRole("menu");
+}
+
+async function clickSessionMenuItem(page: Page, name: RegExp) {
+  const menu = await openSessionMenu(page);
+  await menu.getByRole("menuitem", { name }).click();
+}
+
+async function openRecordingViaSessionMenu(page: Page, filePath: string) {
+  const menu = await openSessionMenu(page);
+  const fileChooser = page.waitForEvent("filechooser");
+  await menu.getByRole("menuitem", { name: /Open recording/ }).click();
+  await (await fileChooser).setFiles(filePath);
+}
 
 test("dashboard renders category rail and utility panels", async ({ page }) => {
   const consoleIssues: string[] = [];
@@ -29,9 +52,12 @@ test("dashboard renders category rail and utility panels", async ({ page }) => {
   await expect(page.getByRole("tab", { name: /Active Tests\s+locked/ })).toBeVisible();
   await expect(page.getByRole("tab", { name: /Other\s+170\.6 F \/ 91\.4 F/ })).toBeVisible();
   await expect(page.getByText("Alerts", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("capability-section-fuel").getByText("4260.0 psi", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("capability-section-fuel").getByText("5510.0 psi", { exact: true })).toBeVisible();
-  await expect(page.getByTestId("capability-section-powertrain").getByText("39.0 g/s", { exact: true })).toBeVisible();
+  const telemetryBoard = page.getByTestId("telemetry-board");
+  await expect(telemetryBoard.getByText("Primary telemetry")).toBeVisible();
+  await expect(telemetryBoard.getByText("Evidence lane")).toBeVisible();
+  await expect(telemetryBoard).toContainText("39.0 g/s");
+  await expect(telemetryBoard).toContainText("4260.0 psi");
+  await expect(telemetryBoard).toContainText("5510.0 psi");
 
   await overviewTab.focus();
   await page.keyboard.press("ArrowDown");
@@ -79,12 +105,16 @@ test("dashboard renders category rail and utility panels", async ({ page }) => {
   await expect(page.getByText("Coolant")).toBeVisible();
   await expect(page.getByText("Battery voltage")).toBeVisible();
 
-  await page.getByRole("button", { name: "Record" }).click();
-  await expect(page.getByRole("button", { name: "Stop Rec" })).toHaveAttribute("aria-pressed", "true");
+  await expect(sessionMenuButton(page)).toContainText("Session: Live");
+  await clickSessionMenuItem(page, /Start recording/);
+  await expect(sessionMenuButton(page)).toContainText("Session: Recording");
+  await expect(page.getByText("Record", { exact: true }).locator("..").getByText("ON", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Replay" }).click();
-  await expect(page.getByText("Replay controls")).toBeVisible();
-  const rawFixture = join(tmpdir(), `obd2-gui-${Date.now()}.obd2raw`);
+  await clickSessionMenuItem(page, /Stop recording/);
+  await expect(sessionMenuButton(page)).toContainText("Session: Live");
+  await expect(page.getByText("Record", { exact: true }).locator("..").getByText("ready", { exact: true })).toBeVisible();
+  const rawFixtureName = `obd2-gui-${Date.now()}.obd2raw`;
+  const rawFixture = join(tmpdir(), rawFixtureName);
   writeFileSync(
     rawFixture,
     [
@@ -104,14 +134,15 @@ test("dashboard renders category rail and utility panels", async ({ page }) => {
       "",
     ].join("\n"),
   );
-  await page.getByLabel("Open recording file").setInputFiles(rawFixture);
-  await expect(page.getByText("obd2-gui-").first()).toBeVisible();
-  await expect(page.getByText("obd2-raw v1")).toBeVisible();
-  await expect(page.getByText("Evidence metadata")).toBeVisible();
-  const evidenceBlock = page.getByText("Evidence metadata").locator("..");
-  await expect(evidenceBlock.getByText("22154201")).toBeVisible();
+  await openRecordingViaSessionMenu(page, rawFixture);
+  await expect(sessionMenuButton(page)).toContainText("Session: Replay");
+  await expect(page.getByText(`Replay: ${rawFixtureName}`)).toBeVisible();
+  let sessionMenu = await openSessionMenu(page);
+  await expect(sessionMenu.getByRole("menuitem", { name: /Play loaded/ })).toBeEnabled();
+  await page.keyboard.press("Escape");
 
-  const recFixture = join(tmpdir(), `obd2-gui-${Date.now()}.obd2rec`);
+  const recFixtureName = `obd2-gui-${Date.now()}.obd2rec`;
+  const recFixture = join(tmpdir(), recFixtureName);
   const header = Buffer.from(
     JSON.stringify({
       session_id: "test-session",
@@ -130,14 +161,21 @@ test("dashboard renders category rail and utility panels", async ({ page }) => {
   frame.writeDoubleLE(685, 6);
   frame[14] = 0;
   writeFileSync(recFixture, Buffer.concat([Buffer.from("OBD2REC\x02", "binary"), headerLen, header, frame]));
-  await page.getByLabel("Open recording file").setInputFiles(recFixture);
-  await expect(page.getByText("test-session").first()).toBeVisible();
-  await expect(page.getByText("OBD2REC v2")).toBeVisible();
+  await openRecordingViaSessionMenu(page, recFixture);
+  await expect(sessionMenuButton(page)).toContainText("Session: Replay");
+  await expect(page.getByText(`Replay: ${recFixtureName}`)).toBeVisible();
+  sessionMenu = await openSessionMenu(page);
+  await expect(sessionMenu.getByRole("menuitem", { name: /Play loaded/ })).toBeEnabled();
+  await page.keyboard.press("Escape");
 
-  await page.getByRole("button", { name: "Play loaded" }).click();
-  await page.getByRole("button", { name: "Pause" }).click();
-  await expect(page.getByRole("button", { name: "Resume" })).toBeVisible();
-  await page.getByRole("button", { name: "Exit replay" }).click();
+  await clickSessionMenuItem(page, /Play loaded/);
+  await expect(sessionMenuButton(page)).toContainText("Session: Replay");
+  await expect(page.getByRole("menuitem", { name: /Pause/ })).toBeVisible();
+  await page.getByRole("menuitem", { name: /Pause/ }).click();
+  await expect(page.getByRole("menuitem", { name: /Resume/ })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await clickSessionMenuItem(page, /Exit replay/);
+  await expect(sessionMenuButton(page)).toContainText("Session: Live");
   await expect(page.getByRole("tab", { name: /Overview/ })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Fuel rail", { exact: true })).toBeVisible();
 
