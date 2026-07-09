@@ -2,8 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    env,
-    fs,
+    env, fs,
     path::PathBuf,
 };
 
@@ -802,16 +801,24 @@ fn recordings_directory(app: tauri::AppHandle) -> Result<String, String> {
         .app_data_dir()
         .map_err(|error| format!("failed to resolve app data directory: {error}"))?
         .join("recordings");
-    fs::create_dir_all(&dir)
-        .map_err(|error| format!("failed to create recordings directory {}: {error}", dir.display()))?;
+    fs::create_dir_all(&dir).map_err(|error| {
+        format!(
+            "failed to create recordings directory {}: {error}",
+            dir.display()
+        )
+    })?;
     Ok(dir.display().to_string())
 }
 
 #[tauri::command]
 fn read_recording_file(path: String) -> Result<Vec<u8>, String> {
     let path = PathBuf::from(path);
-    let metadata = fs::metadata(&path)
-        .map_err(|error| format!("failed to inspect recording file {}: {error}", path.display()))?;
+    let metadata = fs::metadata(&path).map_err(|error| {
+        format!(
+            "failed to inspect recording file {}: {error}",
+            path.display()
+        )
+    })?;
     if !metadata.is_file() {
         return Err(format!("recording path is not a file: {}", path.display()));
     }
@@ -822,7 +829,8 @@ fn read_recording_file(path: String) -> Result<Vec<u8>, String> {
             MAX_RECORDING_FILE_BYTES
         ));
     }
-    fs::read(&path).map_err(|error| format!("failed to read recording file {}: {error}", path.display()))
+    fs::read(&path)
+        .map_err(|error| format!("failed to read recording file {}: {error}", path.display()))
 }
 
 #[tauri::command]
