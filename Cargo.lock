@@ -2502,7 +2502,7 @@ dependencies = [
 [[package]]
 name = "obd2-core"
 version = "0.2.0"
-source = "git+https://github.com/HaulLogic/obd2-core?rev=94cc6817b3dea85928ad440e8e76fad700ceeea2#94cc6817b3dea85928ad440e8e76fad700ceeea2"
+source = "git+https://github.com/HaulLogic/obd2-core?rev=0fe6e667f2f9361ed64c9ebd376d028153a14a17#0fe6e667f2f9361ed64c9ebd376d028153a14a17"
 dependencies = [
  "async-trait",
  "btleplug",
