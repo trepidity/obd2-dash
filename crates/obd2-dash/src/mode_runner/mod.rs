@@ -7,9 +7,11 @@
 pub mod capability;
 pub mod scheduler;
 pub mod snapshot;
+pub mod store;
 
 pub use capability::{CapabilityKey, CapabilityKind, CapabilityOutcome, CapabilitySet};
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};
 pub use snapshot::{
     CapabilityPersistence, CapabilityState, CapabilityVerification, ModeState, RunnerSnapshot,
 };
+pub use store::{CapabilityStore, SqliteCapabilityStore};

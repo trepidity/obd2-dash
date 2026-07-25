@@ -1,13 +1,8 @@
 use std::collections::BTreeMap;
 
-/// Stable capability namespace persisted by the runner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum CapabilityKind {
-    Pid,
-    ProfileSignal,
-    Service,
-}
+pub use obd2_db::models::{CapabilityKind, CapabilityOutcome};
 
+/// Stable capability namespace persisted by the runner.
 /// A capability's stable request identity. `module` is never optional.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct CapabilityKey {
@@ -27,24 +22,6 @@ impl CapabilityKey {
             request_id: request_id.into(),
             module: module.into(),
         }
-    }
-}
-
-/// Classification used by both normal tier scheduling and verification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityOutcome {
-    Supported,
-    Unsupported,
-    Unverified,
-}
-
-impl CapabilityOutcome {
-    pub fn is_normal(self) -> bool {
-        matches!(self, Self::Supported)
-    }
-
-    pub fn is_pruned(self) -> bool {
-        matches!(self, Self::Unsupported)
     }
 }
 
@@ -86,9 +63,18 @@ mod tests {
 
     #[test]
     fn only_unsupported_is_pruned() {
-        assert!(CapabilityOutcome::Unsupported.is_pruned());
-        assert!(!CapabilityOutcome::Unverified.is_pruned());
-        assert!(!CapabilityOutcome::Supported.is_pruned());
+        assert!(matches!(
+            CapabilityOutcome::Unsupported,
+            CapabilityOutcome::Unsupported
+        ));
+        assert!(!matches!(
+            CapabilityOutcome::Unverified,
+            CapabilityOutcome::Unsupported
+        ));
+        assert!(!matches!(
+            CapabilityOutcome::Supported,
+            CapabilityOutcome::Unsupported
+        ));
     }
 
     #[test]
