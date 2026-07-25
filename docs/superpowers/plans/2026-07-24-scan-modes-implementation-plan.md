@@ -28,6 +28,15 @@ atomic per-vehicle capability persistence.
 **Tech stack:** Rust 2021, Tokio, async-trait, rusqlite, Tauri 2, React 18,
 TypeScript, Playwright.
 
+## Execution status
+
+- `TASK-PROG-0001`: registered in the workspace L0 matrix.
+- `TASK-CORE-0001`: committed in `obd2-core` as `0fe6e667`; full workspace
+  tests and clippy pass.
+- `TASK-DASH-0001`: dependency pin committed in `obd2-dash` as `52c9191`.
+  The core SHA must be pushed before a network-only Cargo resolve can verify
+  the lockfile.
+
 ## Global constraints
 
 - Work on dedicated branches in both repositories. Do not implement cross-repo
@@ -117,16 +126,16 @@ TASK-DASH-0001 pin exact core SHA
 - **Repos:** workspace L0 documents
 - **Files:** `HAULLOGIC-MASTER-DESIGN-MATRIX.md`
 
-- [ ] Add `WP-OBD-SCAN-MODES` to the work-package mapping with the four CAP
+- [x] Add `WP-OBD-SCAN-MODES` to the work-package mapping with the four CAP
   links and this spec/plan as artifacts.
-- [ ] Record `obd2-gui` as the R&D proving surface, not the production Desktop
+- [x] Record `obd2-gui` as the R&D proving surface, not the production Desktop
   owner.
-- [ ] Record the temporary `obd2-core` interface addition under
+- [x] Record the temporary `obd2-core` interface addition under
   `COMP-OBD-SESS`.
-- [ ] Note the `identify_vehicle` failure-propagation change under
+- [x] Note the `identify_vehicle` failure-propagation change under
   `COMP-OBD-SESS`: HaulLogic-Desktop inherits it at its next core rev bump and
   should adopt `identify_vehicle_identity` where lenient identity is intended.
-- [ ] Do not create a new long-lived component unless the matrix owner decides
+- [x] Do not create a new long-lived component unless the matrix owner decides
   the runner is broader than `COMP-DASH-PROF`.
 
 **Done when:** L0 traceability points to this plan without changing product
@@ -180,7 +189,7 @@ cargo test -p obd2-core refresh_supported_pids -- --nocapture
 
 Expected: APIs are absent and `identify_vehicle` still hides the error.
 
-- [ ] **Implement session split**
+- [x] **Implement session split**
   - Extract current VIN decode/spec match/profile population into
     `identify_vehicle_identity`.
   - Set the session profile/discovery exactly as today, with an empty supported
@@ -206,7 +215,7 @@ either clear the continuation bit while still proving cross-payload union, or
 return a valid terminating `0120` page. Cover claimed-page `NO DATA` only in the
 new error test.
 
-- [ ] **Implement ELM mask walk**
+- [x] **Implement ELM mask walk**
   - Start at base `0x00`.
   - Decode all payloads for the page and OR their PID bits.
   - Request the next page only if the union contains the continuation PID.
@@ -215,7 +224,7 @@ new error test.
   - Return the broadcast union.
   - Do not cache partial results.
 
-- [ ] **Run core gates**
+- [x] **Run core gates**
 
 ```bash
 cargo fmt --check
@@ -224,14 +233,14 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-- [ ] **OWL audit**
+- [x] **OWL audit**
   - Search for `unwrap_or_default` around supported-PID discovery.
   - Search for a second bitmap page loop outside the adapter.
   - Confirm `identify_vehicle_identity` does not call supported-PID discovery.
     Do not count an initialization-time `0100` protocol liveness probe as
     identity discovery.
 
-- [ ] **Commit in `obd2-core`**
+- [x] **Commit in `obd2-core`**
 
 ```bash
 git add crates/obd2-core/src/session/mod.rs \
@@ -251,7 +260,7 @@ git commit -m "fix(session): split identity from forced PID discovery"
 - **Repo:** `obd2-dash`
 - **Files:** root `Cargo.toml`, `Cargo.lock`
 
-- [ ] Replace the `obd2-core` `rev` with the exact commit from
+- [x] Replace the `obd2-core` `rev` with the exact commit from
   `TASK-CORE-0001`.
 - [ ] Refresh the lockfile through Cargo; do not hand-edit the checksum/source.
 - [ ] Confirm there is one `obd2-core` source identity:
