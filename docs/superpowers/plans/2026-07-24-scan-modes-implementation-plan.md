@@ -38,6 +38,8 @@ TypeScript, Playwright.
   the lockfile.
 - `TASK-DASH-0002`: pure capability, scheduler, and snapshot slice committed
   as `9c911e2`; diagnostics type migration and full runner contracts remain.
+- `TASK-DB-0001`: versioned capability schema/models and transactional APIs
+  committed as `97e6683`; async store wrapping remains in `TASK-DASH-0003`.
 
 ## Global constraints
 
