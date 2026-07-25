@@ -4,10 +4,18 @@ pub mod seed;
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::Result;
-use rusqlite::Connection;
+use anyhow::{bail, Result};
+use rusqlite::{Connection, OptionalExtension};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use models::{DefaultThreshold, EngineFamily, PidThreshold, ResolvedThreshold, VehicleInfo};
+use models::{
+    CapabilityContext, CapabilityKind, CapabilityLoad, CapabilityOutcome, CapabilityRecord,
+    CapabilitySetReplacement, DefaultThreshold, EngineFamily, OutcomeUpdate, PidThreshold,
+    ResolvedThreshold, VehicleCapabilitySet, VehicleInfo,
+};
+
+static SET_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS engine_families (
@@ -83,6 +91,48 @@ CREATE TABLE IF NOT EXISTS learned_baselines (
 );
 "#;
 
+const CAPABILITY_SCHEMA: &str = r#"
+CREATE TABLE IF NOT EXISTS vehicle_capability_sets (
+    vin                  TEXT PRIMARY KEY CHECK(length(vin) = 17),
+    set_id               TEXT NOT NULL CHECK(length(set_id) > 0),
+    protocol             TEXT NOT NULL CHECK(length(protocol) > 0),
+    profile_id           TEXT NOT NULL CHECK(length(profile_id) > 0),
+    probe_schema_version INTEGER NOT NULL CHECK(probe_schema_version >= 1),
+    probe_fingerprint    TEXT NOT NULL CHECK(length(probe_fingerprint) > 0),
+    scan_completed_at    TEXT NOT NULL CHECK(length(scan_completed_at) > 0)
+);
+
+CREATE TABLE IF NOT EXISTS vehicle_capabilities (
+    vin               TEXT NOT NULL CHECK(length(vin) = 17)
+                      REFERENCES vehicle_capability_sets(vin)
+                      ON DELETE CASCADE,
+    kind              TEXT NOT NULL
+                      CHECK(kind IN ('pid', 'profile_signal', 'service')),
+    request_id        TEXT NOT NULL CHECK(length(request_id) > 0),
+    module            TEXT NOT NULL CHECK(length(module) > 0),
+    outcome           TEXT NOT NULL
+                      CHECK(outcome IN ('supported', 'unsupported', 'unverified')),
+    observation_seq   INTEGER NOT NULL CHECK(observation_seq >= 0),
+    rtt_ms            INTEGER CHECK(rtt_ms IS NULL OR rtt_ms >= 0),
+    last_attempted_at TEXT NOT NULL CHECK(length(last_attempted_at) > 0),
+    last_error_code   TEXT,
+    PRIMARY KEY (vin, kind, request_id, module)
+);
+"#;
+
+fn initialize_schema(conn: &mut Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+    if version > 1 {
+        bail!("database schema version {version} is newer than supported version 1");
+    }
+    let tx = conn.transaction()?;
+    tx.execute_batch(SCHEMA)?;
+    tx.execute_batch(CAPABILITY_SCHEMA)?;
+    tx.execute_batch("PRAGMA user_version = 1")?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub struct Database {
     conn: Connection,
 }
@@ -91,9 +141,9 @@ impl Database {
     /// Open (or create) a SQLite database at the given path and run migrations.
     pub fn open(path: &Path) -> Result<Self> {
         tracing::info!(target: "obd2::db", "Opening database at {}", path.display());
-        let conn = Connection::open(path)?;
+        let mut conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch(SCHEMA)?;
+        initialize_schema(&mut conn)?;
         tracing::debug!(target: "obd2::db", "Database schema initialized");
         Ok(Self { conn })
     }
@@ -101,9 +151,9 @@ impl Database {
     /// Open an in-memory database (for testing).
     pub fn open_in_memory() -> Result<Self> {
         tracing::debug!(target: "obd2::db", "Opening in-memory database");
-        let conn = Connection::open_in_memory()?;
+        let mut conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
-        conn.execute_batch(SCHEMA)?;
+        initialize_schema(&mut conn)?;
         Ok(Self { conn })
     }
 
@@ -469,11 +519,241 @@ impl Database {
         }
         Ok(base)
     }
+
+    pub fn load_capability_set(
+        &self,
+        vin: &str,
+        context: &CapabilityContext,
+    ) -> Result<CapabilityLoad> {
+        let parent = self
+            .conn
+            .query_row(
+                "SELECT set_id, protocol, profile_id, probe_schema_version,
+                        probe_fingerprint, scan_completed_at
+                 FROM vehicle_capability_sets WHERE vin = ?1",
+                [vin],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        CapabilityContext {
+                            protocol: row.get(1)?,
+                            profile_id: row.get(2)?,
+                            probe_schema_version: row.get(3)?,
+                            probe_fingerprint: row.get(4)?,
+                        },
+                        row.get::<_, String>(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((set_id, stored_context, completed_at)) = parent else {
+            return Ok(CapabilityLoad::Miss);
+        };
+        if stored_context != *context {
+            return Ok(CapabilityLoad::ContextMismatch);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, request_id, module, outcome, observation_seq, rtt_ms,
+                    last_attempted_at, last_error_code
+             FROM vehicle_capabilities
+             WHERE vin = ?1
+             ORDER BY kind, request_id, module",
+        )?;
+        let records = stmt
+            .query_map([vin], |row| {
+                let kind: String = row.get(0)?;
+                let outcome: String = row.get(3)?;
+                Ok(CapabilityRecord {
+                    kind: CapabilityKind::parse(&kind).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Text,
+                            format!("invalid capability kind {kind}").into(),
+                        )
+                    })?,
+                    request_id: row.get(1)?,
+                    module: row.get(2)?,
+                    outcome: CapabilityOutcome::parse(&outcome).ok_or_else(|| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            3,
+                            rusqlite::types::Type::Text,
+                            format!("invalid capability outcome {outcome}").into(),
+                        )
+                    })?,
+                    observation_seq: row.get(4)?,
+                    rtt_ms: row.get(5)?,
+                    attempted_at: row.get(6)?,
+                    error_code: row.get(7)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        Ok(CapabilityLoad::Hit(VehicleCapabilitySet {
+            vin: vin.to_string(),
+            set_id,
+            context: stored_context,
+            completed_at,
+            records,
+        }))
+    }
+
+    pub fn replace_capability_set(
+        &mut self,
+        replacement: &CapabilitySetReplacement,
+    ) -> Result<String> {
+        let set_id = new_set_id();
+        let tx = self.conn.transaction()?;
+        tx.execute(
+            "INSERT INTO vehicle_capability_sets
+                (vin, set_id, protocol, profile_id, probe_schema_version,
+                 probe_fingerprint, scan_completed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(vin) DO UPDATE SET
+                set_id = excluded.set_id,
+                protocol = excluded.protocol,
+                profile_id = excluded.profile_id,
+                probe_schema_version = excluded.probe_schema_version,
+                probe_fingerprint = excluded.probe_fingerprint,
+                scan_completed_at = excluded.scan_completed_at",
+            rusqlite::params![
+                replacement.vin,
+                set_id,
+                replacement.context.protocol,
+                replacement.context.profile_id,
+                replacement.context.probe_schema_version,
+                replacement.context.probe_fingerprint,
+                replacement.completed_at,
+            ],
+        )?;
+        tx.execute(
+            "DELETE FROM vehicle_capabilities WHERE vin = ?1",
+            [&replacement.vin],
+        )?;
+        for record in &replacement.records {
+            insert_capability_record(&tx, &replacement.vin, record)?;
+        }
+        tx.commit()?;
+        Ok(set_id)
+    }
+
+    pub fn update_capability_outcomes(
+        &mut self,
+        vin: &str,
+        set_id: &str,
+        records: &[CapabilityRecord],
+    ) -> Result<OutcomeUpdate> {
+        let tx = self.conn.transaction()?;
+        let current_set_id: Option<String> = tx
+            .query_row(
+                "SELECT set_id FROM vehicle_capability_sets WHERE vin = ?1",
+                [vin],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current_set_id.as_deref() != Some(set_id) {
+            tx.rollback()?;
+            return Ok(OutcomeUpdate::StaleSet);
+        }
+        for record in records {
+            insert_or_update_capability_record(&tx, vin, record)?;
+        }
+        tx.commit()?;
+        Ok(OutcomeUpdate::Applied)
+    }
+}
+
+fn new_set_id() -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let counter = SET_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    format!("{nanos:032x}-{counter:016x}")
+}
+
+fn insert_capability_record(
+    tx: &rusqlite::Transaction<'_>,
+    vin: &str,
+    record: &CapabilityRecord,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO vehicle_capabilities
+            (vin, kind, request_id, module, outcome, observation_seq, rtt_ms,
+             last_attempted_at, last_error_code)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            vin,
+            record.kind.as_str(),
+            record.request_id,
+            record.module,
+            record.outcome.as_str(),
+            record.observation_seq,
+            record.rtt_ms,
+            record.attempted_at,
+            record.error_code,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_or_update_capability_record(
+    tx: &rusqlite::Transaction<'_>,
+    vin: &str,
+    record: &CapabilityRecord,
+) -> Result<()> {
+    tx.execute(
+        "INSERT INTO vehicle_capabilities
+            (vin, kind, request_id, module, outcome, observation_seq, rtt_ms,
+             last_attempted_at, last_error_code)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(vin, kind, request_id, module) DO UPDATE SET
+            outcome = excluded.outcome,
+            observation_seq = excluded.observation_seq,
+            rtt_ms = excluded.rtt_ms,
+            last_attempted_at = excluded.last_attempted_at,
+            last_error_code = excluded.last_error_code
+         WHERE excluded.observation_seq >= vehicle_capabilities.observation_seq",
+        rusqlite::params![
+            vin,
+            record.kind.as_str(),
+            record.request_id,
+            record.module,
+            record.outcome.as_str(),
+            record.observation_seq,
+            record.rtt_ms,
+            record.attempted_at,
+            record.error_code,
+        ],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn capability_context(fingerprint: &str) -> CapabilityContext {
+        CapabilityContext {
+            protocol: "j1850_vpw".into(),
+            profile_id: "lly".into(),
+            probe_schema_version: 1,
+            probe_fingerprint: fingerprint.into(),
+        }
+    }
+
+    fn capability_record(seq: i64, outcome: CapabilityOutcome) -> CapabilityRecord {
+        CapabilityRecord {
+            kind: CapabilityKind::Pid,
+            request_id: "010C".into(),
+            module: "broadcast".into(),
+            outcome,
+            observation_seq: seq,
+            rtt_ms: Some(120),
+            attempted_at: format!("2026-07-24T00:00:{seq:02}Z"),
+            error_code: None,
+        }
+    }
 
     #[test]
     fn test_open_in_memory() {
@@ -488,6 +768,130 @@ mod tests {
             )
             .unwrap();
         assert!(count >= 5);
+        let version: i64 = db
+            .conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn capability_set_round_trips_and_context_mismatch_is_visible() {
+        let mut db = Database::open_in_memory().unwrap();
+        let replacement = CapabilitySetReplacement {
+            vin: "1GCHK23224F000001".into(),
+            context: capability_context("a"),
+            completed_at: "2026-07-24T00:00:00Z".into(),
+            records: vec![capability_record(1, CapabilityOutcome::Supported)],
+        };
+        let set_id = db.replace_capability_set(&replacement).unwrap();
+        let loaded = db
+            .load_capability_set(&replacement.vin, &replacement.context)
+            .unwrap();
+        let CapabilityLoad::Hit(set) = loaded else {
+            panic!("expected capability cache hit");
+        };
+        assert_eq!(set.set_id, set_id);
+        assert_eq!(set.records, replacement.records);
+        assert!(matches!(
+            db.load_capability_set(&replacement.vin, &capability_context("b"))
+                .unwrap(),
+            CapabilityLoad::ContextMismatch
+        ));
+    }
+
+    #[test]
+    fn replacement_is_atomic_and_stale_updates_are_rejected() {
+        let mut db = Database::open_in_memory().unwrap();
+        let old = CapabilitySetReplacement {
+            vin: "1GCHK23224F000001".into(),
+            context: capability_context("old"),
+            completed_at: "2026-07-24T00:00:00Z".into(),
+            records: vec![capability_record(1, CapabilityOutcome::Supported)],
+        };
+        let old_set_id = db.replace_capability_set(&old).unwrap();
+
+        let duplicate = capability_record(2, CapabilityOutcome::Unsupported);
+        let failed = CapabilitySetReplacement {
+            context: capability_context("new"),
+            records: vec![duplicate.clone(), duplicate],
+            ..old.clone()
+        };
+        assert!(db.replace_capability_set(&failed).is_err());
+        assert!(matches!(
+            db.load_capability_set(&old.vin, &old.context).unwrap(),
+            CapabilityLoad::Hit(_)
+        ));
+        assert!(matches!(
+            db.update_capability_outcomes(
+                &old.vin,
+                "not-the-current-set",
+                &[capability_record(3, CapabilityOutcome::Unsupported)]
+            )
+            .unwrap(),
+            OutcomeUpdate::StaleSet
+        ));
+        assert!(matches!(
+            db.update_capability_outcomes(
+                &old.vin,
+                &old_set_id,
+                &[capability_record(0, CapabilityOutcome::Unsupported)]
+            )
+            .unwrap(),
+            OutcomeUpdate::Applied
+        ));
+        let CapabilityLoad::Hit(set) = db.load_capability_set(&old.vin, &old.context).unwrap()
+        else {
+            panic!("expected old capability set");
+        };
+        assert_eq!(set.records[0].outcome, CapabilityOutcome::Supported);
+    }
+
+    #[test]
+    fn module_is_non_nullable_and_duplicate_keys_conflict() {
+        let db = Database::open_in_memory().unwrap();
+        assert!(db
+            .conn
+            .execute(
+                "INSERT INTO vehicle_capability_sets
+                 (vin, set_id, protocol, profile_id, probe_schema_version,
+                  probe_fingerprint, scan_completed_at)
+                 VALUES ('1GCHK23224F000001', 'set', 'can_11bit_500',
+                         'generic', 1, 'fp', 'now')",
+                [],
+            )
+            .is_ok());
+        let first = db.conn.execute(
+            "INSERT INTO vehicle_capabilities
+             (vin, kind, request_id, module, outcome, observation_seq,
+              last_attempted_at)
+             VALUES ('1GCHK23224F000001', 'pid', '010C', 'broadcast',
+                     'supported', 1, 'now')",
+            [],
+        );
+        assert!(first.is_ok());
+        assert!(db
+            .conn
+            .execute(
+                "INSERT INTO vehicle_capabilities
+                 (vin, kind, request_id, module, outcome, observation_seq,
+                  last_attempted_at)
+                 VALUES ('1GCHK23224F000001', 'pid', '010C', NULL,
+                         'supported', 2, 'now')",
+                [],
+            )
+            .is_err());
+        assert!(db
+            .conn
+            .execute(
+                "INSERT INTO vehicle_capabilities
+                 (vin, kind, request_id, module, outcome, observation_seq,
+                  last_attempted_at)
+                 VALUES ('1GCHK23224F000001', 'pid', '010C', 'broadcast',
+                         'supported', 2, 'now')",
+                [],
+            )
+            .is_err());
     }
 
     #[test]
