@@ -34,8 +34,11 @@ TypeScript, Playwright.
 - `TASK-CORE-0001`: committed in `obd2-core` as `0fe6e667`; full workspace
   tests and clippy pass.
 - `TASK-DASH-0001`: dependency pin committed in `obd2-dash` as `52c9191`.
-  The core SHA must be pushed before a network-only Cargo resolve can verify
-  the lockfile.
+  Core `codex/scan-modes` pushed to origin (`0fe6e667`); network-only resolve
+  then failed because the committed lock paired the rev with version `0.2.0`
+  while the rev declares `0.3.0-dev` — corrected via `cargo update -p
+  obd2-core` in `f01adeb`. Workspace check + tests (299 passed) verified
+  against the git source; `cargo tree -d` shows one core identity.
 - `TASK-DASH-0002`: pure capability, scheduler, and snapshot slice committed
   as `9c911e2`; diagnostics type migration and full runner contracts remain.
 - `TASK-DB-0001`: versioned capability schema/models and transactional APIs
