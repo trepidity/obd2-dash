@@ -36,6 +36,8 @@ TypeScript, Playwright.
 - `TASK-DASH-0001`: dependency pin committed in `obd2-dash` as `52c9191`.
   The core SHA must be pushed before a network-only Cargo resolve can verify
   the lockfile.
+- `TASK-DASH-0002`: pure capability, scheduler, and snapshot slice committed
+  as `9c911e2`; diagnostics type migration and full runner contracts remain.
 
 ## Global constraints
 
