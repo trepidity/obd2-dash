@@ -2501,7 +2501,7 @@ dependencies = [
 
 [[package]]
 name = "obd2-core"
-version = "0.2.0"
+version = "0.3.0-dev"
 source = "git+https://github.com/HaulLogic/obd2-core?rev=0fe6e667f2f9361ed64c9ebd376d028153a14a17#0fe6e667f2f9361ed64c9ebd376d028153a14a17"
 dependencies = [
  "async-trait",
@@ -4492,7 +4492,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "82a72c767771b47409d2345987fda8628641887d5466101319899796367354a0"
 dependencies = [
  "fastrand",
- "getrandom 0.4.1",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
