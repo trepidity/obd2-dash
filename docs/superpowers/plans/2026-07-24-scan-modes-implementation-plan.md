@@ -40,6 +40,8 @@ TypeScript, Playwright.
   as `9c911e2`; diagnostics type migration and full runner contracts remain.
 - `TASK-DB-0001`: versioned capability schema/models and transactional APIs
   committed as `97e6683`; async store wrapping remains in `TASK-DASH-0003`.
+- `TASK-DASH-0003`: async `spawn_blocking` SQLite store boundary committed as
+  `68f1d69`; connector/lifecycle/discovery work remains.
 
 ## Global constraints
 
