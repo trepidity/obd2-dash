@@ -91,7 +91,7 @@ impl<S: CapabilityStore> Persistence<S> {
 mod tests {
     use super::*;
     use crate::mode_runner::SqliteCapabilityStore;
-    use obd2_db::Database;
+    use obd2_db::{models::CapabilityKind, Database};
     #[tokio::test]
     async fn replacement_installs_set_id_before_updates() {
         let store = SqliteCapabilityStore::from_database(Database::open_in_memory().unwrap());
