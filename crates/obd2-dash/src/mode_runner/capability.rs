@@ -5,23 +5,24 @@ use obd2_core::vehicle::Protocol;
 pub use obd2_db::models::{CapabilityKind, CapabilityOutcome};
 
 /// Stable descriptor fingerprint used as the capability-cache context key.
-/// It deliberately serializes fields in sorted order rather than using Debug
-/// output or a process-randomized hash.
+/// Serializes only the required request identities (kind:module:request_id),
+/// sorted and deduplicated. Tier, cadence, and view are deliberately excluded
+/// (spec §8.1): presentation-only changes must not invalidate a vehicle's
+/// capability cache. Never Debug output or a process-randomized hash.
 pub fn probe_fingerprint(descriptors: &[RequestDescriptor]) -> String {
     let mut fields: Vec<String> = descriptors
         .iter()
         .map(|descriptor| {
             format!(
-                "{}:{}:{}:{:?}:{:?}",
+                "{}:{}:{}",
                 descriptor.key.kind.as_str(),
                 descriptor.key.module,
                 descriptor.key.request_id,
-                descriptor.tier,
-                descriptor.every_cycles
             )
         })
         .collect();
     fields.sort();
+    fields.dedup();
     format!("v1:{}", fields.join("|"))
 }
 
@@ -147,6 +148,55 @@ mod tests {
         let set = CapabilitySet::default();
         let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
         assert_eq!(set.outcome(&key), CapabilityOutcome::Unverified);
+    }
+
+    fn descriptor(
+        request_id: &str,
+        tier: super::super::scheduler::Tier,
+        every: u32,
+    ) -> RequestDescriptor {
+        RequestDescriptor {
+            key: CapabilityKey::new(CapabilityKind::Pid, request_id, "broadcast"),
+            tier,
+            every_cycles: every,
+            view: None,
+        }
+    }
+
+    #[test]
+    fn fingerprint_is_stable_for_input_order() {
+        use super::super::scheduler::Tier;
+        let forward = [
+            descriptor("010C", Tier::A, 1),
+            descriptor("010D", Tier::B, 5),
+        ];
+        let reversed = [
+            descriptor("010D", Tier::B, 5),
+            descriptor("010C", Tier::A, 1),
+        ];
+        assert_eq!(probe_fingerprint(&forward), probe_fingerprint(&reversed));
+    }
+
+    #[test]
+    fn fingerprint_changes_for_required_request_change() {
+        use super::super::scheduler::Tier;
+        let base = [descriptor("010C", Tier::A, 1)];
+        let changed = [descriptor("010B", Tier::A, 1)];
+        assert_ne!(probe_fingerprint(&base), probe_fingerprint(&changed));
+    }
+
+    #[test]
+    fn fingerprint_ignores_tier_only_presentation_change() {
+        use super::super::scheduler::Tier;
+        let tiered_a = [
+            descriptor("010C", Tier::A, 1),
+            descriptor("0105", Tier::B, 5),
+        ];
+        let retiered = [
+            descriptor("010C", Tier::B, 10),
+            descriptor("0105", Tier::C, 50),
+        ];
+        assert_eq!(probe_fingerprint(&tiered_a), probe_fingerprint(&retiered));
     }
 
     #[test]

@@ -355,12 +355,39 @@ where
                 );
                 let _ = persistence.flush().await;
             }
-            let remaining = self.verifier.remaining(&ViewId::Gauges);
-            self.snapshot.capability.verification = if remaining == 0 {
-                CapabilityVerification::Ready
+            let unresolved = self.verifier.unresolved(&ViewId::Gauges);
+            if unresolved == 0 {
+                // Verification pass complete (§9.1 step 7): persist the full
+                // set atomically once, then report Ready or Degraded depending
+                // on whether exhausted entries stayed unverified.
+                if let Some(persistence) = self.persistence.as_mut() {
+                    if persistence.set_id().is_none() {
+                        match persistence.replace_from_outcomes(&self.capabilities).await {
+                            Ok(_) => {
+                                self.snapshot.capability.persistence =
+                                    CapabilityPersistence::Cached;
+                            }
+                            Err(error) => {
+                                tracing::warn!("capability set persistence failed: {error}");
+                                self.snapshot.capability.persistence =
+                                    CapabilityPersistence::SessionOnlyStoreError;
+                            }
+                        }
+                    }
+                }
+                let leftover = self.verifier.remaining(&ViewId::Gauges);
+                self.snapshot.capability.verification = if leftover == 0 {
+                    CapabilityVerification::Ready
+                } else {
+                    CapabilityVerification::Degraded {
+                        unresolved: leftover,
+                    }
+                };
             } else {
-                CapabilityVerification::Verifying { remaining }
-            };
+                self.snapshot.capability.verification = CapabilityVerification::Verifying {
+                    remaining: unresolved,
+                };
+            }
             self.publish();
         }
         result.map(|_| true)

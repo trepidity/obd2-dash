@@ -65,7 +65,9 @@ impl<S: CapabilityStore> Persistence<S> {
     }
     pub async fn flush(&mut self) -> Result<Option<OutcomeUpdate>> {
         let Some(set_id) = self.set_id.as_deref() else {
-            self.pending.clear();
+            // No set installed yet: retain the latest-value batch (bounded by
+            // key count) so classifications made before the initial atomic
+            // replacement are not silently destroyed.
             return Ok(None);
         };
         if self.pending.is_empty() {
@@ -79,6 +81,35 @@ impl<S: CapabilityStore> Persistence<S> {
         self.pending.clear();
         Ok(Some(result))
     }
+    /// Atomically persist a completed verification pass as this vehicle's
+    /// capability set. Pending incremental records are superseded by the full
+    /// set and dropped; sequence numbering continues from this instance.
+    pub async fn replace_from_outcomes(
+        &mut self,
+        outcomes: &super::capability::CapabilitySet,
+    ) -> Result<String> {
+        let attempted_at = Utc::now().to_rfc3339();
+        let records: Vec<CapabilityRecord> = outcomes
+            .iter()
+            .map(|(key, outcome)| {
+                let record = CapabilityRecord {
+                    kind: key.kind,
+                    request_id: key.request_id.clone(),
+                    module: key.module.clone(),
+                    outcome,
+                    observation_seq: self.next_seq,
+                    rtt_ms: None,
+                    attempted_at: attempted_at.clone(),
+                    error_code: None,
+                };
+                self.next_seq = self.next_seq.saturating_add(1);
+                record
+            })
+            .collect();
+        self.pending.clear();
+        self.replace(records).await
+    }
+
     pub fn set_id(&self) -> Option<&str> {
         self.set_id.as_deref()
     }

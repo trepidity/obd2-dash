@@ -71,6 +71,21 @@ impl Verifier {
             .count()
     }
 
+    /// Entries that can still change outcome this session: unverified,
+    /// eligible, and under the retry budget. When this reaches zero the
+    /// verification pass is complete — `remaining()` may still be non-zero if
+    /// exhausted entries stay unverified (the Degraded case).
+    pub fn unresolved(&self, active_view: &ViewId) -> usize {
+        self.entries
+            .values()
+            .filter(|e| {
+                e.outcome == CapabilityOutcome::Unverified
+                    && e.attempts < 3
+                    && eligible(e, active_view)
+            })
+            .count()
+    }
+
     /// Return at most one due request. Tier A/B always precede visible Tier C.
     pub fn next(&self, now: Instant, active_view: &ViewId) -> Option<&CapabilityKey> {
         self.entries
