@@ -435,12 +435,36 @@ async fn successful_verifier_value_is_published_immediately() {
 #[tokio::test]
 async fn fallback_never_schedules_full_legacy_pid_set() {
     let connector = ScriptedConnector::new(VIN);
+    // Force the §9.2 path: the mask walk itself fails.
+    connector
+        .script
+        .push(0x01, Some(0x00), ScriptedResponse::Timeout);
     let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
         Database::open_in_memory().unwrap(),
     );
     let mut runner = ModeRunner::new(connector, store);
     runner.connect().await.unwrap();
-    assert!(runner.capabilities().len() < 64);
+
+    // Conservative fallback is the display set only — never the ~43-PID
+    // legacy sweep (which a loose `< 64` bound would have let through).
+    let staged = runner.capabilities().len();
+    assert!(
+        staged <= 8,
+        "fallback staged {staged} capabilities; expected the conservative display set"
+    );
+    let legacy_only = CapabilityKey::new(CapabilityKind::Pid, "0121", "broadcast");
+    assert_eq!(
+        runner.capabilities().outcome(&legacy_only),
+        CapabilityOutcome::Unverified,
+        "legacy-sweep PIDs must stay untracked (absent reads as Unverified)"
+    );
+    assert!(
+        !runner
+            .capabilities()
+            .iter()
+            .any(|(key, _)| key.request_id == "0121"),
+        "legacy-sweep PID 0121 must not be staged in fallback"
+    );
 }
 
 #[tokio::test]
@@ -459,16 +483,54 @@ async fn missing_vin_never_calls_store_replace() {
 
 #[tokio::test]
 async fn reconnect_reacquires_vin_before_cache_load() {
-    let connector = ScriptedConnector::new(VIN);
-    let calls = connector.calls.clone();
+    const OTHER_VIN: &str = "1GDJK34204E000002";
     let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
         Database::open_in_memory().unwrap(),
     );
+    // Seed a cache only under the vehicle the adapter will move to.
+    store
+        .replace(&CapabilitySetReplacement {
+            vin: OTHER_VIN.into(),
+            context: context(),
+            completed_at: "now".into(),
+            records: vec![CapabilityRecord {
+                kind: CapabilityKind::Pid,
+                request_id: "010C".into(),
+                module: "broadcast".into(),
+                outcome: CapabilityOutcome::Supported,
+                observation_seq: 1,
+                rtt_ms: None,
+                attempted_at: "now".into(),
+                error_code: None,
+            }],
+        })
+        .await
+        .unwrap();
+
+    let connector = ScriptedConnector::new(VIN);
+    let calls = connector.calls.clone();
+    let vin_handle = connector.vin_handle();
     let mut runner = ModeRunner::new(connector, store);
     runner.connect().await.unwrap();
+
+    // Move the adapter to the other truck. A cache hit under OTHER_VIN is
+    // only possible if reconnect reacquired identity before loading — a
+    // runner reusing the stale VIN would miss and enter discovery instead.
+    *vin_handle.lock().unwrap() = OTHER_VIN.into();
     runner.reconnect().await.unwrap();
+
     assert_eq!(calls.load(Ordering::SeqCst), 2);
     assert_eq!(runner.snapshot().mode, ModeState::Telemetry);
+    assert_eq!(
+        runner.snapshot().capability.persistence,
+        CapabilityPersistence::Cached,
+        "cache hit must key on the freshly reacquired VIN"
+    );
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    assert_eq!(
+        runner.capabilities().outcome(&key),
+        CapabilityOutcome::Supported
+    );
 }
 
 #[tokio::test]

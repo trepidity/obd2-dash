@@ -126,6 +126,21 @@ impl Adapter for ScriptedAdapter {
     }
 
     async fn supported_pids(&mut self) -> Result<std::collections::HashSet<Pid>, Obd2Error> {
+        // The mask walk goes through this dedicated method, not request(), so
+        // scripted errors queued under (0x01, 0x00) apply here — tests use
+        // this to force the conservative mask-failure fallback.
+        let key = RequestKey {
+            service: 0x01,
+            pid: Some(0x00),
+        };
+        let scripted = {
+            let mut state = self.script.state.lock().await;
+            state.requests.push((key.service, key.pid));
+            state.responses.get_mut(&key).and_then(VecDeque::pop_front)
+        };
+        if let Some(response) = scripted {
+            response.into_result()?;
+        }
         self.inner.supported_pids().await
     }
 
