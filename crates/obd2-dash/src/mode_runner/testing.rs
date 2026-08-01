@@ -182,7 +182,6 @@ impl super::SessionConnector for ScriptedConnector {
 mod tests {
     use super::*;
     use crate::mode_runner::SessionConnector;
-    use obd2_core::protocol::service::ServiceRequest;
     use tokio::time::{timeout, Duration};
 
     #[tokio::test]
@@ -193,11 +192,7 @@ mod tests {
             .push(0x01, Some(0x0C), ScriptedResponse::Timeout);
         let mut session = connector.connect().await.unwrap().session;
         session.initialize().await.unwrap();
-        let error = session
-            .adapter_mut()
-            .request(&ServiceRequest::read_pid(Pid(0x0C)))
-            .await
-            .unwrap_err();
+        let error = session.read_pid(Pid(0x0C)).await.unwrap_err();
         assert!(matches!(error, Obd2Error::Timeout));
         assert_eq!(connector.script.requests().await, vec![(0x01, Some(0x0C))]);
     }
@@ -208,12 +203,7 @@ mod tests {
         let release = connector.script.gate().await;
         let mut session = connector.connect().await.unwrap().session;
         session.initialize().await.unwrap();
-        let request = tokio::spawn(async move {
-            session
-                .adapter_mut()
-                .request(&ServiceRequest::read_pid(Pid(0x0C)))
-                .await
-        });
+        let request = tokio::spawn(async move { session.read_pid(Pid(0x0C)).await });
         assert!(timeout(Duration::from_millis(20), request).await.is_err());
         release.notify_waiters();
     }
