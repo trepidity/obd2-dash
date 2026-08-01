@@ -542,36 +542,45 @@ any entry exhausted retries — `unresolved()` now drives completion with
 formatting against §8.1 — now sorted/deduped request identities only, with
 the three spec-named fingerprint tests.
 
-**Slice 3 (in progress):** the runner derives the selected profile ID for the
-cache context, builds schedulers for cached/staged/fallback requests, executes
-supported telemetry through the scheduler, publishes values through the
-snapshot watch channel, and preserves typed probe classifications.
+**Slice 3 (`6f2a846`, audited + fixed in `b8e5e85`):** profile-derived cache
+`profile_id`, scheduler-backed telemetry, typed probe classification, watch
+publication. Audit fixes: `poll_cycle` executed only the first planned
+request (one gauge ever updated) — it now runs the full plan as an explicit
+request loop; failing supported requests demote to `Unverified` per §10
+instead of reaching `classify()` where one explicit NRC pruned a live gauge;
+unverified work runs only through `Verifier::next()` so NO DATA
+confirmations stay backoff-separated (the scheduler plan-tail bypassed
+`next_due`); verifier resume now requires the same VIN — context alone let
+two same-model trucks cross-contaminate no-data counters into persisted
+`Unsupported`; preserved entries keep counters and classified outcomes on
+the reconnect re-stage; verifier successes publish immediately (§9.1.5).
+Regression tests: full per-cycle polling, demotion,
+`reconnect_to_new_vin_discards_partial_verifier_state`,
+`same_context_reconnect_resumes_unfinished_initial_verifier`.
 
 **Remaining before this task can close** (spec references in parentheses):
 
-- [ ] Seed the verifier and fingerprint from display/tier configuration and
-  the selected profile (profile signals, `ATRV`/adapter row, forced-PID
-  controlled verification, real `profile_id`), not the hardcoded five-PID
-  `default_probe_fingerprint()` and `Tier::A`/`Gauges` pair (§8.1, §9.1).
-- [x] `poll_cycle()` preserves typed `NoData`/timeout/transport/unsupported
-  classifications through the probe boundary; non-transport failures remain
-  session-local (§8.2, §9.1.6).
-- [x] Telemetry cycle executor drives the DASH-0002 scheduler for `Supported`
-  entries and publishes values through the snapshot watch channel (§10).
-- [ ] Reconnect: identity/context reacquisition before cache load with
-  same-context verifier resume / different-context discard; indefinite
-  capped slow retry loop at the runner-driver level (§13).
+- [ ] Seed the verifier, scheduler tiers, and fingerprint from display/tier
+  configuration and the selected profile (profile signals, `ATRV`/adapter
+  row, forced-PID controlled verification, Tier B/C cadences) — descriptors
+  are still all-`Tier::A`/`every_cycles: 1` and the fingerprint is the
+  hardcoded five-PID `default_probe_fingerprint()` (§8.1, §9.1, §10).
+- [x] Typed probe classification through the boundary; non-transport
+  failures session-local (§8.2, §9.1.6) — slice 3.
+- [x] Telemetry cycle executor with watch publication (§10) — slice 3 +
+  `b8e5e85` full-plan fix.
+- [x] Same-VIN/context verifier resume, different-VIN discard (§13) —
+  `b8e5e85`.
+- [ ] Reconnect driver loop: indefinite capped slow retry above
+  `reconnect()`; `reconnect_reacquires_vin_before_cache_load` named test
+  (§13).
 - [ ] Plan-named tests still missing:
   `cache_miss_verifies_one_unknown_per_cycle`,
-  `successful_verifier_value_is_published_immediately`,
-  `supported_telemetry_failure_demotes_to_verifier_not_unsupported`,
-  `fallback_never_schedules_full_legacy_pid_set`,
+  `successful_verifier_value_is_published_immediately` (behavior
+  implemented, unnamed), `fallback_never_schedules_full_legacy_pid_set`,
   `missing_vin_never_calls_store_replace`,
-  `fingerprint_mismatch_runs_discovery`,
-  `reconnect_reacquires_vin_before_cache_load`,
-  `same_context_reconnect_resumes_unfinished_initial_verifier`,
-  `different_context_reconnect_discards_unfinished_verifier`, the Tier-C
-  gating pair, and `runner_snapshot_preserves_generic_and_lly_signal_shapes`.
+  `fingerprint_mismatch_runs_discovery`, the Tier-C gating pair, and
+  `runner_snapshot_preserves_generic_and_lly_signal_shapes`.
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`
