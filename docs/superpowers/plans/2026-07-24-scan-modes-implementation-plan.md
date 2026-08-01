@@ -516,6 +516,13 @@ constructing a session or opening SQLite.
 
 ## TASK-DASH-0003: Implement lifecycle, discovery, cache, and reconnect
 
+**Status: COMPLETE (2026-08-01).** The runner lifecycle, scripted connector
+harness, verifier/backoff policy, staged persistence boundary, cache hit/miss
+startup, and fresh-session reconnect behavior are implemented in
+`crates/obd2-dash/src/mode_runner`. The focused integration suite covers cache
+miss discovery, cache-hit startup, store fallback, verifier backoff,
+persistence coalescing, and transport reconnect.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`
 - **COMP:** `COMP-OBD-SESS`, `COMP-DASH-PROF`
