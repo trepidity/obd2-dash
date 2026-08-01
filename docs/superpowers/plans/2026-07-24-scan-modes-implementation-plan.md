@@ -560,11 +560,10 @@ Regression tests: full per-cycle polling, demotion,
 
 **Remaining before this task can close** (spec references in parentheses):
 
-- [ ] Seed the verifier, scheduler tiers, and fingerprint from display/tier
-  configuration and the selected profile (profile signals, `ATRV`/adapter
-  row, forced-PID controlled verification, Tier B/C cadences) — descriptors
-  are still all-`Tier::A`/`every_cycles: 1` and the fingerprint is the
-  hardcoded five-PID `default_probe_fingerprint()` (§8.1, §9.1, §10).
+- [x] Seed the verifier, scheduler tiers, and fingerprint from selected
+  profile forced/display standard PIDs with deterministic Tier B/C cadences
+  (§8.1, §9.1, §10). Non-standard profile signal execution remains a later
+  telemetry/diagnostics concern.
 - [x] Typed probe classification through the boundary; non-transport
   failures session-local (§8.2, §9.1.6) — slice 3.
 - [x] Telemetry cycle executor with watch publication (§10) — slice 3 +

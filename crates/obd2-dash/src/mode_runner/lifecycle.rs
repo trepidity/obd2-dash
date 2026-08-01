@@ -13,7 +13,7 @@ use obd2_db::models::{
     CapabilitySetReplacement,
 };
 
-use super::capability::{default_probe_fingerprint, CapabilityKey, CapabilitySet};
+use super::capability::{probe_fingerprint, CapabilityKey, CapabilitySet};
 use super::persistence::Persistence;
 use super::scheduler::{RequestDescriptor, Scheduler, Tier, ViewId};
 use super::snapshot::{CapabilityPersistence, CapabilityVerification, ModeState, RunnerSnapshot};
@@ -23,6 +23,7 @@ use crate::profiles::registry::ProfileRegistry;
 use crate::profiles::{
     acquire_identity, build_vehicle_context, next_generation, select_into_state, IdentityOutcome,
 };
+use crate::profiles::{DiagnosticProfile, SignalDisplaySource};
 use tokio::sync::watch;
 
 #[derive(Debug)]
@@ -46,6 +47,62 @@ fn parse_standard_pid(request_id: &str) -> Result<Pid> {
     u8::from_str_radix(request_id.strip_prefix("01").unwrap_or(""), 16)
         .map(Pid)
         .map_err(|_| anyhow!("invalid standard PID request {request_id}"))
+}
+
+fn profile_probe_descriptors(profile: Option<&dyn DiagnosticProfile>) -> Vec<RequestDescriptor> {
+    let Some(profile) = profile else {
+        return [0x0C, 0x0D, 0x05, 0x0B, 0x10]
+            .into_iter()
+            .map(|pid| RequestDescriptor {
+                key: CapabilityKey::new(CapabilityKind::Pid, format!("01{pid:02X}"), "broadcast"),
+                tier: pid_tier(pid).0,
+                every_cycles: pid_tier(pid).1,
+                view: Some(ViewId::Gauges),
+            })
+            .collect();
+    };
+    let mut pids = profile.standard_pid_policy().forced.to_vec();
+    for display in profile.signal_display() {
+        if let SignalDisplaySource::StandardPid(pid) = display.source {
+            pids.push(pid);
+        }
+    }
+    pids.sort_unstable();
+    pids.dedup();
+    pids.into_iter()
+        .map(|pid| RequestDescriptor {
+            key: CapabilityKey::new(CapabilityKind::Pid, format!("01{pid:02X}"), "broadcast"),
+            tier: pid_tier(pid).0,
+            every_cycles: pid_tier(pid).1,
+            view: Some(ViewId::Gauges),
+        })
+        .collect()
+}
+
+fn pid_tier(pid: u8) -> (Tier, u32) {
+    match pid {
+        0x0C | 0x0D => (Tier::A, 1),
+        0x05 | 0x0B | 0x10 => (Tier::B, 5),
+        _ => (Tier::C, 20),
+    }
+}
+
+fn descriptor_for_key(key: CapabilityKey, profile: &[RequestDescriptor]) -> RequestDescriptor {
+    if let Some(descriptor) = profile.iter().find(|descriptor| descriptor.key == key) {
+        return descriptor.clone();
+    }
+    let cadence = key
+        .request_id
+        .strip_prefix("01")
+        .and_then(|pid| u8::from_str_radix(pid, 16).ok())
+        .map(pid_tier)
+        .unwrap_or((Tier::C, 20));
+    RequestDescriptor {
+        key,
+        tier: cadence.0,
+        every_cycles: cadence.1,
+        view: Some(ViewId::Gauges),
+    }
 }
 
 fn probe_error_code(error: super::verifier::ProbeError) -> &'static str {
@@ -204,13 +261,19 @@ where
 
         let vehicle_context =
             build_vehicle_context(&new_session.session, next_generation(), &identity);
-        let profile_state = select_into_state(&ProfileRegistry::with_builtins(), &vehicle_context);
+        let profile_registry = ProfileRegistry::with_builtins();
+        let profile_state = select_into_state(&profile_registry, &vehicle_context);
         let profile_id = profile_state
             .selected
             .as_ref()
             .map(|selected| selected.profile_id().as_str())
             .unwrap_or("generic")
             .to_string();
+        let selected_profile = profile_state
+            .selected
+            .as_ref()
+            .and_then(|selected| profile_registry.get(selected.profile_id()));
+        let profile_descriptors = profile_probe_descriptors(selected_profile);
         let context = CapabilityContext {
             protocol: super::capability::protocol_token(
                 new_session.session.adapter_info().protocol,
@@ -218,7 +281,7 @@ where
             .to_string(),
             profile_id,
             probe_schema_version: 1,
-            probe_fingerprint: default_probe_fingerprint(),
+            probe_fingerprint: probe_fingerprint(&profile_descriptors),
         };
         // Spec §13: an unfinished verifier pass may resume only when VIN,
         // protocol, profile, and fingerprint all match the previous session.
@@ -278,8 +341,9 @@ where
                             ),
                             tier: Tier::A,
                             every_cycles: 1,
-                            view: None,
+                            view: Some(ViewId::Gauges),
                         })
+                        .map(|descriptor| descriptor_for_key(descriptor.key, &profile_descriptors))
                         .collect(),
                 );
                 for record in &cached.records {
@@ -312,7 +376,7 @@ where
                         (HashSet::new(), true)
                     }
                 };
-                let candidates: Vec<Pid> = if fallback || supported.is_empty() {
+                let mut candidates: Vec<Pid> = if fallback || supported.is_empty() {
                     [
                         Pid::ENGINE_RPM,
                         Pid::VEHICLE_SPEED,
@@ -325,6 +389,14 @@ where
                 } else {
                     supported.into_iter().collect()
                 };
+                for descriptor in &profile_descriptors {
+                    if let Ok(pid) = parse_standard_pid(&descriptor.key.request_id) {
+                        if !candidates.contains(&pid) {
+                            candidates.push(pid);
+                        }
+                    }
+                }
+                candidates.sort_unstable_by_key(|pid| pid.0);
                 let mut replacement = CapabilitySetReplacement {
                     vin: vin.clone(),
                     context: context.clone(),
@@ -388,8 +460,9 @@ where
                             ),
                             tier: Tier::A,
                             every_cycles: 1,
-                            view: None,
+                            view: Some(ViewId::Gauges),
                         })
+                        .map(|descriptor| descriptor_for_key(descriptor.key, &profile_descriptors))
                         .collect(),
                 );
                 self.snapshot.capability.persistence = CapabilityPersistence::Pending;
