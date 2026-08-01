@@ -42,6 +42,26 @@ impl std::fmt::Display for ConnectError {
 
 impl std::error::Error for ConnectError {}
 
+fn parse_standard_pid(request_id: &str) -> Result<Pid> {
+    u8::from_str_radix(request_id.strip_prefix("01").unwrap_or(""), 16)
+        .map(Pid)
+        .map_err(|_| anyhow!("invalid standard PID request {request_id}"))
+}
+
+fn probe_error_code(error: super::verifier::ProbeError) -> &'static str {
+    match error {
+        super::verifier::ProbeError::NoData => "no_data",
+        super::verifier::ProbeError::Timeout => "timeout",
+        super::verifier::ProbeError::Transport => "transport",
+        super::verifier::ProbeError::UnsupportedPid
+        | super::verifier::ProbeError::Unsupported
+        | super::verifier::ProbeError::ExplicitUnsupported => "unsupported",
+        super::verifier::ProbeError::Decode => "decode",
+        super::verifier::ProbeError::Stale => "stale",
+        super::verifier::ProbeError::Other => "error",
+    }
+}
+
 pub struct NewSession<A: Adapter> {
     pub session: Session<A>,
 }
@@ -200,10 +220,15 @@ where
             probe_schema_version: 1,
             probe_fingerprint: default_probe_fingerprint(),
         };
-        let context_changed = self
-            .context
-            .as_ref()
-            .is_some_and(|previous| previous != &context);
+        // Spec §13: an unfinished verifier pass may resume only when VIN,
+        // protocol, profile, and fingerprint all match the previous session.
+        // The context covers everything but VIN, which must be compared
+        // before it is overwritten — two same-model trucks share a context.
+        let same_vehicle = self.vin.as_deref() == Some(vin.as_str());
+        let context_unchanged = self.context.as_ref() == Some(&context);
+        if !(same_vehicle && context_unchanged && self.verifier.unresolved(&ViewId::Gauges) > 0) {
+            self.verifier = Verifier::new();
+        }
         self.identity = Some(identity);
         self.vin = Some(vin.clone());
         self.context = Some(context.clone());
@@ -259,15 +284,14 @@ where
                 );
                 for record in &cached.records {
                     if record.outcome == CapabilityOutcome::Unverified {
-                        self.verifier.insert(
-                            CapabilityKey::new(
-                                record.kind,
-                                record.request_id.clone(),
-                                record.module.clone(),
-                            ),
-                            Tier::A,
-                            Some(ViewId::Gauges),
+                        let key = CapabilityKey::new(
+                            record.kind,
+                            record.request_id.clone(),
+                            record.module.clone(),
                         );
+                        if !self.verifier.contains(&key) {
+                            self.verifier.insert(key, Tier::A, Some(ViewId::Gauges));
+                        }
                     }
                 }
                 self.snapshot.capability.persistence = CapabilityPersistence::Cached;
@@ -334,18 +358,23 @@ where
                             );
                             set
                         });
-                if context_changed || self.verifier.unresolved(&ViewId::Gauges) == 0 {
-                    self.verifier = Verifier::new();
-                }
                 for record in &replacement.records {
                     let key = CapabilityKey::new(
                         record.kind,
                         record.request_id.clone(),
                         record.module.clone(),
                     );
-                    self.capabilities
-                        .insert(key.clone(), CapabilityOutcome::Unverified);
-                    self.verifier.insert(key, Tier::A, Some(ViewId::Gauges));
+                    // A preserved (same-vehicle, same-context) entry keeps its
+                    // attempt/no-data counters AND its already-classified
+                    // outcome; only new keys are staged as unverified.
+                    let outcome = if self.verifier.contains(&key) {
+                        self.verifier.outcome(&key)
+                    } else {
+                        self.verifier
+                            .insert(key.clone(), Tier::A, Some(ViewId::Gauges));
+                        CapabilityOutcome::Unverified
+                    };
+                    self.capabilities.insert(key, outcome);
                 }
                 self.scheduler = Scheduler::new(
                     replacement
@@ -399,39 +428,82 @@ where
         self.connect().await
     }
 
-    /// Execute one bounded telemetry/verifier request and publish its result.
+    /// Execute one planned telemetry cycle as an explicit request loop, then
+    /// at most one verifier probe (spec §7.2, §9.1.4). Every supported entry
+    /// due this cycle is polled; verifier work runs only through
+    /// [`Verifier::next`] so retry backoff and NO DATA separation hold.
     pub async fn poll_cycle(&mut self) -> Result<bool> {
         self.cycle = self.cycle.saturating_add(1);
-        let key = self
+        let plan = self
             .scheduler
-            .plan_cycle(self.cycle, &ViewId::Gauges, &self.capabilities)
-            .into_iter()
-            .next()
-            .map(|request| request.0)
-            .or_else(|| self.verifier.next(Instant::now(), &ViewId::Gauges).cloned());
-        let Some(key) = key else {
-            return Ok(false);
+            .plan_cycle(self.cycle, &ViewId::Gauges, &self.capabilities);
+        let mut did_work = false;
+
+        for request in plan {
+            let key = request.0;
+            // The plan tail may nominate unverified work; the verifier owns
+            // that below, with its own due-time pacing.
+            if self.capabilities.outcome(&key) != CapabilityOutcome::Supported {
+                continue;
+            }
+            let pid = parse_standard_pid(&key.request_id)?;
+            match self.read_pid_probe(pid).await {
+                Ok(value) => {
+                    let mut signals = (*self.snapshot.signals).clone();
+                    signals.insert(key.request_id.clone(), value);
+                    self.snapshot.signals = std::sync::Arc::new(signals);
+                    self.snapshot.sample_at = Some(Instant::now());
+                    self.publish();
+                    did_work = true;
+                }
+                Err(super::verifier::ProbeError::Transport) => {
+                    return Err(anyhow!("telemetry request failed: transport"));
+                }
+                Err(error) => {
+                    // Spec §10: a non-transport failure of a supported request
+                    // never becomes Unsupported directly. Demote to Unverified
+                    // (retaining the last published value) and let the
+                    // verifier reclassify it with backoff; the telemetry
+                    // failure itself does not consume a verifier attempt.
+                    self.capabilities
+                        .insert(key.clone(), CapabilityOutcome::Unverified);
+                    if !self.verifier.contains(&key) {
+                        self.verifier.insert(key.clone(), Tier::A, None);
+                    }
+                    if let Some(persistence) = self.persistence.as_mut() {
+                        persistence.observe(
+                            key,
+                            CapabilityOutcome::Unverified,
+                            Some(probe_error_code(error).to_string()),
+                        );
+                        let _ = persistence.flush().await;
+                    }
+                    self.publish();
+                    did_work = true;
+                }
+            }
+        }
+
+        let Some(key) = self.verifier.next(Instant::now(), &ViewId::Gauges).cloned() else {
+            return Ok(did_work);
         };
-        let pid = u8::from_str_radix(key.request_id.strip_prefix("01").unwrap_or(""), 16)
-            .map(Pid)
-            .map_err(|_| anyhow!("invalid verifier request {}", key.request_id))?;
+        let pid = parse_standard_pid(&key.request_id)?;
         let result = self.read_pid_probe(pid).await;
-        let mut classification = self.verifier.classify(
+        let classification = self.verifier.classify(
             &key,
             result.as_ref().map(|_| ()).map_err(|error| *error),
             Instant::now(),
         );
-        if classification.is_none() && result.is_err() {
-            self.verifier.insert(key.clone(), Tier::A, None);
-            classification = self.verifier.classify(
-                &key,
-                result.as_ref().map(|_| ()).map_err(|error| *error),
-                Instant::now(),
-            );
-        }
         if let Some(classification) = classification {
             self.capabilities
                 .insert(key.clone(), classification.outcome);
+            if let Ok(value) = result {
+                // §9.1 step 5: a successful verification publishes its value
+                // immediately rather than waiting for the next telemetry pass.
+                let mut signals = (*self.snapshot.signals).clone();
+                signals.insert(key.request_id.clone(), value);
+                self.snapshot.signals = std::sync::Arc::new(signals);
+            }
             if let Some(persistence) = self.persistence.as_mut() {
                 persistence.observe(
                     key,
@@ -473,12 +545,6 @@ where
                     remaining: unresolved,
                 };
             }
-            self.publish();
-        } else if let Ok(value) = result {
-            let mut signals = (*self.snapshot.signals).clone();
-            signals.insert(key.request_id.clone(), value);
-            self.snapshot.signals = std::sync::Arc::new(signals);
-            self.snapshot.sample_at = Some(Instant::now());
             self.publish();
         }
         match result {

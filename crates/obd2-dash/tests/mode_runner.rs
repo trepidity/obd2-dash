@@ -246,3 +246,160 @@ async fn persistence_coalesces_latest_observation_and_installs_set_id() {
     );
     assert_eq!(persistence.pending_len(), 0);
 }
+
+// ── Slice-3 audit regression tests ────────────────────────────────────────
+
+use obd2_dash::mode_runner::testing::{ScriptedConnector, ScriptedResponse};
+
+async fn seed_supported(store: &obd2_dash::mode_runner::SqliteCapabilityStore, pids: &[&str]) {
+    store
+        .replace(&CapabilitySetReplacement {
+            vin: VIN.into(),
+            context: context(),
+            completed_at: "now".into(),
+            records: pids
+                .iter()
+                .enumerate()
+                .map(|(idx, request_id)| CapabilityRecord {
+                    kind: CapabilityKind::Pid,
+                    request_id: (*request_id).into(),
+                    module: "broadcast".into(),
+                    outcome: CapabilityOutcome::Supported,
+                    observation_seq: idx as i64 + 1,
+                    rtt_ms: None,
+                    attempted_at: "now".into(),
+                    error_code: None,
+                })
+                .collect(),
+        })
+        .await
+        .unwrap();
+}
+
+/// Regression: poll_cycle executed only the first planned request, so every
+/// gauge except one froze. A full cycle must poll every supported entry.
+#[tokio::test]
+async fn telemetry_polls_every_supported_request_per_cycle() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    seed_supported(&store, &["010C", "010D"]).await;
+
+    let connector = ScriptedConnector::new(VIN);
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    runner.poll_cycle().await.unwrap();
+
+    let signals = runner.snapshot().signals;
+    assert!(signals.contains_key("010C"), "RPM missing: {signals:?}");
+    assert!(signals.contains_key("010D"), "speed missing: {signals:?}");
+}
+
+/// Spec §10: a failing supported request demotes to Unverified for verifier
+/// reclassification; it never flips directly to Unsupported.
+#[tokio::test]
+async fn supported_telemetry_failure_demotes_to_verifier_not_unsupported() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    seed_supported(&store, &["010C"]).await;
+
+    let connector = ScriptedConnector::new(VIN);
+    connector
+        .script
+        .push(0x01, Some(0x0C), ScriptedResponse::Timeout);
+    connector
+        .script
+        .push(0x01, Some(0x0C), ScriptedResponse::Timeout);
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    runner.poll_cycle().await.unwrap();
+
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    assert_eq!(
+        runner.capabilities().outcome(&key),
+        CapabilityOutcome::Unverified,
+        "telemetry failure must demote, not prune"
+    );
+}
+
+async fn poll_until_pid_probes(
+    runner: &mut ModeRunner<ScriptedConnector, obd2_dash::mode_runner::SqliteCapabilityStore>,
+    script: &obd2_dash::mode_runner::testing::RequestScript,
+    pid: u8,
+    count: usize,
+) {
+    for _ in 0..64 {
+        let probes = script
+            .requests()
+            .await
+            .iter()
+            .filter(|(service, probed)| *service == 0x01 && *probed == Some(pid))
+            .count();
+        if probes >= count {
+            return;
+        }
+        let _ = runner.poll_cycle().await;
+        // Verifier retries pace themselves with real-time backoff (500ms
+        // after the first failure); give them room instead of spinning.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("PID {pid:02X} was not probed {count} times");
+}
+
+/// Spec §13: verifier state resumes only for the same VIN. A different
+/// vehicle with an identical context must start fresh — a leaked no-data
+/// counter would let one NO DATA on the new truck confirm as Unsupported.
+#[tokio::test]
+async fn reconnect_to_new_vin_discards_partial_verifier_state() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let connector = ScriptedConnector::new(VIN);
+    let script = connector.script.clone();
+    let vin_handle = connector.vin_handle();
+    script.push(0x01, Some(0x0C), ScriptedResponse::NoData);
+    script.push(0x01, Some(0x0C), ScriptedResponse::NoData);
+
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    poll_until_pid_probes(&mut runner, &script, 0x0C, 1).await;
+
+    *vin_handle.lock().unwrap() = "1GDJK34204E000002".into();
+    runner.reconnect().await.unwrap();
+    poll_until_pid_probes(&mut runner, &script, 0x0C, 2).await;
+
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    assert_eq!(
+        runner.capabilities().outcome(&key),
+        CapabilityOutcome::Unverified,
+        "a fresh vehicle's first NO DATA must not confirm as Unsupported"
+    );
+}
+
+/// Spec §13: same VIN and context resumes the unfinished pass, so a NO DATA
+/// before the reconnect and one after form the separated confirmation.
+#[tokio::test]
+async fn same_context_reconnect_resumes_unfinished_initial_verifier() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let connector = ScriptedConnector::new(VIN);
+    let script = connector.script.clone();
+    script.push(0x01, Some(0x0C), ScriptedResponse::NoData);
+    script.push(0x01, Some(0x0C), ScriptedResponse::NoData);
+
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    poll_until_pid_probes(&mut runner, &script, 0x0C, 1).await;
+
+    runner.reconnect().await.unwrap();
+    poll_until_pid_probes(&mut runner, &script, 0x0C, 2).await;
+
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    assert_eq!(
+        runner.capabilities().outcome(&key),
+        CapabilityOutcome::Unsupported,
+        "resumed pass must treat the second separated NO DATA as confirmation"
+    );
+}

@@ -160,6 +160,12 @@ impl Verifier {
         self.entries.get(key).map_or(0, |e| e.attempts)
     }
 
+    /// Whether the verifier already tracks this key. Used on reconnect resume
+    /// so re-staging does not reset a preserved entry's attempt counters.
+    pub fn contains(&self, key: &CapabilityKey) -> bool {
+        self.entries.contains_key(key)
+    }
+
     pub fn exhausted(&self, key: &CapabilityKey) -> bool {
         self.entries
             .get(key)

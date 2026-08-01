@@ -142,10 +142,12 @@ impl Adapter for ScriptedAdapter {
     }
 }
 
-/// Connector that creates a fresh scripted adapter on every call.
+/// Connector that creates a fresh scripted adapter on every call. The VIN is
+/// switchable between connects so reconnect tests can simulate moving the
+/// adapter to a different vehicle.
 pub struct ScriptedConnector {
     pub calls: Arc<AtomicUsize>,
-    pub vin: String,
+    vin: Arc<std::sync::Mutex<String>>,
     pub script: RequestScript,
 }
 
@@ -153,13 +155,18 @@ impl ScriptedConnector {
     pub fn new(vin: impl Into<String>) -> Self {
         Self {
             calls: Arc::new(AtomicUsize::new(0)),
-            vin: vin.into(),
+            vin: Arc::new(std::sync::Mutex::new(vin.into())),
             script: RequestScript::default(),
         }
     }
 
     pub fn call_count(&self) -> usize {
         self.calls.load(Ordering::SeqCst)
+    }
+
+    /// Handle for changing the VIN the next connect reports.
+    pub fn vin_handle(&self) -> Arc<std::sync::Mutex<String>> {
+        Arc::clone(&self.vin)
     }
 }
 
@@ -169,9 +176,10 @@ impl super::SessionConnector for ScriptedConnector {
 
     async fn connect(&self) -> Result<super::NewSession<Self::Adapter>, super::ConnectError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let vin = self.vin.lock().expect("vin mutex poisoned").clone();
         Ok(super::NewSession {
             session: Session::new(ScriptedAdapter {
-                inner: MockAdapter::with_vin(&self.vin),
+                inner: MockAdapter::with_vin(&vin),
                 script: self.script.clone(),
             }),
         })
