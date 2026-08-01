@@ -14,7 +14,9 @@ pub mod store;
 pub mod testing;
 pub mod verifier;
 
-pub use capability::{CapabilityKey, CapabilityKind, CapabilityOutcome, CapabilitySet};
+pub use capability::{
+    protocol_token, CapabilityKey, CapabilityKind, CapabilityOutcome, CapabilitySet,
+};
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};

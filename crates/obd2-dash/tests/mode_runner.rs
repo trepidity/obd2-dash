@@ -66,7 +66,8 @@ impl CapabilityStore for FailingStore {
 
 fn context() -> CapabilityContext {
     CapabilityContext {
-        protocol: "Can11Bit500".into(),
+        protocol: obd2_dash::mode_runner::protocol_token(obd2_core::vehicle::Protocol::Can11Bit500)
+            .into(),
         profile_id: "generic".into(),
         probe_schema_version: 1,
         probe_fingerprint: "mode-runner-v1".into(),

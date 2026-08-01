@@ -121,8 +121,15 @@ where
             return Ok(());
         };
 
+        // TODO(TASK-DASH-0003 completion): profile_id must come from the
+        // selected profile and probe_fingerprint from the deterministic
+        // descriptor serialization (spec §8.1); both are placeholders until
+        // the fingerprint builder lands.
         let context = CapabilityContext {
-            protocol: format!("{:?}", new_session.session.adapter_info().protocol),
+            protocol: super::capability::protocol_token(
+                new_session.session.adapter_info().protocol,
+            )
+            .to_string(),
             profile_id: "generic".to_string(),
             probe_schema_version: 1,
             probe_fingerprint: "mode-runner-v1".to_string(),
