@@ -70,7 +70,7 @@ fn context() -> CapabilityContext {
             .into(),
         profile_id: "generic".into(),
         probe_schema_version: 1,
-        probe_fingerprint: "mode-runner-v1".into(),
+        probe_fingerprint: obd2_dash::mode_runner::default_probe_fingerprint(),
     }
 }
 

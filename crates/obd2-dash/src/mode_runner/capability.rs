@@ -1,7 +1,48 @@
+use super::scheduler::RequestDescriptor;
 use std::collections::BTreeMap;
 
 use obd2_core::vehicle::Protocol;
 pub use obd2_db::models::{CapabilityKind, CapabilityOutcome};
+
+/// Stable descriptor fingerprint used as the capability-cache context key.
+/// It deliberately serializes fields in sorted order rather than using Debug
+/// output or a process-randomized hash.
+pub fn probe_fingerprint(descriptors: &[RequestDescriptor]) -> String {
+    let mut fields: Vec<String> = descriptors
+        .iter()
+        .map(|descriptor| {
+            format!(
+                "{}:{}:{}:{:?}:{:?}",
+                descriptor.key.kind.as_str(),
+                descriptor.key.module,
+                descriptor.key.request_id,
+                descriptor.tier,
+                descriptor.every_cycles
+            )
+        })
+        .collect();
+    fields.sort();
+    format!("v1:{}", fields.join("|"))
+}
+
+pub fn default_probe_fingerprint() -> String {
+    let descriptors = [
+        (0x0C, "broadcast"),
+        (0x0D, "broadcast"),
+        (0x05, "broadcast"),
+        (0x0B, "broadcast"),
+        (0x10, "broadcast"),
+    ]
+    .into_iter()
+    .map(|(pid, module)| RequestDescriptor {
+        key: CapabilityKey::new(CapabilityKind::Pid, format!("01{pid:02X}"), module),
+        tier: super::scheduler::Tier::A,
+        every_cycles: 1,
+        view: None,
+    })
+    .collect::<Vec<_>>();
+    probe_fingerprint(&descriptors)
+}
 
 /// Stable persistence token for a negotiated protocol (spec §8.1). Cache
 /// context rows must never carry `Debug` or display formatting; these tokens

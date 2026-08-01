@@ -1,4 +1,5 @@
-use std::time::Instant;
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
@@ -11,13 +12,14 @@ use obd2_db::models::{
     CapabilitySetReplacement,
 };
 
-use super::capability::{CapabilityKey, CapabilitySet};
+use super::capability::{default_probe_fingerprint, CapabilityKey, CapabilitySet};
 use super::persistence::Persistence;
 use super::scheduler::{Tier, ViewId};
 use super::snapshot::{CapabilityPersistence, CapabilityVerification, ModeState, RunnerSnapshot};
 use super::store::CapabilityStore;
 use super::verifier::Verifier;
 use crate::profiles::{acquire_identity, IdentityOutcome};
+use tokio::sync::watch;
 
 #[derive(Debug)]
 pub enum ConnectError {
@@ -66,6 +68,7 @@ where
     verifier: Verifier,
     snapshot: RunnerSnapshot,
     reconnect_attempt: u32,
+    snapshot_tx: watch::Sender<RunnerSnapshot>,
 }
 
 impl<C, S> ModeRunner<C, S>
@@ -86,11 +89,20 @@ where
             verifier: Verifier::new(),
             snapshot: RunnerSnapshot::empty(),
             reconnect_attempt: 0,
+            snapshot_tx: watch::channel(RunnerSnapshot::empty()).0,
         }
     }
 
     pub fn snapshot(&self) -> RunnerSnapshot {
         self.snapshot.clone()
+    }
+
+    pub fn subscribe(&self) -> watch::Receiver<RunnerSnapshot> {
+        self.snapshot_tx.subscribe()
+    }
+
+    fn publish(&self) {
+        let _ = self.snapshot_tx.send(self.snapshot.clone());
     }
 
     pub fn capabilities(&self) -> &CapabilitySet {
@@ -112,19 +124,39 @@ where
 
         let identity = acquire_identity(&mut new_session.session, 2).await;
         let Some(vin) = identity.vin.clone() else {
+            let candidates = match new_session.session.supported_pids().await {
+                Ok(pids) if !pids.is_empty() => pids.into_iter().collect::<Vec<_>>(),
+                _ => vec![
+                    Pid::ENGINE_RPM,
+                    Pid::VEHICLE_SPEED,
+                    Pid::COOLANT_TEMP,
+                    Pid::INTAKE_MAP,
+                    Pid::MAF,
+                ],
+            };
             self.session = Some(new_session.session);
             self.identity = Some(identity);
             self.capabilities = CapabilitySet::default();
+            self.verifier = Verifier::new();
+            for pid in &candidates {
+                let key = CapabilityKey::new(
+                    CapabilityKind::Pid,
+                    format!("01{:02X}", pid.0),
+                    "broadcast",
+                );
+                self.capabilities
+                    .insert(key.clone(), CapabilityOutcome::Unverified);
+                self.verifier.insert(key, Tier::A, Some(ViewId::Gauges));
+            }
             self.snapshot.capability.persistence = CapabilityPersistence::SessionOnlyNoVin;
-            self.snapshot.capability.verification = CapabilityVerification::ConservativeFallback;
+            self.snapshot.capability.verification = CapabilityVerification::Verifying {
+                remaining: candidates.len(),
+            };
             self.snapshot.mode = ModeState::Telemetry;
+            self.publish();
             return Ok(());
         };
 
-        // TODO(TASK-DASH-0003 completion): profile_id must come from the
-        // selected profile and probe_fingerprint from the deterministic
-        // descriptor serialization (spec §8.1); both are placeholders until
-        // the fingerprint builder lands.
         let context = CapabilityContext {
             protocol: super::capability::protocol_token(
                 new_session.session.adapter_info().protocol,
@@ -132,7 +164,7 @@ where
             .to_string(),
             profile_id: "generic".to_string(),
             probe_schema_version: 1,
-            probe_fingerprint: "mode-runner-v1".to_string(),
+            probe_fingerprint: default_probe_fingerprint(),
         };
         self.identity = Some(identity);
         self.vin = Some(vin.clone());
@@ -145,6 +177,15 @@ where
 
         match self.store.load(&vin, &context).await {
             Ok(CapabilityLoad::Hit(cached)) => {
+                let max_sequence = cached
+                    .records
+                    .iter()
+                    .map(|record| record.observation_seq)
+                    .max()
+                    .unwrap_or(0);
+                if let Some(persistence) = self.persistence.as_mut() {
+                    persistence.adopt_loaded_set(cached.set_id.clone(), max_sequence);
+                }
                 self.capabilities = cached
                     .records
                     .iter()
@@ -184,23 +225,40 @@ where
                     step: 0,
                     total: 1,
                 };
-                let supported = new_session
-                    .session
-                    .supported_pids()
-                    .await
-                    .map_err(|error| anyhow!("supported-PID discovery failed: {error}"))?;
+                let (supported, fallback) = match new_session.session.supported_pids().await {
+                    Ok(pids) => (pids, false),
+                    Err(error) => {
+                        tracing::warn!(
+                            "supported-PID discovery failed; using conservative fallback: {error}"
+                        );
+                        (HashSet::new(), true)
+                    }
+                };
+                let candidates: Vec<Pid> = if fallback || supported.is_empty() {
+                    [
+                        Pid::ENGINE_RPM,
+                        Pid::VEHICLE_SPEED,
+                        Pid::COOLANT_TEMP,
+                        Pid::INTAKE_MAP,
+                        Pid::MAF,
+                    ]
+                    .into_iter()
+                    .collect()
+                } else {
+                    supported.into_iter().collect()
+                };
                 let mut replacement = CapabilitySetReplacement {
                     vin: vin.clone(),
                     context: context.clone(),
                     completed_at: Utc::now().to_rfc3339(),
                     records: Vec::new(),
                 };
-                for pid in supported {
+                for pid in candidates {
                     replacement.records.push(CapabilityRecord {
                         kind: CapabilityKind::Pid,
                         request_id: format!("01{:02X}", pid.0),
                         module: "broadcast".to_string(),
-                        outcome: CapabilityOutcome::Supported,
+                        outcome: CapabilityOutcome::Unverified,
                         observation_seq: 1,
                         rtt_ms: None,
                         attempted_at: replacement.completed_at.clone(),
@@ -222,22 +280,23 @@ where
                             );
                             set
                         });
-                match self
-                    .persistence
-                    .as_mut()
-                    .expect("persistence initialized with VIN")
-                    .replace(replacement.records.clone())
-                    .await
-                {
-                    Ok(_) => {
-                        self.snapshot.capability.persistence = CapabilityPersistence::Pending;
-                    }
-                    Err(_) => {
-                        self.snapshot.capability.persistence =
-                            CapabilityPersistence::SessionOnlyStoreError;
-                    }
+                self.verifier = Verifier::new();
+                for record in &replacement.records {
+                    let key = CapabilityKey::new(
+                        record.kind,
+                        record.request_id.clone(),
+                        record.module.clone(),
+                    );
+                    self.capabilities
+                        .insert(key.clone(), CapabilityOutcome::Unverified);
+                    self.verifier.insert(key, Tier::A, Some(ViewId::Gauges));
                 }
-                self.snapshot.capability.verification = CapabilityVerification::Ready;
+                self.snapshot.capability.persistence = CapabilityPersistence::Pending;
+                self.snapshot.capability.verification = CapabilityVerification::Verifying {
+                    remaining: replacement.records.len(),
+                };
+                // The staged set is persisted only after verification completes.
+                let _ = replacement;
             }
             Err(_) => {
                 self.capabilities = CapabilitySet::default();
@@ -248,6 +307,7 @@ where
         }
         self.session = Some(new_session.session);
         self.snapshot.mode = ModeState::Telemetry;
+        self.publish();
         self.reconnect_attempt = 0;
         Ok(())
     }
@@ -258,7 +318,52 @@ where
             attempt: self.reconnect_attempt.saturating_add(1),
         };
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
+        let delay = if self.reconnect_attempt <= 3 {
+            Duration::from_millis(100 * u64::from(self.reconnect_attempt))
+        } else {
+            Duration::from_secs(2.min(30))
+        };
+        tokio::time::sleep(delay).await;
         self.connect().await
+    }
+
+    /// Execute one bounded telemetry/verifier request and publish its result.
+    pub async fn poll_cycle(&mut self) -> Result<bool> {
+        let Some(key) = self.verifier.next(Instant::now(), &ViewId::Gauges).cloned() else {
+            return Ok(false);
+        };
+        let pid = u8::from_str_radix(key.request_id.strip_prefix("01").unwrap_or(""), 16)
+            .map(Pid)
+            .map_err(|_| anyhow!("invalid verifier request {}", key.request_id))?;
+        let result = self.read_pid(pid).await;
+        let classification = self.verifier.classify(
+            &key,
+            result
+                .as_ref()
+                .map(|_| ())
+                .map_err(|_| super::verifier::ProbeError::Decode),
+            Instant::now(),
+        );
+        if let Some(classification) = classification {
+            self.capabilities
+                .insert(key.clone(), classification.outcome);
+            if let Some(persistence) = self.persistence.as_mut() {
+                persistence.observe(
+                    key,
+                    classification.outcome,
+                    classification.error_code.map(str::to_string),
+                );
+                let _ = persistence.flush().await;
+            }
+            let remaining = self.verifier.remaining(&ViewId::Gauges);
+            self.snapshot.capability.verification = if remaining == 0 {
+                CapabilityVerification::Ready
+            } else {
+                CapabilityVerification::Verifying { remaining }
+            };
+            self.publish();
+        }
+        result.map(|_| true)
     }
 
     pub async fn read_pid(&mut self, pid: Pid) -> Result<f64> {

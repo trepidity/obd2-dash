@@ -15,7 +15,8 @@ pub mod testing;
 pub mod verifier;
 
 pub use capability::{
-    protocol_token, CapabilityKey, CapabilityKind, CapabilityOutcome, CapabilitySet,
+    default_probe_fingerprint, protocol_token, CapabilityKey, CapabilityKind, CapabilityOutcome,
+    CapabilitySet,
 };
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;

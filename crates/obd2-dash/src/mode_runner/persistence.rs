@@ -82,6 +82,11 @@ impl<S: CapabilityStore> Persistence<S> {
     pub fn set_id(&self) -> Option<&str> {
         self.set_id.as_deref()
     }
+
+    pub fn adopt_loaded_set(&mut self, set_id: impl Into<String>, max_sequence: i64) {
+        self.set_id = Some(set_id.into());
+        self.next_seq = max_sequence.saturating_add(1).max(1);
+    }
     pub fn pending_len(&self) -> usize {
         self.pending.len()
     }
