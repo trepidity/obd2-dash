@@ -321,7 +321,7 @@ where
         let delay = if self.reconnect_attempt <= 3 {
             Duration::from_millis(100 * u64::from(self.reconnect_attempt))
         } else {
-            Duration::from_secs(2.min(30))
+            Duration::from_secs(2)
         };
         tokio::time::sleep(delay).await;
         self.connect().await
