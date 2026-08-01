@@ -12,8 +12,11 @@ use obd2_db::models::{
 };
 
 use super::capability::{CapabilityKey, CapabilitySet};
+use super::persistence::Persistence;
+use super::scheduler::{Tier, ViewId};
 use super::snapshot::{CapabilityPersistence, CapabilityVerification, ModeState, RunnerSnapshot};
 use super::store::CapabilityStore;
+use super::verifier::Verifier;
 use crate::profiles::{acquire_identity, IdentityOutcome};
 
 #[derive(Debug)]
@@ -59,6 +62,8 @@ where
     vin: Option<String>,
     capabilities: CapabilitySet,
     context: Option<CapabilityContext>,
+    persistence: Option<Persistence<S>>,
+    verifier: Verifier,
     snapshot: RunnerSnapshot,
     reconnect_attempt: u32,
 }
@@ -66,7 +71,7 @@ where
 impl<C, S> ModeRunner<C, S>
 where
     C: SessionConnector,
-    S: CapabilityStore,
+    S: CapabilityStore + Clone,
 {
     pub fn new(connector: C, store: S) -> Self {
         Self {
@@ -77,6 +82,8 @@ where
             vin: None,
             capabilities: CapabilitySet::default(),
             context: None,
+            persistence: None,
+            verifier: Verifier::new(),
             snapshot: RunnerSnapshot::empty(),
             reconnect_attempt: 0,
         }
@@ -123,6 +130,11 @@ where
         self.identity = Some(identity);
         self.vin = Some(vin.clone());
         self.context = Some(context.clone());
+        self.persistence = Some(Persistence::new(
+            self.store.clone(),
+            vin.clone(),
+            context.clone(),
+        ));
 
         match self.store.load(&vin, &context).await {
             Ok(CapabilityLoad::Hit(cached)) => {
@@ -143,6 +155,19 @@ where
                         set.insert(key, outcome);
                         set
                     });
+                for record in &cached.records {
+                    if record.outcome == CapabilityOutcome::Unverified {
+                        self.verifier.insert(
+                            CapabilityKey::new(
+                                record.kind,
+                                record.request_id.clone(),
+                                record.module.clone(),
+                            ),
+                            Tier::A,
+                            Some(ViewId::Gauges),
+                        );
+                    }
+                }
                 self.snapshot.capability.persistence = CapabilityPersistence::Cached;
                 self.snapshot.capability.verification = CapabilityVerification::Ready;
             }
@@ -190,7 +215,13 @@ where
                             );
                             set
                         });
-                match self.store.replace(&replacement).await {
+                match self
+                    .persistence
+                    .as_mut()
+                    .expect("persistence initialized with VIN")
+                    .replace(replacement.records.clone())
+                    .await
+                {
                     Ok(_) => {
                         self.snapshot.capability.persistence = CapabilityPersistence::Pending;
                     }
