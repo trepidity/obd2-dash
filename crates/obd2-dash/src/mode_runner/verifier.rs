@@ -77,6 +77,7 @@ impl Verifier {
             .iter()
             .filter(|(_, e)| {
                 e.outcome == CapabilityOutcome::Unverified
+                    && e.attempts < 3
                     && e.next_due <= now
                     && eligible(e, active_view)
             })
@@ -142,6 +143,12 @@ impl Verifier {
 
     pub fn attempts(&self, key: &CapabilityKey) -> u8 {
         self.entries.get(key).map_or(0, |e| e.attempts)
+    }
+
+    pub fn exhausted(&self, key: &CapabilityKey) -> bool {
+        self.entries
+            .get(key)
+            .is_some_and(|entry| entry.attempts >= 3)
     }
 }
 
