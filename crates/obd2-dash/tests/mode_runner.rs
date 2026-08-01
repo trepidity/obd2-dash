@@ -3,7 +3,7 @@ use obd2_core::adapter::mock::MockAdapter;
 use obd2_core::session::Session;
 use obd2_dash::mode_runner::{
     CapabilityKey, CapabilityPersistence, CapabilityStore, ConnectError, ModeRunner, ModeState,
-    NewSession, SessionConnector,
+    NewSession, Persistence, ProbeError, SessionConnector, Tier, Verifier, ViewId,
 };
 use obd2_db::models::{
     CapabilityContext, CapabilityKind, CapabilityLoad, CapabilityOutcome, CapabilityRecord,
@@ -12,6 +12,7 @@ use obd2_db::models::{
 use obd2_db::Database;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 const VIN: &str = "1GCHK23224F000001";
 
@@ -167,4 +168,44 @@ async fn store_failure_keeps_session_local_telemetry_usable() {
         .await
         .unwrap();
     assert!(rpm > 0.0);
+}
+
+#[test]
+fn verifier_keeps_transient_failures_unverified_and_applies_backoff() {
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    let mut verifier = Verifier::new();
+    verifier.insert(key.clone(), Tier::A, None);
+    let now = Instant::now();
+
+    let first = verifier
+        .classify(&key, Err(ProbeError::Timeout), now)
+        .unwrap();
+    assert_eq!(first.outcome, CapabilityOutcome::Unverified);
+    assert!(first.retry_after.is_some());
+    assert!(verifier.next(now, &ViewId::Gauges).is_none());
+    assert_eq!(verifier.outcome(&key), CapabilityOutcome::Unverified);
+}
+
+#[tokio::test]
+async fn persistence_coalesces_latest_observation_and_installs_set_id() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut persistence = Persistence::new(store, VIN, context());
+    let set_id = persistence.replace(Vec::new()).await.unwrap();
+    assert_eq!(persistence.set_id(), Some(set_id.as_str()));
+
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    persistence.observe(
+        key.clone(),
+        CapabilityOutcome::Unverified,
+        Some("timeout".into()),
+    );
+    persistence.observe(key, CapabilityOutcome::Supported, None);
+    assert_eq!(persistence.pending_len(), 1);
+    assert_eq!(
+        persistence.flush().await.unwrap(),
+        Some(OutcomeUpdate::Applied)
+    );
+    assert_eq!(persistence.pending_len(), 0);
 }
