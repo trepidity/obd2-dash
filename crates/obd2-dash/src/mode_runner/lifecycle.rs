@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use obd2_core::adapter::Adapter;
+use obd2_core::error::{NegativeResponse, Obd2Error};
 use obd2_core::protocol::pid::Pid;
 use obd2_core::session::Session;
 use obd2_db::models::{
@@ -14,11 +15,14 @@ use obd2_db::models::{
 
 use super::capability::{default_probe_fingerprint, CapabilityKey, CapabilitySet};
 use super::persistence::Persistence;
-use super::scheduler::{Tier, ViewId};
+use super::scheduler::{RequestDescriptor, Scheduler, Tier, ViewId};
 use super::snapshot::{CapabilityPersistence, CapabilityVerification, ModeState, RunnerSnapshot};
 use super::store::CapabilityStore;
 use super::verifier::Verifier;
-use crate::profiles::{acquire_identity, IdentityOutcome};
+use crate::profiles::registry::ProfileRegistry;
+use crate::profiles::{
+    acquire_identity, build_vehicle_context, next_generation, select_into_state, IdentityOutcome,
+};
 use tokio::sync::watch;
 
 #[derive(Debug)]
@@ -69,6 +73,8 @@ where
     snapshot: RunnerSnapshot,
     reconnect_attempt: u32,
     snapshot_tx: watch::Sender<RunnerSnapshot>,
+    scheduler: Scheduler,
+    cycle: u64,
 }
 
 impl<C, S> ModeRunner<C, S>
@@ -90,6 +96,8 @@ where
             snapshot: RunnerSnapshot::empty(),
             reconnect_attempt: 0,
             snapshot_tx: watch::channel(RunnerSnapshot::empty()).0,
+            scheduler: Scheduler::default(),
+            cycle: 0,
         }
     }
 
@@ -111,6 +119,8 @@ where
 
     pub async fn connect(&mut self) -> Result<()> {
         self.snapshot.mode = ModeState::Connecting;
+        self.cycle = 0;
+        self.scheduler = Scheduler::default();
         let mut new_session = self
             .connector
             .connect()
@@ -148,6 +158,21 @@ where
                     .insert(key.clone(), CapabilityOutcome::Unverified);
                 self.verifier.insert(key, Tier::A, Some(ViewId::Gauges));
             }
+            self.scheduler = Scheduler::new(
+                candidates
+                    .iter()
+                    .map(|pid| RequestDescriptor {
+                        key: CapabilityKey::new(
+                            CapabilityKind::Pid,
+                            format!("01{:02X}", pid.0),
+                            "broadcast",
+                        ),
+                        tier: Tier::A,
+                        every_cycles: 1,
+                        view: None,
+                    })
+                    .collect(),
+            );
             self.snapshot.capability.persistence = CapabilityPersistence::SessionOnlyNoVin;
             self.snapshot.capability.verification = CapabilityVerification::Verifying {
                 remaining: candidates.len(),
@@ -157,15 +182,28 @@ where
             return Ok(());
         };
 
+        let vehicle_context =
+            build_vehicle_context(&new_session.session, next_generation(), &identity);
+        let profile_state = select_into_state(&ProfileRegistry::with_builtins(), &vehicle_context);
+        let profile_id = profile_state
+            .selected
+            .as_ref()
+            .map(|selected| selected.profile_id().as_str())
+            .unwrap_or("generic")
+            .to_string();
         let context = CapabilityContext {
             protocol: super::capability::protocol_token(
                 new_session.session.adapter_info().protocol,
             )
             .to_string(),
-            profile_id: "generic".to_string(),
+            profile_id,
             probe_schema_version: 1,
             probe_fingerprint: default_probe_fingerprint(),
         };
+        let context_changed = self
+            .context
+            .as_ref()
+            .is_some_and(|previous| previous != &context);
         self.identity = Some(identity);
         self.vin = Some(vin.clone());
         self.context = Some(context.clone());
@@ -203,6 +241,22 @@ where
                         set.insert(key, outcome);
                         set
                     });
+                self.scheduler = Scheduler::new(
+                    cached
+                        .records
+                        .iter()
+                        .map(|entry| RequestDescriptor {
+                            key: CapabilityKey::new(
+                                entry.kind,
+                                entry.request_id.clone(),
+                                entry.module.clone(),
+                            ),
+                            tier: Tier::A,
+                            every_cycles: 1,
+                            view: None,
+                        })
+                        .collect(),
+                );
                 for record in &cached.records {
                     if record.outcome == CapabilityOutcome::Unverified {
                         self.verifier.insert(
@@ -280,7 +334,9 @@ where
                             );
                             set
                         });
-                self.verifier = Verifier::new();
+                if context_changed || self.verifier.unresolved(&ViewId::Gauges) == 0 {
+                    self.verifier = Verifier::new();
+                }
                 for record in &replacement.records {
                     let key = CapabilityKey::new(
                         record.kind,
@@ -291,6 +347,22 @@ where
                         .insert(key.clone(), CapabilityOutcome::Unverified);
                     self.verifier.insert(key, Tier::A, Some(ViewId::Gauges));
                 }
+                self.scheduler = Scheduler::new(
+                    replacement
+                        .records
+                        .iter()
+                        .map(|entry| RequestDescriptor {
+                            key: CapabilityKey::new(
+                                entry.kind,
+                                entry.request_id.clone(),
+                                entry.module.clone(),
+                            ),
+                            tier: Tier::A,
+                            every_cycles: 1,
+                            view: None,
+                        })
+                        .collect(),
+                );
                 self.snapshot.capability.persistence = CapabilityPersistence::Pending;
                 self.snapshot.capability.verification = CapabilityVerification::Verifying {
                     remaining: replacement.records.len(),
@@ -329,21 +401,34 @@ where
 
     /// Execute one bounded telemetry/verifier request and publish its result.
     pub async fn poll_cycle(&mut self) -> Result<bool> {
-        let Some(key) = self.verifier.next(Instant::now(), &ViewId::Gauges).cloned() else {
+        self.cycle = self.cycle.saturating_add(1);
+        let key = self
+            .scheduler
+            .plan_cycle(self.cycle, &ViewId::Gauges, &self.capabilities)
+            .into_iter()
+            .next()
+            .map(|request| request.0)
+            .or_else(|| self.verifier.next(Instant::now(), &ViewId::Gauges).cloned());
+        let Some(key) = key else {
             return Ok(false);
         };
         let pid = u8::from_str_radix(key.request_id.strip_prefix("01").unwrap_or(""), 16)
             .map(Pid)
             .map_err(|_| anyhow!("invalid verifier request {}", key.request_id))?;
-        let result = self.read_pid(pid).await;
-        let classification = self.verifier.classify(
+        let result = self.read_pid_probe(pid).await;
+        let mut classification = self.verifier.classify(
             &key,
-            result
-                .as_ref()
-                .map(|_| ())
-                .map_err(|_| super::verifier::ProbeError::Decode),
+            result.as_ref().map(|_| ()).map_err(|error| *error),
             Instant::now(),
         );
+        if classification.is_none() && result.is_err() {
+            self.verifier.insert(key.clone(), Tier::A, None);
+            classification = self.verifier.classify(
+                &key,
+                result.as_ref().map(|_| ()).map_err(|error| *error),
+                Instant::now(),
+            );
+        }
         if let Some(classification) = classification {
             self.capabilities
                 .insert(key.clone(), classification.outcome);
@@ -389,23 +474,54 @@ where
                 };
             }
             self.publish();
+        } else if let Ok(value) = result {
+            let mut signals = (*self.snapshot.signals).clone();
+            signals.insert(key.request_id.clone(), value);
+            self.snapshot.signals = std::sync::Arc::new(signals);
+            self.snapshot.sample_at = Some(Instant::now());
+            self.publish();
         }
-        result.map(|_| true)
+        match result {
+            Ok(_) => Ok(true),
+            Err(super::verifier::ProbeError::Transport) => {
+                Err(anyhow!("PID verifier request failed: transport"))
+            }
+            Err(_) => Ok(true),
+        }
     }
 
     pub async fn read_pid(&mut self, pid: Pid) -> Result<f64> {
+        self.read_pid_probe(pid)
+            .await
+            .map_err(|error| anyhow!("PID {:02X} failed: {error:?}", pid.0))
+    }
+
+    async fn read_pid_probe(
+        &mut self,
+        pid: Pid,
+    ) -> std::result::Result<f64, super::verifier::ProbeError> {
         let session = self
             .session
             .as_mut()
-            .ok_or_else(|| anyhow!("runner is not connected"))?;
-        let reading = session
-            .read_pid(pid)
-            .await
-            .map_err(|error| anyhow!("PID {:02X} failed: {error}", pid.0))?;
+            .ok_or(super::verifier::ProbeError::Transport)?;
+        let reading = session.read_pid(pid).await.map_err(|error| match error {
+            Obd2Error::NoData => super::verifier::ProbeError::NoData,
+            Obd2Error::Timeout => super::verifier::ProbeError::Timeout,
+            Obd2Error::Transport(_) => super::verifier::ProbeError::Transport,
+            Obd2Error::UnsupportedPid { .. } => super::verifier::ProbeError::UnsupportedPid,
+            Obd2Error::NegativeResponse {
+                nrc:
+                    NegativeResponse::RequestOutOfRange
+                    | NegativeResponse::ServiceNotSupported
+                    | NegativeResponse::SubFunctionNotSupported,
+                ..
+            } => super::verifier::ProbeError::ExplicitUnsupported,
+            _ => super::verifier::ProbeError::Decode,
+        })?;
         let value = reading
             .value
             .as_f64()
-            .map_err(|error| anyhow!("PID {:02X} was not scalar: {error}", pid.0))?;
+            .map_err(|_| super::verifier::ProbeError::Decode)?;
         self.snapshot.sample_at = Some(Instant::now());
         Ok(value)
     }

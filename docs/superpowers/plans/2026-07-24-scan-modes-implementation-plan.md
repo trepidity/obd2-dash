@@ -542,20 +542,22 @@ any entry exhausted retries — `unresolved()` now drives completion with
 formatting against §8.1 — now sorted/deduped request identities only, with
 the three spec-named fingerprint tests.
 
+**Slice 3 (in progress):** the runner derives the selected profile ID for the
+cache context, builds schedulers for cached/staged/fallback requests, executes
+supported telemetry through the scheduler, publishes values through the
+snapshot watch channel, and preserves typed probe classifications.
+
 **Remaining before this task can close** (spec references in parentheses):
 
 - [ ] Seed the verifier and fingerprint from display/tier configuration and
   the selected profile (profile signals, `ATRV`/adapter row, forced-PID
   controlled verification, real `profile_id`), not the hardcoded five-PID
   `default_probe_fingerprint()` and `Tier::A`/`Gauges` pair (§8.1, §9.1).
-- [ ] `poll_cycle()` erases probe error types: every `read_pid` failure maps
-  to `ProbeError::Decode`, so `NoData`/`UnsupportedPid` can never classify
-  an entry `Unsupported` — dead PIDs stay `Unverified` and re-verify every
-  session. Surface `Obd2Error` through the probe path (§8.2, §9.1.6).
-- [ ] Telemetry cycle executor: drive the DASH-0002 scheduler against the
-  session for `Supported` entries (poll_cycle currently executes only
-  verifier work), including
-  `supported_telemetry_failure_demotes_to_verifier_not_unsupported` (§10).
+- [x] `poll_cycle()` preserves typed `NoData`/timeout/transport/unsupported
+  classifications through the probe boundary; non-transport failures remain
+  session-local (§8.2, §9.1.6).
+- [x] Telemetry cycle executor drives the DASH-0002 scheduler for `Supported`
+  entries and publishes values through the snapshot watch channel (§10).
 - [ ] Reconnect: identity/context reacquisition before cache load with
   same-context verifier resume / different-context discard; indefinite
   capped slow retry loop at the runner-driver level (§13).

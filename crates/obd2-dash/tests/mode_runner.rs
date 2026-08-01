@@ -93,6 +93,42 @@ async fn cache_miss_refreshes_masks_before_telemetry() {
 }
 
 #[tokio::test]
+async fn poll_cycle_executes_a_request_and_publishes_snapshot() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    store
+        .replace(&CapabilitySetReplacement {
+            vin: VIN.into(),
+            context: context(),
+            completed_at: "now".into(),
+            records: vec![CapabilityRecord {
+                kind: CapabilityKind::Pid,
+                request_id: "010C".into(),
+                module: "broadcast".into(),
+                outcome: CapabilityOutcome::Supported,
+                observation_seq: 1,
+                rtt_ms: None,
+                attempted_at: "now".into(),
+                error_code: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let connector = CountingConnector {
+        calls: Arc::new(AtomicUsize::new(0)),
+    };
+    let mut runner = ModeRunner::new(connector, store);
+    let mut updates = runner.subscribe();
+    runner.connect().await.unwrap();
+
+    assert!(runner.poll_cycle().await.unwrap());
+    assert!(updates.changed().await.is_ok());
+    assert!(runner.snapshot().sample_at.is_some());
+    assert!(!runner.snapshot().signals.is_empty());
+}
+
+#[tokio::test]
 async fn cache_hit_starts_telemetry_with_cached_capabilities() {
     let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
         Database::open_in_memory().unwrap(),
