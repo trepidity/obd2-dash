@@ -101,7 +101,7 @@ mod tests {
             probe_schema_version: 1,
             probe_fingerprint: "f".into(),
         };
-        let mut p = Persistence::new(store, "VIN", ctx);
+        let mut p = Persistence::new(store, "1GCHK23224F000001", ctx);
         let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
         let id = p.replace(vec![]).await.unwrap();
         assert_eq!(p.set_id(), Some(id.as_str()));
