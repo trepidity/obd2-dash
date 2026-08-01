@@ -522,7 +522,14 @@ constructing a session or opening SQLite.
 
 ## TASK-DASH-0003: Implement lifecycle, discovery, cache, and reconnect
 
-**Status: COMPLETE (closed 2026-08-01).** Delivered and verified:
+**Status: COMPLETE (closed 2026-08-01; audit-confirmed in `26c8f99`).**
+Closure audit: all seven named contracts verified; two were strengthened to
+be falsifiable (`fallback_never_schedules_full_legacy_pid_set` had no forced
+mask failure and a `< 64` bound the legacy sweep passes;
+`reconnect_reacquires_vin_before_cache_load` now proves identity-before-load
+via a switched-VIN cache hit). `drive_reconnect` cancellation-by-drop is
+acceptable because the abandoned session is discarded wholesale; DASH-0004's
+Shutdown must still observe request boundaries. Delivered and verified:
 identity-only `acquire_identity` switch; verifier classification (separated
 `NO DATA`, transient stays `Unverified`, per-session retry cap + backoff);
 staged persistence (set-ID install-before-updates, latest-batch coalescing);
