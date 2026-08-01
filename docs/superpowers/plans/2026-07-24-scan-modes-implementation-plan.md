@@ -562,8 +562,15 @@ Regression tests: full per-cycle polling, demotion,
 
 - [x] Seed the verifier, scheduler tiers, and fingerprint from selected
   profile forced/display standard PIDs with deterministic Tier B/C cadences
-  (§8.1, §9.1, §10). Non-standard profile signal execution remains a later
-  telemetry/diagnostics concern.
+  (§8.1, §9.1, §10) — slice 4 (`31c519b`), audit-corrected in `f341bb7`:
+  tiers now match the §10 table (MAP and fuel-rail actual are Tier A, not
+  B/C), and view gating was removed from standard-PID descriptors — the
+  scheduler gates every tier by view, so `Some(Gauges)` would have silenced
+  all gauges at the first `SetActiveView`. Class-2 profile signals and the
+  `ATRV`/adapter row remain unseeded (later telemetry/diagnostics concern).
+  Known mild deviation (§9.1 bullet 2): mask-excluded configured PIDs are
+  staged `Unverified` and probed instead of starting `Unsupported`; the
+  verifier self-corrects them via separated NO DATA within one pass.
 - [x] Typed probe classification through the boundary; non-transport
   failures session-local (§8.2, §9.1.6) — slice 3.
 - [x] Telemetry cycle executor with watch publication (§10) — slice 3 +
