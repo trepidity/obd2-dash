@@ -5,11 +5,13 @@
 //! the scheduler responsible for I/O policy.
 
 pub mod capability;
+pub mod lifecycle;
 pub mod scheduler;
 pub mod snapshot;
 pub mod store;
 
 pub use capability::{CapabilityKey, CapabilityKind, CapabilityOutcome, CapabilitySet};
+pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};
 pub use snapshot::{
     CapabilityPersistence, CapabilityState, CapabilityVerification, ModeState, RunnerSnapshot,
