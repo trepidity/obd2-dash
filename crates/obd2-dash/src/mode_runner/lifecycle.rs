@@ -53,12 +53,7 @@ fn profile_probe_descriptors(profile: Option<&dyn DiagnosticProfile>) -> Vec<Req
     let Some(profile) = profile else {
         return [0x0C, 0x0D, 0x05, 0x0B, 0x10]
             .into_iter()
-            .map(|pid| RequestDescriptor {
-                key: CapabilityKey::new(CapabilityKind::Pid, format!("01{pid:02X}"), "broadcast"),
-                tier: pid_tier(pid).0,
-                every_cycles: pid_tier(pid).1,
-                view: Some(ViewId::Gauges),
-            })
+            .map(standard_pid_descriptor)
             .collect();
     };
     let mut pids = profile.standard_pid_policy().forced.to_vec();
@@ -69,21 +64,30 @@ fn profile_probe_descriptors(profile: Option<&dyn DiagnosticProfile>) -> Vec<Req
     }
     pids.sort_unstable();
     pids.dedup();
-    pids.into_iter()
-        .map(|pid| RequestDescriptor {
-            key: CapabilityKey::new(CapabilityKind::Pid, format!("01{pid:02X}"), "broadcast"),
-            tier: pid_tier(pid).0,
-            every_cycles: pid_tier(pid).1,
-            view: Some(ViewId::Gauges),
-        })
-        .collect()
+    pids.into_iter().map(standard_pid_descriptor).collect()
 }
 
+/// Standard-PID cadence tiers per the design's §10 telemetry table. Tier C is
+/// the low-cadence remainder for secondary PIDs; view gating is reserved for
+/// signals with an owning view (Class-2 tables, once seeded) — standard PIDs
+/// poll regardless of the active view, so `view` stays `None` here.
 fn pid_tier(pid: u8) -> (Tier, u32) {
     match pid {
-        0x0C | 0x0D => (Tier::A, 1),
-        0x05 | 0x0B | 0x10 => (Tier::B, 5),
+        // Headline gauges: RPM, speed, MAP/boost, fuel rail actual.
+        0x0C | 0x0D | 0x0B | 0x23 => (Tier::A, 1),
+        // Secondary engine data: load, coolant, IAT, MAF, baro.
+        0x04 | 0x05 | 0x0F | 0x10 | 0x33 => (Tier::B, 5),
         _ => (Tier::C, 20),
+    }
+}
+
+fn standard_pid_descriptor(pid: u8) -> RequestDescriptor {
+    let (tier, every_cycles) = pid_tier(pid);
+    RequestDescriptor {
+        key: CapabilityKey::new(CapabilityKind::Pid, format!("01{pid:02X}"), "broadcast"),
+        tier,
+        every_cycles,
+        view: None,
     }
 }
 
@@ -101,7 +105,7 @@ fn descriptor_for_key(key: CapabilityKey, profile: &[RequestDescriptor]) -> Requ
         key,
         tier: cadence.0,
         every_cycles: cadence.1,
-        view: Some(ViewId::Gauges),
+        view: None,
     }
 }
 
@@ -238,16 +242,7 @@ where
             self.scheduler = Scheduler::new(
                 candidates
                     .iter()
-                    .map(|pid| RequestDescriptor {
-                        key: CapabilityKey::new(
-                            CapabilityKind::Pid,
-                            format!("01{:02X}", pid.0),
-                            "broadcast",
-                        ),
-                        tier: Tier::A,
-                        every_cycles: 1,
-                        view: None,
-                    })
+                    .map(|pid| standard_pid_descriptor(pid.0))
                     .collect(),
             );
             self.snapshot.capability.persistence = CapabilityPersistence::SessionOnlyNoVin;
@@ -698,6 +693,22 @@ mod tests {
             ConnectError::Transport("lost".into()).to_string(),
             "transport: lost"
         );
+    }
+
+    #[test]
+    fn pid_tiers_match_design_telemetry_table() {
+        // Spec §10: headline gauges every cycle; secondary data every 5th.
+        for pid in [0x0Cu8, 0x0D, 0x0B, 0x23] {
+            assert_eq!(pid_tier(pid), (Tier::A, 1), "PID {pid:02X}");
+        }
+        for pid in [0x04u8, 0x05, 0x0F, 0x10, 0x33] {
+            assert_eq!(pid_tier(pid), (Tier::B, 5), "PID {pid:02X}");
+        }
+        assert_eq!(pid_tier(0x46), (Tier::C, 20));
+        // Standard PIDs are never view-gated; gating is reserved for
+        // signals with an owning view.
+        assert_eq!(standard_pid_descriptor(0x0C).view, None);
+        assert_eq!(standard_pid_descriptor(0x46).view, None);
     }
 
     #[tokio::test]
