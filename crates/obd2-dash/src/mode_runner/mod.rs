@@ -5,6 +5,7 @@
 //! the scheduler responsible for I/O policy.
 
 pub mod capability;
+pub mod command;
 pub mod lifecycle;
 pub mod persistence;
 pub mod scheduler;
@@ -18,6 +19,7 @@ pub use capability::{
     default_probe_fingerprint, protocol_token, CapabilityKey, CapabilityKind, CapabilityOutcome,
     CapabilitySet,
 };
+pub use command::{reply_for, CommandReply, RunnerCommand};
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};

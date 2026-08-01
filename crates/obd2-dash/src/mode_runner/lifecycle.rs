@@ -14,6 +14,7 @@ use obd2_db::models::{
 };
 
 use super::capability::{probe_fingerprint, CapabilityKey, CapabilitySet};
+use super::command::{reply_for, CommandReply, RunnerCommand};
 use super::persistence::Persistence;
 use super::scheduler::{RequestDescriptor, Scheduler, Tier, ViewId};
 use super::snapshot::{CapabilityPersistence, CapabilityVerification, ModeState, RunnerSnapshot};
@@ -196,6 +197,41 @@ where
 
     pub fn capabilities(&self) -> &CapabilitySet {
         &self.capabilities
+    }
+
+    /// Apply one bounded foreground command. Rejected commands are never
+    /// retained for later execution; accepted work owns the mode transition.
+    pub fn command(&mut self, command: RunnerCommand) -> CommandReply {
+        let reply = reply_for(command, &self.snapshot.mode);
+        if reply != CommandReply::Accepted {
+            return reply;
+        }
+        match command {
+            RunnerCommand::RunDiagnostic => {
+                self.snapshot.mode = ModeState::Diagnostic {
+                    phase: 0,
+                    phase_total: 5,
+                    step: 0,
+                    total: 0,
+                };
+            }
+            RunnerCommand::RescanVehicle => {
+                self.snapshot.mode = ModeState::Discovering {
+                    origin: super::snapshot::DiscoveryOrigin::Rescan,
+                    step: 0,
+                    total: 1,
+                };
+            }
+            RunnerCommand::CancelForeground => {
+                self.snapshot.mode = ModeState::Telemetry;
+            }
+            RunnerCommand::Shutdown => {
+                self.snapshot.mode = ModeState::ShuttingDown;
+                self.session = None;
+            }
+        }
+        self.publish();
+        reply
     }
 
     pub async fn connect(&mut self) -> Result<()> {

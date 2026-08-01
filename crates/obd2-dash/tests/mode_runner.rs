@@ -2,8 +2,9 @@ use async_trait::async_trait;
 use obd2_core::adapter::mock::MockAdapter;
 use obd2_core::session::Session;
 use obd2_dash::mode_runner::{
-    CapabilityKey, CapabilityPersistence, CapabilityStore, ConnectError, ModeRunner, ModeState,
-    NewSession, Persistence, ProbeError, SessionConnector, Tier, Verifier, ViewId,
+    CapabilityKey, CapabilityPersistence, CapabilityStore, CommandReply, ConnectError, ModeRunner,
+    ModeState, NewSession, Persistence, ProbeError, RunnerCommand, SessionConnector, Tier,
+    Verifier, ViewId,
 };
 use obd2_db::models::{
     CapabilityContext, CapabilityKind, CapabilityLoad, CapabilityOutcome, CapabilityRecord,
@@ -90,6 +91,62 @@ async fn cache_miss_refreshes_masks_before_telemetry() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
     assert!(!runner.capabilities().is_empty());
+}
+
+#[tokio::test]
+async fn run_diagnostic_is_rejected_until_telemetry() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(ScriptedConnector::new(VIN), store);
+    assert_eq!(
+        runner.command(RunnerCommand::RunDiagnostic),
+        CommandReply::NotReady
+    );
+    runner.connect().await.unwrap();
+    assert_eq!(
+        runner.command(RunnerCommand::RunDiagnostic),
+        CommandReply::Accepted
+    );
+}
+
+#[tokio::test]
+async fn duplicate_foreground_command_returns_busy_without_queueing() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(ScriptedConnector::new(VIN), store);
+    runner.connect().await.unwrap();
+    assert_eq!(
+        runner.command(RunnerCommand::RescanVehicle),
+        CommandReply::Accepted
+    );
+    assert_eq!(
+        runner.command(RunnerCommand::RunDiagnostic),
+        CommandReply::Busy
+    );
+    assert!(matches!(
+        runner.snapshot().mode,
+        ModeState::Discovering { .. }
+    ));
+}
+
+#[tokio::test]
+async fn foreground_command_pauses_and_resumes_background_verifier() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(ScriptedConnector::new(VIN), store);
+    runner.connect().await.unwrap();
+    assert_eq!(
+        runner.command(RunnerCommand::RunDiagnostic),
+        CommandReply::Accepted
+    );
+    assert_eq!(
+        runner.command(RunnerCommand::CancelForeground),
+        CommandReply::Accepted
+    );
+    assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
 }
 
 #[tokio::test]

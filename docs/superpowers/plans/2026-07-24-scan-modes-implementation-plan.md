@@ -745,6 +745,12 @@ startup performs no post-initialization capability mask walk.
 
 ## TASK-DASH-0004: Add bounded foreground commands and diagnostic bundle
 
+**Slice 1:** added the transport-independent bounded command contract and
+mode-table enforcement (`RunDiagnostic`, `RescanVehicle`, `CancelForeground`,
+`Shutdown`). Rejected commands are not retained, accepted commands publish
+their foreground mode transition, and cancellation returns to telemetry. The
+diagnostic bundle and staged rescan executor remain outstanding.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
 - **COMP:** `COMP-DASH-PROF`
