@@ -221,15 +221,15 @@ fn print_decode(probe: &Probe, bytes: &[u8]) {
                 );
             }
         }
-        "LLY desired fuel pressure 22163D01" | "LLY actual fuel pressure 22163E01" => {
-            if bytes.len() >= 2 {
-                let raw = u16::from_be_bytes([bytes[0], bytes[1]]);
-                println!(
-                    "    raw={} / {:.1} psi",
-                    raw,
-                    f64::from(raw) * (145.0 / 256.0)
-                );
-            }
+        "LLY desired fuel pressure 22163D01" | "LLY actual fuel pressure 22163E01"
+            if bytes.len() >= 2 =>
+        {
+            let raw = u16::from_be_bytes([bytes[0], bytes[1]]);
+            println!(
+                "    raw={} / {:.1} psi",
+                raw,
+                f64::from(raw) * (145.0 / 256.0)
+            );
         }
         _ => {}
     }

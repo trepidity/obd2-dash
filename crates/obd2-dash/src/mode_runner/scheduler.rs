@@ -51,7 +51,7 @@ impl Scheduler {
                 continue;
             }
             if descriptor.every_cycles == 0
-                || cycle % u64::from(descriptor.every_cycles) != 0
+                || !cycle.is_multiple_of(u64::from(descriptor.every_cycles))
                 || !view_matches(descriptor.view.as_ref(), active_view)
             {
                 continue;

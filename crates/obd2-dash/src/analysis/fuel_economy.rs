@@ -295,11 +295,10 @@ impl FuelEconomyState {
     ) -> Option<GoldStandardResult> {
         let (source, fuel_rate_lph) = if let Some(rate) = snap.engine_fuel_rate_lph {
             (GoldSource::DirectFuelRate, rate)
-        } else if let Some(maf) = snap.maf_gs {
+        } else {
+            let maf = snap.maf_gs?;
             let rate = maf * 3.6 / (self.fuel_type.afr() * self.fuel_type.density());
             (GoldSource::MafDerived, rate)
-        } else {
-            return None;
         };
 
         let fuel_rate_gph = fuel_rate_lph / LITERS_PER_GALLON;

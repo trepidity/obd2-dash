@@ -79,7 +79,7 @@ impl SessionIndex {
     /// Get sessions sorted by start time (newest first).
     pub fn sessions_sorted(&self) -> Vec<&SessionEntry> {
         let mut sorted: Vec<_> = self.sessions.iter().collect();
-        sorted.sort_by(|a, b| b.start_time.cmp(&a.start_time));
+        sorted.sort_by_key(|entry| std::cmp::Reverse(entry.start_time));
         sorted
     }
 
