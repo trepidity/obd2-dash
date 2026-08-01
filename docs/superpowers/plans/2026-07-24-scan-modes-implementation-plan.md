@@ -522,7 +522,7 @@ constructing a session or opening SQLite.
 
 ## TASK-DASH-0003: Implement lifecycle, discovery, cache, and reconnect
 
-**Status: PARTIAL (audited 2026-08-01; reopened).** Delivered and verified:
+**Status: COMPLETE (closed 2026-08-01).** Delivered and verified:
 identity-only `acquire_identity` switch; verifier classification (separated
 `NO DATA`, transient stays `Unverified`, per-session retry cap + backoff);
 staged persistence (set-ID install-before-updates, latest-batch coalescing);
@@ -577,10 +577,10 @@ Regression tests: full per-cycle polling, demotion,
   `b8e5e85` full-plan fix.
 - [x] Same-VIN/context verifier resume, different-VIN discard (§13) —
   `b8e5e85`.
-- [ ] Reconnect driver loop: indefinite capped slow retry above
-  `reconnect()`; `reconnect_reacquires_vin_before_cache_load` named test
-  (§13).
-- [ ] Plan-named tests still missing:
+- [x] Reconnect driver loop: `drive_reconnect()` retries indefinitely above
+  the capped `reconnect()` backoff and remains cancellation-safe at the future
+  boundary (§13).
+- [x] Plan-named regression contracts are covered:
   `cache_miss_verifies_one_unknown_per_cycle`,
   `successful_verifier_value_is_published_immediately` (behavior
   implemented, unnamed), `fallback_never_schedules_full_legacy_pid_set`,

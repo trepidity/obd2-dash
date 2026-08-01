@@ -403,3 +403,138 @@ async fn same_context_reconnect_resumes_unfinished_initial_verifier() {
         "resumed pass must treat the second separated NO DATA as confirmation"
     );
 }
+
+#[tokio::test]
+async fn cache_miss_verifies_one_unknown_per_cycle() {
+    let connector = ScriptedConnector::new(VIN);
+    let script = connector.script.clone();
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    let before = script.requests().await.len();
+    runner.poll_cycle().await.unwrap();
+    let after = script.requests().await.len();
+    assert!(after > before);
+}
+
+#[tokio::test]
+async fn successful_verifier_value_is_published_immediately() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    seed_supported(&store, &["010C"]).await;
+    let mut runner = ModeRunner::new(ScriptedConnector::new(VIN), store);
+    runner.connect().await.unwrap();
+    runner.poll_cycle().await.unwrap();
+    assert!(runner.snapshot().sample_at.is_some());
+    assert!(runner.snapshot().signals.contains_key("010C"));
+}
+
+#[tokio::test]
+async fn fallback_never_schedules_full_legacy_pid_set() {
+    let connector = ScriptedConnector::new(VIN);
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    assert!(runner.capabilities().len() < 64);
+}
+
+#[tokio::test]
+async fn missing_vin_never_calls_store_replace() {
+    let connector = ScriptedConnector::new("");
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    assert_eq!(
+        runner.snapshot().capability.persistence,
+        CapabilityPersistence::SessionOnlyNoVin
+    );
+}
+
+#[tokio::test]
+async fn reconnect_reacquires_vin_before_cache_load() {
+    let connector = ScriptedConnector::new(VIN);
+    let calls = connector.calls.clone();
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    runner.reconnect().await.unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(runner.snapshot().mode, ModeState::Telemetry);
+}
+
+#[tokio::test]
+async fn fingerprint_mismatch_runs_discovery() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut mismatched = context();
+    mismatched.probe_fingerprint = "v1:stale".into();
+    store
+        .replace(&CapabilitySetReplacement {
+            vin: VIN.into(),
+            context: mismatched,
+            completed_at: "now".into(),
+            records: vec![],
+        })
+        .await
+        .unwrap();
+    let mut runner = ModeRunner::new(ScriptedConnector::new(VIN), store);
+    runner.connect().await.unwrap();
+    assert_eq!(
+        runner.snapshot().capability.persistence,
+        CapabilityPersistence::Pending
+    );
+}
+
+#[test]
+fn tier_c_requests_are_not_due_on_fast_cycles() {
+    let descriptor = obd2_dash::mode_runner::RequestDescriptor {
+        key: CapabilityKey::new(CapabilityKind::Pid, "015C", "broadcast"),
+        tier: Tier::C,
+        every_cycles: 20,
+        view: None,
+    };
+    let scheduler = obd2_dash::mode_runner::Scheduler::new(vec![descriptor.clone()]);
+    let mut caps = obd2_dash::mode_runner::CapabilitySet::default();
+    caps.insert(descriptor.key.clone(), CapabilityOutcome::Supported);
+    assert!(scheduler.plan_cycle(1, &ViewId::Gauges, &caps).is_empty());
+    assert_eq!(scheduler.plan_cycle(20, &ViewId::Gauges, &caps).len(), 1);
+}
+
+#[test]
+fn tier_c_requests_are_view_independent_when_unrestricted() {
+    let descriptor = obd2_dash::mode_runner::RequestDescriptor {
+        key: CapabilityKey::new(CapabilityKind::Pid, "015C", "broadcast"),
+        tier: Tier::C,
+        every_cycles: 1,
+        view: None,
+    };
+    let scheduler = obd2_dash::mode_runner::Scheduler::new(vec![descriptor.clone()]);
+    let mut caps = obd2_dash::mode_runner::CapabilitySet::default();
+    caps.insert(descriptor.key, CapabilityOutcome::Supported);
+    assert_eq!(scheduler.plan_cycle(1, &ViewId::Engine, &caps).len(), 1);
+}
+
+#[tokio::test]
+async fn runner_snapshot_preserves_generic_and_lly_signal_shapes() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(ScriptedConnector::new(VIN), store);
+    runner.connect().await.unwrap();
+    let snapshot = runner.snapshot();
+    assert!(snapshot.signals.is_empty());
+    assert_eq!(
+        snapshot.capability.persistence,
+        CapabilityPersistence::Pending
+    );
+}

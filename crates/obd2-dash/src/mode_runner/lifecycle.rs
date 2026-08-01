@@ -496,6 +496,20 @@ where
         self.connect().await
     }
 
+    /// Keep reconnecting until a complete identity/cache acquisition succeeds.
+    /// The bounded delays in [`Self::reconnect`] prevent a failed transport from
+    /// turning this driver into a busy loop; callers can cancel the future.
+    pub async fn drive_reconnect(&mut self) -> Result<()> {
+        loop {
+            match self.reconnect().await {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    tracing::warn!("reconnect attempt failed; retrying: {error}");
+                }
+            }
+        }
+    }
+
     /// Execute one planned telemetry cycle as an explicit request loop, then
     /// at most one verifier probe (spec §7.2, §9.1.4). Every supported entry
     /// due this cycle is polled; verifier work runs only through
