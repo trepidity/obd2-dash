@@ -45,6 +45,13 @@ TypeScript, Playwright.
   committed as `97e6683`; async store wrapping remains in `TASK-DASH-0003`.
 - `TASK-DASH-0003`: async `spawn_blocking` SQLite store boundary committed as
   `68f1d69`; connector/lifecycle/discovery work remains.
+- Out-of-plan feature (`1fb8ee4`): GUI `.obd2rec` recording implemented inside
+  the legacy `LiveBackend` (per-snapshot cadence, not per serial poll), plus a
+  TUI `record raw` subcommand. The recording module moved into the lib
+  (single-compile; binary re-exports it). `TASK-GUI-0001` must port
+  start/stop/record into the runner when `LiveBackend` is deleted, and should
+  fix the mid-recording write-failure path, which currently drops the writer
+  silently while the frontend still shows recording.
 
 ## Global constraints
 
@@ -817,6 +824,12 @@ and cancel/error cannot replace the old capability set.
     PID/profile request helpers.
   - Preserve recording file inspection commands; they are unrelated local file
     operations.
+  - Port the `1fb8ee4` GUI recording feature (`start_recording`,
+    `stop_recording`, per-sample writes) into the runner: record from runner
+    samples (per completed request, not per snapshot invoke), run file I/O off
+    the async path, and surface mid-recording write failures in the snapshot
+    instead of silently dropping the writer while the UI still shows
+    recording.
 
 - [ ] **Run Tauri gates**
 
