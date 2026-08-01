@@ -6,14 +6,20 @@
 
 pub mod capability;
 pub mod lifecycle;
+pub mod persistence;
 pub mod scheduler;
 pub mod snapshot;
 pub mod store;
+/// Deterministic connector and adapter harness used by lifecycle integration tests.
+pub mod testing;
+pub mod verifier;
 
 pub use capability::{CapabilityKey, CapabilityKind, CapabilityOutcome, CapabilitySet};
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
+pub use persistence::Persistence;
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};
 pub use snapshot::{
     CapabilityPersistence, CapabilityState, CapabilityVerification, ModeState, RunnerSnapshot,
 };
 pub use store::{CapabilityStore, SqliteCapabilityStore};
+pub use verifier::{ProbeError, VerificationResult, Verifier};
