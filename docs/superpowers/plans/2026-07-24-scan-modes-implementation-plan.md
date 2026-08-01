@@ -45,6 +45,12 @@ TypeScript, Playwright.
   committed as `97e6683`; async store wrapping remains in `TASK-DASH-0003`.
 - `TASK-DASH-0003`: async `spawn_blocking` SQLite store boundary committed as
   `68f1d69`; connector/lifecycle/discovery work remains.
+- `TASK-DASH-0003` (audit 2026-08-01): executor closed it; audit reopened it
+  as PARTIAL — verifier/persistence/harness/reconnect are sound, but
+  discovery staging, fallback paths, fingerprint/profile context, the
+  telemetry cycle executor, and reconnect policy diverge from spec or are
+  absent. Debug-format protocol tokens fixed in the audit (`protocol_token`).
+  See the task section for the itemized remainder.
 - Out-of-plan feature (`1fb8ee4`): GUI `.obd2rec` recording implemented inside
   the legacy `LiveBackend` (per-snapshot cadence, not per serial poll), plus a
   TUI `record raw` subcommand. The recording module moved into the lib
@@ -516,12 +522,50 @@ constructing a session or opening SQLite.
 
 ## TASK-DASH-0003: Implement lifecycle, discovery, cache, and reconnect
 
-**Status: COMPLETE (2026-08-01).** The runner lifecycle, scripted connector
-harness, verifier/backoff policy, staged persistence boundary, cache hit/miss
-startup, and fresh-session reconnect behavior are implemented in
-`crates/obd2-dash/src/mode_runner`. The focused integration suite covers cache
-miss discovery, cache-hit startup, store fallback, verifier backoff,
-persistence coalescing, and transport reconnect.
+**Status: PARTIAL (audited 2026-08-01; reopened).** Delivered and verified:
+identity-only `acquire_identity` switch; verifier classification (separated
+`NO DATA`, transient stays `Unverified`, per-session retry cap + backoff);
+staged persistence (set-ID install-before-updates, latest-batch coalescing);
+`spawn_blocking` store boundary; scripted connector harness with
+request-boundary gating; fresh-session reconnect (connector re-invoked, old
+session dropped); stable protocol tokens (`protocol_token`, audit fix).
+
+**Remaining before this task can close** (spec references in parentheses):
+
+- [ ] Cache-miss discovery must stage mask-claimed configured PIDs as
+  `Unverified` and classify them through the verifier one request per
+  telemetry cycle — `connect()` currently marks every mask-claimed PID
+  `Supported` immediately and persists before any verification (§9.1).
+- [ ] Seed the verifier from display/tier configuration and the selected
+  profile (profile signals, `ATRV`/adapter row, forced-PID controlled
+  verification), not a hardcoded `Tier::A`/`Gauges` pair (§9.1).
+- [ ] Mask-walk failure must enter `ConservativeFallback` (session-local
+  display-set verification), not fail the whole connect (§9.2).
+- [ ] Missing-VIN path must still run mask + session-local verifier; it
+  currently starts Telemetry with an empty capability set so nothing would
+  ever poll (§9.3).
+- [ ] Real `probe_fingerprint` (deterministic descriptor serialization) and
+  selected-profile `profile_id` — both placeholders; the fingerprint builder
+  from TASK-DASH-0002 was never implemented and `tests/mode_scheduler.rs`
+  does not exist (§8.1; DASH-0002 leftovers).
+- [ ] Monotonic `observation_seq` resumed from the loaded maximum
+  (hardcoded 1 today) and incremental verifier-outcome persistence through
+  `update_outcomes` (§8.1, §8.3).
+- [ ] Telemetry cycle executor: drive the DASH-0002 scheduler against the
+  session, publish `Arc<RunnerSnapshot>` via `watch` after each completed
+  request (§7.3, §10).
+- [ ] Reconnect policy: three short-backoff attempts then capped slow retry,
+  identity/context reacquisition before cache load, same-context verifier
+  resume / different-context discard (§13).
+- [ ] Plan-named tests still missing: `cache_miss_verifies_one_unknown_per_cycle`,
+  `successful_verifier_value_is_published_immediately`,
+  `supported_telemetry_failure_demotes_to_verifier_not_unsupported`,
+  `fallback_never_schedules_full_legacy_pid_set`,
+  `missing_vin_never_calls_store_replace`, `fingerprint_mismatch_runs_discovery`,
+  `reconnect_reacquires_vin_before_cache_load`,
+  `same_context_reconnect_resumes_unfinished_initial_verifier`,
+  `different_context_reconnect_discards_unfinished_verifier`, the Tier-C
+  gating pair, and `runner_snapshot_preserves_generic_and_lly_signal_shapes`.
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`
