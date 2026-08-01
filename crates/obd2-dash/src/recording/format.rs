@@ -190,13 +190,13 @@ impl RecordingFrame {
     /// the v2 one-byte raw payload limit.
     pub fn profile_evidence(
         offset_ms: u32,
-        record: &obd2_dash::profiles::ProfileEvidenceRecord,
+        record: &crate::profiles::ProfileEvidenceRecord,
     ) -> io::Result<Self> {
         let payload = serde_json::to_vec(record).map_err(io::Error::other)?;
         let frame_type = match &record.decoded {
-            Some(obd2_dash::profiles::ProfileDecodedEvidence::Signal { .. }) => FRAME_PROFILE_VALUE,
-            Some(obd2_dash::profiles::ProfileDecodedEvidence::Dtcs { .. }) => FRAME_PROFILE_DTC,
-            Some(obd2_dash::profiles::ProfileDecodedEvidence::ActiveTest { .. }) => {
+            Some(crate::profiles::ProfileDecodedEvidence::Signal { .. }) => FRAME_PROFILE_VALUE,
+            Some(crate::profiles::ProfileDecodedEvidence::Dtcs { .. }) => FRAME_PROFILE_DTC,
+            Some(crate::profiles::ProfileDecodedEvidence::ActiveTest { .. }) => {
                 FRAME_PROFILE_ACTIVE_TEST
             }
             None => FRAME_PROFILE_DISPATCH,
@@ -210,7 +210,7 @@ impl RecordingFrame {
         })
     }
 
-    pub fn decode_profile_evidence(&self) -> Option<obd2_dash::profiles::ProfileEvidenceRecord> {
+    pub fn decode_profile_evidence(&self) -> Option<crate::profiles::ProfileEvidenceRecord> {
         if !matches!(
             self.frame_type,
             FRAME_PROFILE_VALUE
@@ -228,7 +228,7 @@ impl RecordingFrame {
     /// when they exist.
     pub fn active_test_attempt(
         offset_ms: u32,
-        record: &obd2_dash::gm_evidence::GmEvidenceRecord,
+        record: &crate::gm_evidence::GmEvidenceRecord,
     ) -> io::Result<Self> {
         let payload = serde_json::to_vec(record).map_err(io::Error::other)?;
         Ok(Self {
@@ -240,7 +240,7 @@ impl RecordingFrame {
         })
     }
 
-    pub fn decode_active_test_attempt(&self) -> Option<obd2_dash::gm_evidence::GmEvidenceRecord> {
+    pub fn decode_active_test_attempt(&self) -> Option<crate::gm_evidence::GmEvidenceRecord> {
         if self.frame_type != FRAME_ACTIVE_TEST_ATTEMPT {
             return None;
         }
@@ -437,7 +437,7 @@ pub fn read_file_header<R: Read>(reader: &mut R) -> io::Result<(SessionHeader, u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use obd2_dash::profiles::{
+    use crate::profiles::{
         ProfileDecodedEvidence, ProfileEvidenceError, ProfileEvidenceRecord, RouteEvidence,
     };
 

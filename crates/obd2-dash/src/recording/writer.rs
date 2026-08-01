@@ -189,7 +189,7 @@ impl RecordingWriter {
     pub fn write_profile_evidence(
         &mut self,
         offset_ms: u32,
-        record: &obd2_dash::profiles::ProfileEvidenceRecord,
+        record: &crate::profiles::ProfileEvidenceRecord,
     ) -> std::io::Result<bool> {
         if self.version < 3 {
             return Ok(false);
@@ -204,7 +204,7 @@ impl RecordingWriter {
     pub fn write_active_test_attempt(
         &mut self,
         offset_ms: u32,
-        record: &obd2_dash::gm_evidence::GmEvidenceRecord,
+        record: &crate::gm_evidence::GmEvidenceRecord,
     ) -> std::io::Result<bool> {
         if self.version < 3 {
             return Ok(false);
@@ -240,10 +240,10 @@ impl RecordingWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use obd2_dash::gm_active::{
+    use crate::gm_active::{
         active_test_evidence_record, blocked_active_test_result, GmActiveTestCommand,
     };
-    use obd2_dash::profiles::{ProfileDecodedEvidence, ProfileEvidenceRecord, RouteEvidence};
+    use crate::profiles::{ProfileDecodedEvidence, ProfileEvidenceRecord, RouteEvidence};
 
     fn sample_profile_record() -> ProfileEvidenceRecord {
         ProfileEvidenceRecord {

@@ -4,6 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     env, fs,
     path::PathBuf,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use obd2_core::{
@@ -31,6 +32,7 @@ use obd2_dash::profiles::{
     SignalCategory as ProfileSignalCategory, SignalComposition as ProfileSignalComposition,
     SignalDefinition, SignalDisplayDefinition, SignalDisplaySource, VehicleContext,
 };
+use obd2_dash::recording::writer::RecordingWriter;
 use serde::Serialize;
 use tauri::{Manager, State};
 use tokio::{sync::Mutex, time::Duration};
@@ -266,6 +268,8 @@ struct LiveBackend {
     profile_context: Option<GuiProfileContextFingerprint>,
     last_active_test_result: Option<GmActiveTestResult>,
     cycle: u64,
+    recording: Option<RecordingWriter>,
+    recording_started: Option<Instant>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -299,6 +303,8 @@ impl Default for LiveBackend {
             profile_context: None,
             last_active_test_result: None,
             cycle: 0,
+            recording: None,
+            recording_started: None,
         }
     }
 }
@@ -318,6 +324,80 @@ impl LiveBackend {
                 snapshot.statuses = status_values(self.cached_dtc_count.unwrap_or(0), 0, false);
                 snapshot
             }
+        }
+    }
+
+    fn start_recording(&mut self, recordings_dir: PathBuf) -> Result<(), String> {
+        if self.recording.is_some() {
+            return Err("a recording is already active".to_string());
+        }
+        let session_id = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| format!("system clock is before UNIX epoch: {error}"))?
+            .as_millis();
+        let writer = RecordingWriter::new(
+            &recordings_dir,
+            &format!("gui-{session_id}"),
+            (self.vin != "--").then(|| self.vin.clone()),
+            (self.vehicle != "Live OBD-II").then(|| self.vehicle.clone()),
+            u64::from(POLL_MS),
+        )
+        .map_err(|error| format!("failed to start recording: {error}"))?;
+        self.recording = Some(writer);
+        self.recording_started = Some(Instant::now());
+        Ok(())
+    }
+
+    fn stop_recording(&mut self) -> Result<String, String> {
+        let writer = self
+            .recording
+            .take()
+            .ok_or_else(|| "no recording is active".to_string())?;
+        self.recording_started = None;
+        writer
+            .finish()
+            .map(|path| path.display().to_string())
+            .map_err(|error| format!("failed to finalize recording: {error}"))
+    }
+
+    fn record_snapshot(
+        &mut self,
+        snapshot: &DiagnosticSnapshot,
+        rpm: f64,
+        speed_kph: f64,
+        coolant_c: f64,
+        map_kpa: f64,
+        maf_g_s: f64,
+    ) {
+        let (Some(writer), Some(started)) = (self.recording.as_mut(), self.recording_started)
+        else {
+            return;
+        };
+        let offset_ms = started.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+        let frames = [
+            (Pid::ENGINE_RPM.0, rpm),
+            (Pid::VEHICLE_SPEED.0, speed_kph),
+            (Pid::COOLANT_TEMP.0, coolant_c),
+            (Pid::INTAKE_MAP.0, map_kpa),
+            (Pid::MAF.0, maf_g_s),
+        ];
+        let result = writer
+            .write_voltage(offset_ms, f64::from(snapshot.voltage))
+            .and_then(|_| {
+                frames
+                    .iter()
+                    .try_for_each(|(pid, value)| writer.write_pid(offset_ms, *pid, *value, &[]))
+            })
+            .and_then(|_| {
+                snapshot
+                    .dtcs
+                    .iter()
+                    .try_for_each(|dtc| writer.write_dtc(offset_ms, &dtc.code))
+            });
+        if result.is_err() {
+            eprintln!("recording write failed; stopping recording");
+            self.recording = None;
+            self.recording_started = None;
         }
     }
 
@@ -597,7 +677,7 @@ impl LiveBackend {
             cylinders,
         };
 
-        Ok(DiagnosticSnapshot {
+        let snapshot = DiagnosticSnapshot {
             vehicle,
             vin,
             protocol,
@@ -615,7 +695,17 @@ impl LiveBackend {
             signals,
             capability_sections,
             active_tests_v2,
-        })
+        };
+        let _ = session;
+        self.record_snapshot(
+            &snapshot,
+            rpm,
+            speed_kph,
+            coolant_c,
+            map_kpa,
+            f64::from(maf_g_s),
+        );
+        Ok(snapshot)
     }
 
     async fn connect(&mut self) -> Result<(), String> {
@@ -808,6 +898,19 @@ fn recordings_directory(app: tauri::AppHandle) -> Result<String, String> {
         )
     })?;
     Ok(dir.display().to_string())
+}
+
+#[tauri::command]
+async fn start_recording(app: tauri::AppHandle, state: State<'_, GuiState>) -> Result<(), String> {
+    let recordings_dir = PathBuf::from(recordings_directory(app)?);
+    let mut backend = state.backend.lock().await;
+    backend.start_recording(recordings_dir)
+}
+
+#[tauri::command]
+async fn stop_recording(state: State<'_, GuiState>) -> Result<String, String> {
+    let mut backend = state.backend.lock().await;
+    backend.stop_recording()
 }
 
 #[tauri::command]
@@ -3115,6 +3218,8 @@ fn main() {
             diagnostic_snapshot,
             recordings_directory,
             read_recording_file,
+            start_recording,
+            stop_recording,
             request_active_test
         ])
         .run(tauri::generate_context!())
@@ -3675,5 +3780,26 @@ mod tests {
                 "display parity for {key}"
             );
         }
+    }
+
+    #[test]
+    fn recording_lifecycle_writes_live_frames() {
+        let dir = std::env::temp_dir().join(format!(
+            "obd2-gui-recording-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut backend = LiveBackend::default();
+        backend.start_recording(dir.clone()).unwrap();
+        backend.record_snapshot(&empty_snapshot("live test"), 800.0, 0.0, 85.0, 100.0, 32.0);
+        let path = backend.stop_recording().unwrap();
+        let (header, frames) =
+            obd2_dash::recording::reader::read_recording(&PathBuf::from(&path)).unwrap();
+        assert_eq!(header.poll_interval_ms, u64::from(POLL_MS));
+        assert_eq!(frames.len(), 6);
+        assert!(PathBuf::from(&path).is_file());
+        fs::remove_dir_all(dir).unwrap();
     }
 }

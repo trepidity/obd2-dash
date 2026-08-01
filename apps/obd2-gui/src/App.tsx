@@ -602,8 +602,8 @@ function Toolbar({
   replayRunning: boolean;
   replayPaused: boolean;
   replayError: string | null;
-  onStartRecording: () => void;
-  onStopRecording: () => void;
+  onStartRecording: () => void | Promise<void>;
+  onStopRecording: () => void | Promise<void>;
   openRecordingFile: (file: File) => void;
   openRecordingPath: (path: string) => void;
   setReplayRunning: (running: boolean) => void;
@@ -1706,14 +1706,30 @@ function App() {
 
   const sessionMode: SessionMode = replayMode ? "replay" : recording ? "recording" : "live";
 
-  const startRecording = useCallback(() => {
+  const startRecording = useCallback(async () => {
+    if (isTauriRuntime()) {
+      try {
+        await invoke("start_recording");
+      } catch (error) {
+        setReplayError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     setReplayMode(false);
     setReplayPaused(false);
     setReplayRunning(false);
     setRecording(true);
   }, []);
 
-  const stopRecording = useCallback(() => {
+  const stopRecording = useCallback(async () => {
+    if (isTauriRuntime()) {
+      try {
+        await invoke("stop_recording");
+      } catch (error) {
+        setReplayError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     setRecording(false);
   }, []);
 
