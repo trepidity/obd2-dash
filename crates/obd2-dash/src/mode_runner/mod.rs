@@ -35,7 +35,8 @@ pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};
 pub use snapshot::{
-    CapabilityPersistence, CapabilityState, CapabilityVerification, ModeState, RunnerSnapshot,
+    CapabilityPersistence, CapabilityState, CapabilityVerification, DiagnosticDtc,
+    DiagnosticDtcOrigin, ModeState, RunnerSnapshot,
 };
 pub use store::{CapabilityStore, SqliteCapabilityStore};
 pub use verifier::{ProbeError, VerificationResult, Verifier};

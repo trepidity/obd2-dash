@@ -44,6 +44,7 @@ type CapabilityTabId = `cap:${string}`;
 type TabId = UtilityTabId | CapabilityTabId;
 
 type RecordingKind = "structured" | "raw" | "compressed" | "unknown";
+type RunnerCommandReply = "accepted" | "busy" | "not_ready" | "not_running" | "closed";
 
 interface DiagnosticServiceSnapshot {
   key: string;
@@ -1196,8 +1197,30 @@ function DiagnosticServicesPanel({ services }: { services: DiagnosticServiceSnap
   );
 }
 
-function DiagnosticsView({ snapshot }: { snapshot: DiagnosticSnapshot }) {
+function DiagnosticsView({
+  snapshot,
+  commandStatus,
+  onRunDiagnostic,
+  onRescanVehicle,
+  onCancelForeground,
+}: {
+  snapshot: DiagnosticSnapshot;
+  commandStatus: string | null;
+  onRunDiagnostic: () => void;
+  onRescanVehicle: () => void;
+  onCancelForeground: () => void;
+}) {
   const services = capabilitySnapshot(snapshot).diagnostic_services ?? [];
+  const foregroundActive =
+    snapshot.mode.state === "diagnostic" ||
+    (snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan");
+  const canCancel = foregroundActive;
+  const progress =
+    snapshot.mode.state === "diagnostic"
+      ? `Phase ${snapshot.mode.phase}/${snapshot.mode.phase_total}; request ${snapshot.mode.step}/${snapshot.mode.total}`
+      : snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan"
+        ? `Rescan ${snapshot.mode.step}/${snapshot.mode.total}`
+        : null;
   return (
     <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
       <div className="flex flex-col gap-3">
@@ -1208,6 +1231,35 @@ function DiagnosticsView({ snapshot }: { snapshot: DiagnosticSnapshot }) {
             <SettingRow label="DTC count" value={snapshot.dtcs.length.toString()} />
             <SettingRow label="Modules" value={snapshot.modules.length.toString()} />
           </div>
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-800 pt-3">
+            <button
+              className="inline-flex h-8 items-center rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 text-xs font-semibold text-cyan-100 hover:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={foregroundActive}
+              onClick={onRunDiagnostic}
+              type="button"
+            >
+              Run diagnostic
+            </button>
+            <button
+              className="inline-flex h-8 items-center rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={foregroundActive}
+              onClick={onRescanVehicle}
+              type="button"
+            >
+              Rescan vehicle
+            </button>
+            {canCancel ? (
+              <button
+                className="inline-flex h-8 items-center rounded-md border border-amber-500/40 bg-amber-500/10 px-3 text-xs font-semibold text-amber-100 hover:border-amber-400"
+                onClick={onCancelForeground}
+                type="button"
+              >
+                Cancel scan
+              </button>
+            ) : null}
+          </div>
+          {progress ? <div className="mt-3 text-xs text-cyan-200">{progress}</div> : null}
+          {commandStatus ? <div className="mt-3 text-xs text-zinc-400">{commandStatus}</div> : null}
         </Panel>
       </div>
       <div className="flex min-w-0 flex-col gap-3">
@@ -1683,26 +1735,50 @@ function App() {
   const [replayRunning, setReplayRunning] = useState(false);
   const [selectedRecording, setSelectedRecording] = useState<RecordingSummary | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
+  const [commandStatus, setCommandStatus] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<boolean> => {
     if (isTauriRuntime()) {
       try {
         const next = await invoke<DiagnosticSnapshot>("diagnostic_snapshot");
         setSnapshot(next);
+        setLastRefresh(new Date());
+        return true;
       } catch (error) {
         console.error("diagnostic_snapshot failed", error);
+        return false;
       }
     }
-    setLastRefresh(new Date());
+    return false;
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 2_500);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    if (!isTauriRuntime() || replayMode) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await refresh();
+        if (!cancelled) schedule();
+      }, 500);
+    };
+    void (async () => {
+      await refresh();
+      if (!cancelled) schedule();
+    })();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [refresh, replayMode]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const view = activeTab.startsWith("cap:") ? activeTab.slice(4) : activeTab;
+    void invoke("set_active_view", { view }).catch((error) => {
+      console.error("set_active_view failed", error);
+    });
+  }, [activeTab]);
 
   const sessionMode: SessionMode = replayMode ? "replay" : recording ? "recording" : "live";
 
@@ -1731,6 +1807,20 @@ function App() {
       }
     }
     setRecording(false);
+  }, []);
+
+  const submitRunnerCommand = useCallback(async (command: "run_diagnostic" | "rescan_vehicle" | "cancel_foreground") => {
+    if (!isTauriRuntime()) {
+      setCommandStatus("Runner controls are available only in the desktop application.");
+      return;
+    }
+    try {
+      const reply = await invoke<RunnerCommandReply>(command);
+      const label = command.replace(/_/g, " ");
+      setCommandStatus(reply === "accepted" ? `${label}: accepted at the next request boundary.` : `${label}: ${reply.replace(/_/g, " ")}.`);
+    } catch (error) {
+      setCommandStatus(`${command.replace(/_/g, " ")}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }, []);
 
   const loadRecording = useCallback((loader: Promise<RecordingSummary>) => {
@@ -1901,7 +1991,13 @@ function App() {
             ) : activeTab === "active" ? (
               <GenericActiveTestsPanel snapshot={snapshot} />
             ) : activeTab === "diagnostics" ? (
-              <DiagnosticsView snapshot={snapshot} />
+              <DiagnosticsView
+                snapshot={snapshot}
+                commandStatus={commandStatus}
+                onRunDiagnostic={() => void submitRunnerCommand("run_diagnostic")}
+                onRescanVehicle={() => void submitRunnerCommand("rescan_vehicle")}
+                onCancelForeground={() => void submitRunnerCommand("cancel_foreground")}
+              />
             ) : (
               <CapabilityOverviewView snapshot={snapshot} unitMode={unitMode} />
             )}

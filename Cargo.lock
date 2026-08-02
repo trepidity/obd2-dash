@@ -2560,8 +2560,11 @@ dependencies = [
 name = "obd2-gui"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "obd2-core",
  "obd2-dash",
+ "obd2-db",
  "serde",
  "serde_json",
  "tauri",

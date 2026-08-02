@@ -865,6 +865,7 @@ where
                     // Profile DTC services share phase one but own their
                     // routing inside ProfileRuntime.
                     diagnostic.record_profile_dtcs(selected.profile_id().as_str(), result.dtcs);
+                    diagnostic.profile_evidence.extend(result.evidence);
                     self.record_diagnostic_outcome(
                         profile_dtc_outcome_request(),
                         &result.result,

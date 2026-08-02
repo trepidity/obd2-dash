@@ -81,6 +81,9 @@ pub struct DiagnosticResult {
     pub standard_dtcs: Vec<DiagnosticDtc>,
     pub profile_dtcs: Vec<DiagnosticDtc>,
     pub freeze_frames: Vec<DiagnosticFreezeFrame>,
+    /// Dispatch evidence from profile DTC routing.  The GUI recording worker
+    /// consumes these records without re-entering ProfileRuntime or Session.
+    pub profile_evidence: Vec<crate::profiles::ProfileEvidenceRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

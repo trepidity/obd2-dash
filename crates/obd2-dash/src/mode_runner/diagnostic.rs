@@ -18,8 +18,9 @@ use obd2_db::models::CapabilityOutcome;
 
 use crate::gm_active::{GmActiveTestCommand, GmActiveTestResult};
 use crate::profiles::{
-    CapabilityId, CoverageMap, DispatchError, NullEvidenceSink, ProfileEvidenceRecord,
-    ProfileRegistry, ProfileResponse, ProfileRuntime, SelectedProfile, VehicleContext,
+    CapabilityId, CoverageMap, DispatchError, DispatchEvidence, ProfileEvidenceRecord,
+    ProfileEvidenceSink, ProfileRegistry, ProfileResponse, ProfileRuntime, SelectedProfile,
+    VehicleContext,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +148,18 @@ pub struct FreezeFrameWork {
 pub struct ProfileDtcExecution {
     pub result: StepResult,
     pub dtcs: Vec<crate::profiles::DecodedDtc>,
+    pub evidence: Vec<ProfileEvidenceRecord>,
+}
+
+struct CollectingProfileEvidence {
+    records: Vec<ProfileEvidenceRecord>,
+}
+
+impl ProfileEvidenceSink for CollectingProfileEvidence {
+    fn record(&mut self, evidence: &DispatchEvidence<'_>) {
+        self.records
+            .push(ProfileEvidenceRecord::from_dispatch(evidence, None, false));
+    }
 }
 
 const DEFAULT_FREEZE_FRAME_PIDS: [Pid; 8] = [
@@ -640,7 +653,9 @@ pub async fn execute_profile_dtc_results<A: Adapter>(
         if !matches!(planned.capability, CapabilityId::DtcService(_)) {
             continue;
         }
-        let mut evidence = NullEvidenceSink;
+        let mut evidence = CollectingProfileEvidence {
+            records: Vec::new(),
+        };
         let result = match runtime
             .execute_request(
                 session,
@@ -655,6 +670,7 @@ pub async fn execute_profile_dtc_results<A: Adapter>(
             Ok(ProfileResponse::Dtcs(dtcs)) => Ok(ProfileDtcExecution {
                 result: StepResult::Data(Vec::new()),
                 dtcs,
+                evidence: Vec::new(),
             }),
             Ok(ProfileResponse::Signal(_)) => Ok(ProfileDtcExecution {
                 result: StepResult::StepError {
@@ -662,11 +678,13 @@ pub async fn execute_profile_dtc_results<A: Adapter>(
                     detail: "profile DTC capability returned a signal".into(),
                 },
                 dtcs: Vec::new(),
+                evidence: Vec::new(),
             }),
             Err(DispatchError::Transport(error)) => {
                 map_obd2_result(Err(error)).map(|result| ProfileDtcExecution {
                     result,
                     dtcs: Vec::new(),
+                    evidence: Vec::new(),
                 })
             }
             Err(error) => Ok(ProfileDtcExecution {
@@ -675,9 +693,14 @@ pub async fn execute_profile_dtc_results<A: Adapter>(
                     detail: format!("profile DTC dispatch failed: {error:?}"),
                 },
                 dtcs: Vec::new(),
+                evidence: Vec::new(),
             }),
         };
-        results.push(result);
+        let records = evidence.records;
+        results.push(result.map(|mut execution| {
+            execution.evidence = records;
+            execution
+        }));
     }
     results
 }

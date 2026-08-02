@@ -147,7 +147,22 @@ export interface ActiveTestSnapshotV2 {
   last_result: ActiveTestResult | null;
 }
 
+export type RunnerMode =
+  | { state: "connecting" | "telemetry" | "shutting_down" }
+  | { state: "discovering"; origin: "initial" | "rescan"; step: number; total: number }
+  | { state: "diagnostic"; phase: number; phase_total: number; step: number; total: number }
+  | { state: "reconnecting"; attempt: number };
+
+export interface CapabilityRuntimeState {
+  persistence: "cached" | "pending" | "session_only_no_vin" | "session_only_store_error";
+  verification: "ready" | "verifying" | "degraded" | "conservative_fallback";
+  remaining: number | null;
+}
+
 export interface DiagnosticSnapshot {
+  mode: RunnerMode;
+  capability_state: CapabilityRuntimeState;
+  foreground_result: unknown | null;
   vehicle: string;
   vin: string;
   protocol: string;
