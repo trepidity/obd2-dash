@@ -1200,12 +1200,14 @@ function DiagnosticServicesPanel({ services }: { services: DiagnosticServiceSnap
 function DiagnosticsView({
   snapshot,
   commandStatus,
+  foregroundPending,
   onRunDiagnostic,
   onRescanVehicle,
   onCancelForeground,
 }: {
   snapshot: DiagnosticSnapshot;
   commandStatus: string | null;
+  foregroundPending: boolean;
   onRunDiagnostic: () => void;
   onRescanVehicle: () => void;
   onCancelForeground: () => void;
@@ -1213,7 +1215,8 @@ function DiagnosticsView({
   const services = capabilitySnapshot(snapshot).diagnostic_services ?? [];
   const foregroundActive =
     snapshot.mode.state === "diagnostic" ||
-    (snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan");
+    (snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan") ||
+    foregroundPending;
   const canCancel = foregroundActive;
   const progress =
     snapshot.mode.state === "diagnostic"
@@ -1736,6 +1739,9 @@ function App() {
   const [selectedRecording, setSelectedRecording] = useState<RecordingSummary | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
   const [commandStatus, setCommandStatus] = useState<string | null>(null);
+  const [foregroundPending, setForegroundPending] = useState(false);
+  const foregroundObserved = useRef(false);
+  const foregroundCommandInFlight = useRef(false);
 
   const refresh = useCallback(async (): Promise<boolean> => {
     if (isTauriRuntime()) {
@@ -1762,10 +1768,14 @@ function App() {
         if (!cancelled) schedule();
       }, 500);
     };
-    void (async () => {
+    // Start through a zero-delay timer rather than an immediate promise.
+    // React StrictMode cleans up its first development-only effect before
+    // this timer can issue IPC, so it cannot create a second in-flight
+    // snapshot request while still retaining immediate live startup.
+    timer = window.setTimeout(async () => {
       await refresh();
       if (!cancelled) schedule();
-    })();
+    }, 0);
     return () => {
       cancelled = true;
       if (timer !== undefined) window.clearTimeout(timer);
@@ -1779,6 +1789,21 @@ function App() {
       console.error("set_active_view failed", error);
     });
   }, [activeTab]);
+
+  useEffect(() => {
+    const foreground =
+      snapshot.mode.state === "diagnostic" ||
+      (snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan");
+    if (foreground) {
+      foregroundObserved.current = true;
+      foregroundCommandInFlight.current = false;
+      setForegroundPending(false);
+    } else if (foregroundObserved.current) {
+      foregroundObserved.current = false;
+      foregroundCommandInFlight.current = false;
+      setForegroundPending(false);
+    }
+  }, [snapshot.mode]);
 
   const sessionMode: SessionMode = replayMode ? "replay" : recording ? "recording" : "live";
 
@@ -1810,15 +1835,28 @@ function App() {
   }, []);
 
   const submitRunnerCommand = useCallback(async (command: "run_diagnostic" | "rescan_vehicle" | "cancel_foreground") => {
+    const startsForeground = command !== "cancel_foreground";
+    if (startsForeground && foregroundCommandInFlight.current) return;
+    if (startsForeground) foregroundCommandInFlight.current = true;
     if (!isTauriRuntime()) {
+      if (startsForeground) foregroundCommandInFlight.current = false;
       setCommandStatus("Runner controls are available only in the desktop application.");
       return;
     }
     try {
       const reply = await invoke<RunnerCommandReply>(command);
       const label = command.replace(/_/g, " ");
-      setCommandStatus(reply === "accepted" ? `${label}: accepted at the next request boundary.` : `${label}: ${reply.replace(/_/g, " ")}.`);
+      if (reply === "accepted") {
+        if (command !== "cancel_foreground") setForegroundPending(true);
+        setCommandStatus(`${label}: accepted at the next request boundary.`);
+      } else {
+        foregroundCommandInFlight.current = false;
+        setForegroundPending(false);
+        setCommandStatus(`${label}: ${reply.replace(/_/g, " ")}.`);
+      }
     } catch (error) {
+      foregroundCommandInFlight.current = false;
+      setForegroundPending(false);
       setCommandStatus(`${command.replace(/_/g, " ")}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }, []);
@@ -1916,6 +1954,12 @@ function App() {
 
     const utilityTabs: CategoryTab[] = [
       {
+        id: "diagnostics",
+        label: "Diagnostics",
+        summary: dtcAlertSummary,
+        icon: <ShieldAlert size={14} />,
+      },
+      {
         id: "raw",
         label: "Raw",
         summary: `${snapshot.poll_ms} ms snapshot`,
@@ -1994,6 +2038,7 @@ function App() {
               <DiagnosticsView
                 snapshot={snapshot}
                 commandStatus={commandStatus}
+                foregroundPending={foregroundPending}
                 onRunDiagnostic={() => void submitRunnerCommand("run_diagnostic")}
                 onRescanVehicle={() => void submitRunnerCommand("rescan_vehicle")}
                 onCancelForeground={() => void submitRunnerCommand("cancel_foreground")}

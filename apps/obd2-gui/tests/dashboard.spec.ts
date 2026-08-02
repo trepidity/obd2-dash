@@ -26,6 +26,69 @@ async function openRecordingViaSessionMenu(page: Page, filePath: string) {
   await (await fileChooser).setFiles(filePath);
 }
 
+const runnerSnapshot = {
+  mode: { state: "telemetry" },
+  capability_state: { persistence: "cached", verification: "ready", remaining: null },
+  foreground_result: null,
+  vehicle: "Mock runner",
+  vin: "TESTRUNNER0000001",
+  protocol: "CAN 11-bit",
+  connection: "runner telemetry",
+  voltage: 13.8,
+  rpm: 700,
+  speed_mph: 0,
+  poll_ms: 250,
+  units: "US",
+  statuses: [],
+  alerts: [],
+  dtcs: [],
+  modules: [],
+  source_confidence: [],
+  signals: [],
+  capability_sections: [],
+  active_tests_v2: [],
+};
+
+async function installTauriMock(page: Page, delayedSnapshots = false) {
+  await page.addInitScript(
+    ({ snapshot, delayed }) => {
+      const state = {
+        snapshot,
+        delayed,
+        calls: [] as Array<{ command: string; args: Record<string, unknown> }>,
+        resolvers: [] as Array<(value: unknown) => void>,
+      };
+      Object.assign(window, { __obdGuiMock: state });
+      Object.assign(window, {
+        __TAURI_INTERNALS__: {
+          invoke: async (command: string, args: Record<string, unknown> = {}) => {
+            state.calls.push({ command, args });
+            if (command === "diagnostic_snapshot") {
+              if (state.delayed) {
+                return new Promise((resolve) => state.resolvers.push(resolve));
+              }
+              return state.snapshot;
+            }
+            if (command === "run_diagnostic" || command === "rescan_vehicle" || command === "cancel_foreground") {
+              return "accepted";
+            }
+            if (command === "set_active_view") return undefined;
+            return undefined;
+          },
+        },
+      });
+    },
+    { snapshot: runnerSnapshot, delayed: delayedSnapshots },
+  );
+}
+
+async function ipcCalls(page: Page, command: string) {
+  return page.evaluate((name) => {
+    const state = (window as Window & { __obdGuiMock: { calls: Array<{ command: string }> } }).__obdGuiMock;
+    return state.calls.filter((call) => call.command === name).length;
+  }, command);
+}
+
 test("dashboard renders category rail and utility panels", async ({ page }) => {
   const consoleIssues: string[] = [];
   page.on("console", (message) => {
@@ -307,4 +370,78 @@ test("transmission-capable fixture exposes transmission without diesel controls"
   await expect(transmissionSection.getByText("184.6 F")).toBeVisible();
 
   expect(consoleIssues).toEqual([]);
+});
+
+test("Tauri polling runs at 500 ms without overlapping invokes and keeps the latest view", async ({ page }) => {
+  await installTauriMock(page);
+  await page.goto("http://127.0.0.1:5173/");
+
+  await page.waitForTimeout(1_600);
+  const snapshots = await ipcCalls(page, "diagnostic_snapshot");
+  // One immediate read plus roughly three completion-scheduled reads.  Keep
+  // this tolerance for loaded CI workers without accepting the old 2.5 s
+  // cadence or a fast overlapping interval.
+  expect(snapshots).toBeGreaterThanOrEqual(3);
+  expect(snapshots).toBeLessThanOrEqual(5);
+
+  await page.getByRole("tab", { name: /Raw/ }).click();
+  await page.getByRole("tab", { name: /Settings/ }).click();
+  await expect.poll(async () => page.evaluate(() => {
+    const state = (window as Window & { __obdGuiMock: { calls: Array<{ command: string; args: { view?: string } }> } }).__obdGuiMock;
+    return state.calls.filter((call) => call.command === "set_active_view").at(-1)?.args.view;
+  })).toBe("settings");
+});
+
+test("a delayed snapshot never overlaps and foreground controls issue one command", async ({ page }) => {
+  await installTauriMock(page, true);
+  await page.goto("http://127.0.0.1:5173/");
+
+  await page.waitForTimeout(1_200);
+  expect(await ipcCalls(page, "diagnostic_snapshot")).toBe(1);
+
+  await page.evaluate(() => {
+    const state = (window as Window & { __obdGuiMock: { snapshot: unknown; delayed: boolean; resolvers: Array<(value: unknown) => void> } }).__obdGuiMock;
+    state.delayed = false;
+    state.resolvers.shift()?.(state.snapshot);
+  });
+  await expect.poll(() => ipcCalls(page, "diagnostic_snapshot")).toBeGreaterThanOrEqual(2);
+
+  await page.getByRole("tab", { name: /Diagnostics/ }).click();
+  const run = page.getByRole("button", { name: "Run diagnostic" });
+  // Dispatch the two pointer-equivalent activations in one task.  A real
+  // second click may see the now-disabled DOM button and wait for Playwright's
+  // actionability timeout instead of exercising the command coalescer.
+  await run.evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+  await expect.poll(() => ipcCalls(page, "run_diagnostic")).toBe(1);
+  await expect(run).toBeDisabled();
+
+  await page.evaluate(() => {
+    const state = (window as Window & { __obdGuiMock: { snapshot: { mode: unknown } } }).__obdGuiMock;
+    state.snapshot.mode = { state: "diagnostic", phase: 1, phase_total: 5, step: 1, total: 9 };
+  });
+  await expect(page.getByRole("button", { name: "Cancel scan" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel scan" }).click();
+  await expect.poll(() => ipcCalls(page, "cancel_foreground")).toBe(1);
+});
+
+test("entering replay stops live snapshot polling and exiting restarts it", async ({ page }) => {
+  await installTauriMock(page);
+  await page.goto("http://127.0.0.1:5173/");
+  await expect.poll(() => ipcCalls(page, "diagnostic_snapshot")).toBeGreaterThanOrEqual(1);
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "runner-replay.obd2raw",
+    mimeType: "text/plain",
+    buffer: Buffer.from("# obd2-raw v1\n0.000 N command=0100\n0.010 R 4100\n"),
+  });
+  await expect(sessionMenuButton(page)).toContainText("Session: Replay");
+  const beforePause = await ipcCalls(page, "diagnostic_snapshot");
+  await page.waitForTimeout(700);
+  expect(await ipcCalls(page, "diagnostic_snapshot")).toBe(beforePause);
+
+  await clickSessionMenuItem(page, /Exit replay/);
+  await expect.poll(() => ipcCalls(page, "diagnostic_snapshot")).toBeGreaterThan(beforePause);
 });
