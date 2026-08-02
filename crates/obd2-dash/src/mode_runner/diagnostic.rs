@@ -1,4 +1,5 @@
 use super::snapshot::ModeState;
+use async_trait::async_trait;
 use obd2_core::vehicle::Protocol;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,6 +81,46 @@ pub enum RequestTarget {
 pub enum RequestExpansion {
     Static,
     PerDtc,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiagnosticExecution {
+    pub completed: usize,
+    pub cancelled: bool,
+}
+
+#[async_trait]
+pub trait DiagnosticTransport {
+    async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<Vec<u8>>;
+}
+
+/// Execute requests at request boundaries. Cancellation is checked before
+/// starting each request and after the previous request has fully completed;
+/// an in-flight transport future is never dropped by this loop.
+pub async fn execute_requests<T, F>(
+    transport: &mut T,
+    requests: &[DiagnosticRequest],
+    mut cancelled: F,
+) -> anyhow::Result<DiagnosticExecution>
+where
+    T: DiagnosticTransport + Send,
+    F: FnMut() -> bool,
+{
+    let mut completed = 0;
+    for request in requests {
+        if cancelled() {
+            return Ok(DiagnosticExecution {
+                completed,
+                cancelled: true,
+            });
+        }
+        transport.request(*request).await?;
+        completed += 1;
+    }
+    Ok(DiagnosticExecution {
+        completed,
+        cancelled: false,
+    })
 }
 
 /// Service eligibility inputs for one diagnostic pass. Spec §11: readiness
@@ -441,5 +482,33 @@ mod tests {
         assert!(requests
             .iter()
             .all(|request| request.target == RequestTarget::Broadcast));
+    }
+
+    struct RecordingTransport {
+        seen: Vec<DiagnosticRequest>,
+    }
+
+    #[async_trait]
+    impl DiagnosticTransport for RecordingTransport {
+        async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<Vec<u8>> {
+            self.seen.push(request);
+            Ok(Vec::new())
+        }
+    }
+
+    #[tokio::test]
+    async fn executor_observes_cancel_only_between_requests() {
+        let requests = expand_dtc_requests(&["ecm".into()]);
+        let mut transport = RecordingTransport { seen: Vec::new() };
+        let mut checks = 0;
+        let result = execute_requests(&mut transport, &requests, || {
+            checks += 1;
+            checks > 2
+        })
+        .await
+        .unwrap();
+        assert!(result.cancelled);
+        assert_eq!(result.completed, 2);
+        assert_eq!(transport.seen.len(), 2);
     }
 }
