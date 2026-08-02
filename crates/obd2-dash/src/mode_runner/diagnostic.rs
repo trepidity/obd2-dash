@@ -28,7 +28,10 @@ impl DiagnosticPhase {
 }
 
 /// Mode-05 is intentionally fail-closed. No profile/display heuristic may
-/// make this request eligible; only explicit gasoline permits it.
+/// make this request eligible; only explicit gasoline permits it, and only
+/// on a positively identified legacy (non-CAN) protocol — `Auto` means the
+/// protocol is unresolved, and `Protocol` is non-exhaustive, so both deny by
+/// default rather than slipping past a CAN deny-list.
 pub fn mode05_allowed(
     fuel: FuelClass,
     protocol: Protocol,
@@ -36,12 +39,9 @@ pub fn mode05_allowed(
     is_lly_profile: bool,
 ) -> bool {
     matches!(fuel, FuelClass::Gasoline)
-        && !matches!(
+        && matches!(
             protocol,
-            Protocol::Can11Bit500
-                | Protocol::Can11Bit250
-                | Protocol::Can29Bit500
-                | Protocol::Can29Bit250
+            Protocol::J1850Vpw | Protocol::J1850Pwm | Protocol::Iso9141(_) | Protocol::Kwp2000(_)
         )
         && !cached_unsupported
         && !is_lly_profile
@@ -95,5 +95,26 @@ mod tests {
             false,
             true
         ));
+    }
+
+    #[test]
+    fn mode05_denies_unresolved_and_unknown_protocols() {
+        // Auto = protocol not yet identified: fail closed.
+        assert!(!mode05_allowed(
+            FuelClass::Gasoline,
+            Protocol::Auto,
+            false,
+            false
+        ));
+        // The gate is a positive allow-list, so every non-legacy variant —
+        // including ones core adds later — denies by default.
+        for legacy in [
+            Protocol::J1850Vpw,
+            Protocol::J1850Pwm,
+            Protocol::Iso9141(KLineInit::FastInit),
+            Protocol::Kwp2000(KLineInit::SlowInit),
+        ] {
+            assert!(mode05_allowed(FuelClass::Gasoline, legacy, false, false));
+        }
     }
 }
