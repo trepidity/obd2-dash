@@ -86,39 +86,77 @@ pub enum RequestExpansion {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiagnosticExecution {
     pub completed: usize,
+    /// Non-transport step failures recorded while the bundle continued.
+    pub step_errors: usize,
     pub cancelled: bool,
+}
+
+/// Result of one diagnostic request. Spec §11: a step failure (NO DATA,
+/// negative response, decode error) is recorded and the bundle CONTINUES —
+/// only transport loss aborts, via the outer `Err`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StepResult {
+    Data(Vec<u8>),
+    StepError(String),
+}
+
+/// A bundle aborted by transport loss. Partial progress is preserved so the
+/// interrupted result can be reported (spec §13: "interrupted", not lost).
+#[derive(Debug)]
+pub struct DiagnosticAborted {
+    pub completed: usize,
+    pub step_errors: usize,
+    pub error: anyhow::Error,
 }
 
 #[async_trait]
 pub trait DiagnosticTransport {
-    async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<Vec<u8>>;
+    /// `Ok(StepResult)` for everything the bundle records and moves past,
+    /// including per-step failures. `Err` is reserved for transport loss.
+    async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<StepResult>;
 }
 
 /// Execute requests at request boundaries. Cancellation is checked before
 /// starting each request and after the previous request has fully completed;
-/// an in-flight transport future is never dropped by this loop.
+/// an in-flight transport future is never dropped by this loop. Step errors
+/// continue the bundle; only transport errors abort it.
 pub async fn execute_requests<T, F>(
     transport: &mut T,
     requests: &[DiagnosticRequest],
     mut cancelled: F,
-) -> anyhow::Result<DiagnosticExecution>
+) -> Result<DiagnosticExecution, DiagnosticAborted>
 where
     T: DiagnosticTransport + Send,
     F: FnMut() -> bool,
 {
     let mut completed = 0;
+    let mut step_errors = 0;
     for request in requests {
         if cancelled() {
             return Ok(DiagnosticExecution {
                 completed,
+                step_errors,
                 cancelled: true,
             });
         }
-        transport.request(*request).await?;
-        completed += 1;
+        match transport.request(*request).await {
+            Ok(StepResult::Data(_)) => completed += 1,
+            Ok(StepResult::StepError(_)) => {
+                completed += 1;
+                step_errors += 1;
+            }
+            Err(error) => {
+                return Err(DiagnosticAborted {
+                    completed,
+                    step_errors,
+                    error,
+                });
+            }
+        }
     }
     Ok(DiagnosticExecution {
         completed,
+        step_errors,
         cancelled: false,
     })
 }
@@ -486,20 +524,35 @@ mod tests {
 
     struct RecordingTransport {
         seen: Vec<DiagnosticRequest>,
+        /// (request index → scripted result) for non-default responses.
+        script: Vec<(usize, anyhow::Result<StepResult>)>,
+    }
+
+    impl RecordingTransport {
+        fn recording() -> Self {
+            Self {
+                seen: Vec::new(),
+                script: Vec::new(),
+            }
+        }
     }
 
     #[async_trait]
     impl DiagnosticTransport for RecordingTransport {
-        async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<Vec<u8>> {
+        async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<StepResult> {
+            let index = self.seen.len();
             self.seen.push(request);
-            Ok(Vec::new())
+            if let Some(position) = self.script.iter().position(|(at, _)| *at == index) {
+                return self.script.remove(position).1;
+            }
+            Ok(StepResult::Data(Vec::new()))
         }
     }
 
     #[tokio::test]
     async fn executor_observes_cancel_only_between_requests() {
         let requests = expand_dtc_requests(&["ecm".into()]);
-        let mut transport = RecordingTransport { seen: Vec::new() };
+        let mut transport = RecordingTransport::recording();
         let mut checks = 0;
         let result = execute_requests(&mut transport, &requests, || {
             checks += 1;
@@ -510,5 +563,40 @@ mod tests {
         assert!(result.cancelled);
         assert_eq!(result.completed, 2);
         assert_eq!(transport.seen.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn step_errors_continue_the_bundle() {
+        let requests = expand_dtc_requests(&["ecm".into()]);
+        let mut transport = RecordingTransport::recording();
+        transport
+            .script
+            .push((1, Ok(StepResult::StepError("NO DATA".into()))));
+        let result = execute_requests(&mut transport, &requests, || false)
+            .await
+            .unwrap();
+        assert!(!result.cancelled);
+        assert_eq!(result.completed, requests.len());
+        assert_eq!(result.step_errors, 1);
+        assert_eq!(transport.seen.len(), requests.len());
+    }
+
+    #[tokio::test]
+    async fn transport_loss_aborts_with_partial_progress() {
+        let requests = expand_dtc_requests(&["ecm".into()]);
+        let mut transport = RecordingTransport::recording();
+        transport
+            .script
+            .push((0, Ok(StepResult::StepError("NO DATA".into()))));
+        transport
+            .script
+            .push((2, Err(anyhow::anyhow!("serial gone"))));
+        let aborted = execute_requests(&mut transport, &requests, || false)
+            .await
+            .unwrap_err();
+        assert_eq!(aborted.completed, 2);
+        assert_eq!(aborted.step_errors, 1);
+        // Nothing past the transport loss was attempted.
+        assert_eq!(transport.seen.len(), 3);
     }
 }
