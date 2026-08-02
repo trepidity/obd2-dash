@@ -1,5 +1,6 @@
 use super::snapshot::ModeState;
 use async_trait::async_trait;
+use obd2_core::error::Obd2Error;
 use obd2_core::vehicle::Protocol;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -114,6 +115,14 @@ pub trait DiagnosticTransport {
     /// `Ok(StepResult)` for everything the bundle records and moves past,
     /// including per-step failures. `Err` is reserved for transport loss.
     async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<StepResult>;
+}
+
+pub fn map_obd2_result(result: Result<Vec<u8>, Obd2Error>) -> anyhow::Result<StepResult> {
+    match result {
+        Ok(bytes) => Ok(StepResult::Data(bytes)),
+        Err(Obd2Error::Transport(error)) => Err(anyhow::anyhow!(error.to_string())),
+        Err(error) => Ok(StepResult::StepError(error.to_string())),
+    }
 }
 
 /// Execute requests at request boundaries. Cancellation is checked before
@@ -598,5 +607,13 @@ mod tests {
         assert_eq!(aborted.step_errors, 1);
         // Nothing past the transport loss was attempted.
         assert_eq!(transport.seen.len(), 3);
+    }
+
+    #[test]
+    fn core_mapping_keeps_protocol_failures_nonfatal() {
+        assert!(matches!(
+            map_obd2_result(Err(Obd2Error::NoData)),
+            Ok(StepResult::StepError(_))
+        ));
     }
 }
