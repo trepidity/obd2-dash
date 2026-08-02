@@ -92,32 +92,28 @@ pub fn request_plan(
     protocol: Protocol,
     gates: ServiceGates,
 ) -> Vec<DiagnosticRequest> {
-    let mut requests = vec![
-        DiagnosticRequest {
-            phase: DiagnosticPhase::Dtc,
-            service: 0x03,
-            target: RequestTarget::Broadcast,
-            expansion: RequestExpansion::Static,
-        },
-        DiagnosticRequest {
-            phase: DiagnosticPhase::Dtc,
-            service: 0x07,
-            target: RequestTarget::DiscoveredModules,
-            expansion: RequestExpansion::Static,
-        },
-        DiagnosticRequest {
-            phase: DiagnosticPhase::Dtc,
-            service: 0x0A,
-            target: RequestTarget::DiscoveredModules,
-            expansion: RequestExpansion::Static,
-        },
-        DiagnosticRequest {
-            phase: DiagnosticPhase::FreezeFrames,
-            service: 0x02,
-            target: RequestTarget::Broadcast,
-            expansion: RequestExpansion::PerDtc,
-        },
-    ];
+    // Spec §11 phase 1: every DTC service runs broadcast first, then per
+    // discovered module — the full 3×2 matrix, matching the TUI's
+    // scan_standard_dtcs. Collapsing either axis loses codes: some modules
+    // only answer addressed stored-DTC reads, and pending/permanent have
+    // broadcast responders too.
+    let mut requests = Vec::new();
+    for target in [RequestTarget::Broadcast, RequestTarget::DiscoveredModules] {
+        for service in [0x03u8, 0x07, 0x0A] {
+            requests.push(DiagnosticRequest {
+                phase: DiagnosticPhase::Dtc,
+                service,
+                target,
+                expansion: RequestExpansion::Static,
+            });
+        }
+    }
+    requests.push(DiagnosticRequest {
+        phase: DiagnosticPhase::FreezeFrames,
+        service: 0x02,
+        target: RequestTarget::Broadcast,
+        expansion: RequestExpansion::PerDtc,
+    });
     if !gates.cached_readiness_unsupported {
         requests.push(DiagnosticRequest {
             phase: DiagnosticPhase::Readiness,
@@ -321,10 +317,25 @@ mod tests {
             Protocol::Iso9141(KLineInit::SlowInit),
             ServiceGates::default(),
         );
-        assert_eq!(plan[0].service, 0x03);
-        assert_eq!(plan[1].service, 0x07);
-        assert_eq!(plan[2].service, 0x0A);
-        assert_eq!(plan[3].service, 0x02);
+        // Full 3x2 DTC matrix: broadcast S/P/P, then per-module S/P/P.
+        let dtc: Vec<(u8, RequestTarget)> = plan
+            .iter()
+            .filter(|request| request.phase == DiagnosticPhase::Dtc)
+            .map(|request| (request.service, request.target))
+            .collect();
+        assert_eq!(
+            dtc,
+            vec![
+                (0x03, RequestTarget::Broadcast),
+                (0x07, RequestTarget::Broadcast),
+                (0x0A, RequestTarget::Broadcast),
+                (0x03, RequestTarget::DiscoveredModules),
+                (0x07, RequestTarget::DiscoveredModules),
+                (0x0A, RequestTarget::DiscoveredModules),
+            ],
+        );
+        assert_eq!(plan[6].service, 0x02);
+        assert_eq!(plan[6].expansion, RequestExpansion::PerDtc);
         assert!(plan.iter().any(|request| request.service == 0x05));
         assert!(plan.iter().all(|request| request.service != 0x06));
         let diesel = request_plan(
