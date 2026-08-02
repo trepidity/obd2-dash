@@ -12,10 +12,18 @@ atomic per-vehicle capability persistence.
 
 **Traceability:**
 
-**Slice 5:** added the ordered diagnostic request plan. DTC services, Mode-02
-freeze frames, readiness, conditional Mode-05, and module refresh are explicit
-phase-owned requests; Mode-06 is absent from the plan and Mode-05 remains
-fuel/protocol gated. Session I/O execution remains the next step.
+**Slice 5 (`f5be016`, audited + fixed in `787d4be`):** ordered diagnostic
+request plan: DTC services, Mode-02 freeze frames, readiness, conditional
+Mode-05, module refresh; Mode-06 absent, Mode-05 fuel/protocol gated. Audit
+fix: readiness now skips when its cached service row is `unsupported`
+(spec §11; unverified is still attempted) — gate inputs are a named
+`ServiceGates` struct. Wire-execution notes for the next slice: the plan is
+service-level only — the DTC phase must fan out broadcast-then-per-module
+including the selected-profile DTC path and GM Class-2 backoff; the
+freeze-frame phase expands to one substep per code found (sub-total known
+only after the DTC phase); readiness/module-refresh sharing `service: 0x01`
+means the execution contract needs a richer request model than a bare
+service byte.
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
