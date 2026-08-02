@@ -67,7 +67,13 @@ pub struct DiagnosticRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestTarget {
     Broadcast,
+    /// Summary marker in [`request_plan`]: "fan out per discovered module".
+    /// Wire execution replaces it via [`expand_dtc_requests`], which emits
+    /// [`RequestTarget::Module`] entries instead.
     DiscoveredModules,
+    /// One concrete module, as an index into the caller's module slice —
+    /// expansion would be unusable for I/O without the binding.
+    Module(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +152,12 @@ pub fn request_plan(
 
 /// Expand the DTC summary into the wire order used by the legacy scanner:
 /// broadcast stored/pending/permanent first, then the same trio module-major.
+/// This REPLACES the six DTC summary rows of [`request_plan`] — executing
+/// both would double-scan broadcast.
+///
+/// Module order is made deterministic here (sorted by module id, matching
+/// the TUI's `dtc_scan_modules`) regardless of input order; each emitted
+/// [`RequestTarget::Module`] index refers to the caller's ORIGINAL slice.
 pub fn expand_dtc_requests(modules: &[String]) -> Vec<DiagnosticRequest> {
     let services = [0x03, 0x07, 0x0A];
     let mut requests = services
@@ -157,11 +169,13 @@ pub fn expand_dtc_requests(modules: &[String]) -> Vec<DiagnosticRequest> {
             expansion: RequestExpansion::Static,
         })
         .collect::<Vec<_>>();
-    for _module in modules {
+    let mut order: Vec<usize> = (0..modules.len()).collect();
+    order.sort_by(|&left, &right| modules[left].cmp(&modules[right]));
+    for module_index in order {
         requests.extend(services.into_iter().map(|service| DiagnosticRequest {
             phase: DiagnosticPhase::Dtc,
             service,
-            target: RequestTarget::DiscoveredModules,
+            target: RequestTarget::Module(module_index),
             expansion: RequestExpansion::Static,
         }));
     }
@@ -397,7 +411,9 @@ mod tests {
 
     #[test]
     fn dtc_expansion_is_broadcast_then_module_major() {
-        let requests = expand_dtc_requests(&["ecm".into(), "tcm".into()]);
+        // Deliberately unsorted input: order is normalized by module id, and
+        // every module-major triple carries a concrete module binding.
+        let requests = expand_dtc_requests(&["tcm".into(), "ecm".into()]);
         let sequence: Vec<(u8, RequestTarget)> = requests
             .iter()
             .map(|request| (request.service, request.target))
@@ -408,13 +424,22 @@ mod tests {
                 (0x03, RequestTarget::Broadcast),
                 (0x07, RequestTarget::Broadcast),
                 (0x0A, RequestTarget::Broadcast),
-                (0x03, RequestTarget::DiscoveredModules),
-                (0x07, RequestTarget::DiscoveredModules),
-                (0x0A, RequestTarget::DiscoveredModules),
-                (0x03, RequestTarget::DiscoveredModules),
-                (0x07, RequestTarget::DiscoveredModules),
-                (0x0A, RequestTarget::DiscoveredModules),
+                (0x03, RequestTarget::Module(1)), // "ecm" sorts first
+                (0x07, RequestTarget::Module(1)),
+                (0x0A, RequestTarget::Module(1)),
+                (0x03, RequestTarget::Module(0)), // then "tcm"
+                (0x07, RequestTarget::Module(0)),
+                (0x0A, RequestTarget::Module(0)),
             ]
         );
+    }
+
+    #[test]
+    fn dtc_expansion_without_modules_is_broadcast_only() {
+        let requests = expand_dtc_requests(&[]);
+        assert_eq!(requests.len(), 3);
+        assert!(requests
+            .iter()
+            .all(|request| request.target == RequestTarget::Broadcast));
     }
 }
