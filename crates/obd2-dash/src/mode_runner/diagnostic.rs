@@ -1,8 +1,18 @@
 use super::snapshot::ModeState;
 use async_trait::async_trait;
+use obd2_core::adapter::Adapter;
 use obd2_core::error::Obd2Error;
+use obd2_core::protocol::pid::Pid;
+use obd2_core::protocol::service::Target;
+use obd2_core::session::Session;
+use obd2_core::vehicle::ModuleId;
 use obd2_core::vehicle::Protocol;
 use obd2_db::models::CapabilityOutcome;
+
+use crate::profiles::{
+    CapabilityId, CoverageMap, DispatchError, NullEvidenceSink, ProfileRegistry, ProfileResponse,
+    ProfileRuntime, SelectedProfile, VehicleContext,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FuelClass {
@@ -65,6 +75,18 @@ pub struct DiagnosticRequest {
     pub service: u8,
     pub target: RequestTarget,
     pub expansion: RequestExpansion,
+}
+
+/// Capability-record marker for a selected-profile DTC result.  Keeping the
+/// service identity here prevents callers from reconstructing a Mode-03
+/// request outside the diagnostic gate module.
+pub fn profile_dtc_outcome_request() -> DiagnosticRequest {
+    DiagnosticRequest {
+        phase: DiagnosticPhase::Dtc,
+        service: 0x03,
+        target: RequestTarget::Broadcast,
+        expansion: RequestExpansion::Static,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +213,124 @@ pub fn capability_outcome(step: &StepResult, prior_no_data: bool) -> CapabilityO
             kind: StepErrorKind::Other,
             ..
         } => CapabilityOutcome::Unverified,
+    }
+}
+
+/// Execute one already-authorized diagnostic request through the Session
+/// boundary.  This deliberately lives beside the diagnostic service gate: no
+/// other mode-runner module composes a 03/07/0A request.
+///
+/// The returned error is reserved for a lost serial link.  All normal vehicle
+/// and decode failures are converted to [`StepResult::StepError`] so the
+/// caller can record an outcome and continue the bundle.
+pub async fn execute_session_request<A: Adapter>(
+    session: &mut Session<A>,
+    mode: &ModeState,
+    request: DiagnosticRequest,
+    modules: &[ModuleId],
+) -> anyhow::Result<StepResult> {
+    let target = match request.target {
+        RequestTarget::Broadcast | RequestTarget::DiscoveredModules => Target::Broadcast,
+        RequestTarget::Module(index) => match modules.get(index) {
+            Some(module) => Target::Module(module.0.clone()),
+            None => {
+                return Ok(StepResult::StepError {
+                    kind: StepErrorKind::Other,
+                    detail: format!("diagnostic module index {index} is no longer available"),
+                });
+            }
+        },
+    };
+
+    let result = match request.phase {
+        DiagnosticPhase::Dtc => {
+            if !service_allowed(mode, request.service) {
+                return Ok(StepResult::StepError {
+                    kind: StepErrorKind::Other,
+                    detail: "DTC request denied outside Diagnostic mode".into(),
+                });
+            }
+            session.raw_request(request.service, &[], target).await
+        }
+        // Freeze-frame correlation is expanded by the runner after the DTC
+        // phase.  A request here uses the stable headline PID as a bounded
+        // fallback when a code has no richer correlated PID list yet.
+        DiagnosticPhase::FreezeFrames => session
+            .read_freeze_frame(Pid::ENGINE_RPM, 0)
+            .await
+            .map(|reading| reading.raw_bytes),
+        DiagnosticPhase::Readiness => session.read_readiness().await.map(|_| Vec::new()),
+        DiagnosticPhase::Mode05O2 => session.raw_request(0x05, &[], target).await,
+        // Module refresh asks Mode 01 PID 00 through each resolved target;
+        // callers expand DiscoveredModules before reaching this boundary.
+        DiagnosticPhase::ModuleRefresh => session.raw_request(0x01, &[0x00], target).await,
+    };
+    map_obd2_result(result)
+}
+
+/// Run the selected profile's DTC services through `ProfileRuntime`, rather
+/// than reconstructing its Class-2 routing in the mode runner.  The profile
+/// scheduler is invoked at a common maintenance boundary so every configured
+/// DTC service is considered for this operator-initiated scan.
+pub async fn execute_profile_dtc_requests<A: Adapter>(
+    session: &mut Session<A>,
+    context: &VehicleContext,
+    selected: &SelectedProfile,
+) -> Vec<anyhow::Result<StepResult>> {
+    let registry = ProfileRegistry::with_builtins();
+    let runtime = ProfileRuntime::new(&registry);
+    let coverage = CoverageMap::new(Vec::new()).with_discovered_modules(
+        context
+            .discovered_modules
+            .iter()
+            .filter_map(profile_module_key)
+            .collect(),
+    );
+    let plan = runtime.plan_poll_cycle(Some(selected), 60, &coverage);
+    let mut results = Vec::new();
+    for planned in plan.requests {
+        if !matches!(planned.capability, CapabilityId::DtcService(_)) {
+            continue;
+        }
+        let mut evidence = NullEvidenceSink;
+        let result = match runtime
+            .execute_request(
+                session,
+                context,
+                selected,
+                planned.capability,
+                planned.request,
+                &mut evidence,
+            )
+            .await
+        {
+            Ok(ProfileResponse::Dtcs(_)) => Ok(StepResult::Data(Vec::new())),
+            Ok(ProfileResponse::Signal(_)) => Ok(StepResult::StepError {
+                kind: StepErrorKind::Other,
+                detail: "profile DTC capability returned a signal".into(),
+            }),
+            Err(DispatchError::Transport(error)) => map_obd2_result(Err(error)),
+            Err(error) => Ok(StepResult::StepError {
+                kind: StepErrorKind::Other,
+                detail: format!("profile DTC dispatch failed: {error:?}"),
+            }),
+        };
+        results.push(result);
+    }
+    results
+}
+
+fn profile_module_key(module: &ModuleId) -> Option<crate::profiles::ModuleKey> {
+    match module.0.as_str() {
+        "ecm" => Some(crate::profiles::ModuleKey::Ecm),
+        "tcm" => Some(crate::profiles::ModuleKey::Tcm),
+        "ficm" => Some(crate::profiles::ModuleKey::Ficm),
+        "bcm" => Some(crate::profiles::ModuleKey::Bcm),
+        "abs" => Some(crate::profiles::ModuleKey::Ebcm),
+        "ipc" => Some(crate::profiles::ModuleKey::Ipc),
+        "airbag" => Some(crate::profiles::ModuleKey::Sdm),
+        "hvac" => Some(crate::profiles::ModuleKey::Hvac),
+        _ => None,
     }
 }
 

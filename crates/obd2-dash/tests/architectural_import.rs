@@ -70,10 +70,11 @@ fn pending_migration_allowlist_is_tight() {
         &files,
         ".raw_request(",
         &[
+            "crates/obd2-dash/src/mode_runner/diagnostic.rs",
             "crates/obd2-dash/src/profiles/runtime.rs",
             "crates/obd2-dash/src/session_runner.rs",
         ],
-        "Wave 4 removes enhanced raw_request; Wave 5 removes GM $19 raw_request; generic SAE DTC raw_request remains",
+        "raw Session requests are restricted to legacy migration code, profile routing, and the runner's diagnostic gate",
     );
 }
 

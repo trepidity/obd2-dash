@@ -132,9 +132,7 @@ async fn duplicate_foreground_command_returns_busy_without_queueing() {
 }
 
 #[tokio::test]
-async fn cancel_foreground_returns_to_telemetry() {
-    // NOTE: this is NOT the plan-named pause/resume contract — verifier
-    // pause machinery does not exist yet. It pins only the mode round-trip.
+async fn cancel_foreground_returns_to_telemetry_at_request_boundary() {
     let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
         Database::open_in_memory().unwrap(),
     );
@@ -147,6 +145,128 @@ async fn cancel_foreground_returns_to_telemetry() {
     assert_eq!(
         runner.command(RunnerCommand::CancelForeground),
         CommandReply::Accepted
+    );
+    assert!(matches!(
+        runner.snapshot().mode,
+        ModeState::Diagnostic { .. }
+    ));
+    runner.run_foreground().await.unwrap();
+    assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+}
+
+/// The accepted command is only a state transition; all 03/07/0A requests
+/// must be emitted by the runner's diagnostic executor, never by telemetry.
+#[tokio::test]
+async fn accepted_diagnostic_executes_session_requests_and_returns_to_telemetry() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let connector = ScriptedConnector::new(VIN);
+    let script = connector.script.clone();
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    let before = script.requests().await.len();
+
+    assert_eq!(
+        runner.command(RunnerCommand::RunDiagnostic),
+        CommandReply::Accepted
+    );
+    runner.run_foreground().await.unwrap();
+
+    let requests = script.requests().await;
+    let diagnostic = &requests[before..];
+    assert!(diagnostic
+        .iter()
+        .any(|(service, _)| matches!(service, 0x03 | 0x07 | 0x0A)));
+    assert!(diagnostic.iter().all(|(service, _)| *service != 0x06));
+    assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+}
+
+#[tokio::test]
+async fn rescan_forces_a_fresh_mask_walk_and_replaces_only_after_completion() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let connector = ScriptedConnector::new(VIN);
+    let script = connector.script.clone();
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    let masks_before = script
+        .requests()
+        .await
+        .iter()
+        .filter(|(service, pid)| *service == 0x01 && *pid == Some(0x00))
+        .count();
+
+    assert_eq!(
+        runner.command(RunnerCommand::RescanVehicle),
+        CommandReply::Accepted
+    );
+    runner.run_foreground().await.unwrap();
+
+    let masks_after = script
+        .requests()
+        .await
+        .iter()
+        .filter(|(service, pid)| *service == 0x01 && *pid == Some(0x00))
+        .count();
+    assert_eq!(masks_after, masks_before + 1);
+    assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+    assert_eq!(
+        runner.snapshot().capability.persistence,
+        CapabilityPersistence::Cached
+    );
+}
+
+#[tokio::test]
+async fn cancelled_rescan_keeps_the_old_capability_generation() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    seed_supported(&store, &["010C"]).await;
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    let mut runner = ModeRunner::new(ScriptedConnector::new(VIN), store);
+    runner.connect().await.unwrap();
+
+    assert_eq!(
+        runner.command(RunnerCommand::RescanVehicle),
+        CommandReply::Accepted
+    );
+    assert_eq!(
+        runner.command(RunnerCommand::CancelForeground),
+        CommandReply::Accepted
+    );
+    runner.run_foreground().await.unwrap();
+
+    assert_eq!(
+        runner.capabilities().outcome(&key),
+        CapabilityOutcome::Supported
+    );
+    assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+}
+
+#[tokio::test]
+async fn failed_rescan_keeps_the_old_capability_generation() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    seed_supported(&store, &["010C"]).await;
+    let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+    let connector = ScriptedConnector::new(VIN);
+    connector
+        .script
+        .push(0x01, Some(0x00), ScriptedResponse::Timeout);
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+
+    assert_eq!(
+        runner.command(RunnerCommand::RescanVehicle),
+        CommandReply::Accepted
+    );
+    assert!(runner.run_foreground().await.is_err());
+    assert_eq!(
+        runner.capabilities().outcome(&key),
+        CapabilityOutcome::Supported
     );
     assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
 }

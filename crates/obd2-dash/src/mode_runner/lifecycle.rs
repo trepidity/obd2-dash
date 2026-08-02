@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
@@ -15,6 +15,11 @@ use obd2_db::models::{
 
 use super::capability::{probe_fingerprint, CapabilityKey, CapabilitySet};
 use super::command::{reply_for, CommandReply, RunnerCommand};
+use super::diagnostic::{
+    capability_outcome, execute_profile_dtc_requests, execute_session_request, expand_dtc_requests,
+    profile_dtc_outcome_request, request_plan, resolve_fuel, DiagnosticPhase, DiagnosticRequest,
+    RequestTarget, ServiceGates, StepErrorKind, StepResult,
+};
 use super::persistence::Persistence;
 use super::scheduler::{RequestDescriptor, Scheduler, Tier, ViewId};
 use super::snapshot::{CapabilityPersistence, CapabilityVerification, ModeState, RunnerSnapshot};
@@ -24,7 +29,7 @@ use crate::profiles::registry::ProfileRegistry;
 use crate::profiles::{
     acquire_identity, build_vehicle_context, next_generation, select_into_state, IdentityOutcome,
 };
-use crate::profiles::{DiagnosticProfile, SignalDisplaySource};
+use crate::profiles::{DiagnosticProfile, SelectedProfile, SignalDisplaySource, VehicleContext};
 use tokio::sync::watch;
 
 #[derive(Debug)]
@@ -157,6 +162,12 @@ where
     snapshot_tx: watch::Sender<RunnerSnapshot>,
     scheduler: Scheduler,
     cycle: u64,
+    profile_descriptors: Vec<RequestDescriptor>,
+    forced_standard_keys: BTreeSet<CapabilityKey>,
+    profile_context: Option<VehicleContext>,
+    selected_profile: Option<SelectedProfile>,
+    foreground_cancel_requested: bool,
+    diagnostic_no_data: BTreeSet<CapabilityKey>,
 }
 
 impl<C, S> ModeRunner<C, S>
@@ -180,6 +191,12 @@ where
             snapshot_tx: watch::channel(RunnerSnapshot::empty()).0,
             scheduler: Scheduler::default(),
             cycle: 0,
+            profile_descriptors: Vec::new(),
+            forced_standard_keys: BTreeSet::new(),
+            profile_context: None,
+            selected_profile: None,
+            foreground_cancel_requested: false,
+            diagnostic_no_data: BTreeSet::new(),
         }
     }
 
@@ -223,11 +240,13 @@ where
                 };
             }
             RunnerCommand::CancelForeground => {
-                self.snapshot.mode = ModeState::Telemetry;
+                // The serial request currently in flight must run to
+                // completion. `run_foreground` observes this flag at the next
+                // request boundary and then returns to Telemetry.
+                self.foreground_cancel_requested = true;
             }
             RunnerCommand::Shutdown => {
                 self.snapshot.mode = ModeState::ShuttingDown;
-                self.session = None;
             }
         }
         self.publish();
@@ -238,6 +257,10 @@ where
         self.snapshot.mode = ModeState::Connecting;
         self.cycle = 0;
         self.scheduler = Scheduler::default();
+        self.profile_descriptors = profile_probe_descriptors(None);
+        self.forced_standard_keys.clear();
+        self.profile_context = None;
+        self.selected_profile = None;
         let mut new_session = self
             .connector
             .connect()
@@ -305,6 +328,19 @@ where
             .as_ref()
             .and_then(|selected| profile_registry.get(selected.profile_id()));
         let profile_descriptors = profile_probe_descriptors(selected_profile);
+        self.forced_standard_keys = selected_profile
+            .map(|profile| {
+                profile
+                    .standard_pid_policy()
+                    .forced
+                    .iter()
+                    .map(|pid| standard_pid_descriptor(*pid).key)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.profile_descriptors = profile_descriptors.clone();
+        self.profile_context = Some(vehicle_context.clone());
+        self.selected_profile = profile_state.selected.clone();
         let context = CapabilityContext {
             protocol: super::capability::protocol_token(
                 new_session.session.adapter_info().protocol,
@@ -530,6 +566,368 @@ where
         };
         tokio::time::sleep(delay).await;
         self.connect().await
+    }
+
+    /// Drive the accepted foreground operation.  The future owns the Session
+    /// for the duration of each request; cancellation is sampled only after a
+    /// completed request, never by dropping a serial future.
+    pub async fn run_foreground(&mut self) -> Result<()> {
+        match self.snapshot.mode {
+            ModeState::Diagnostic { .. } => self.run_diagnostic().await,
+            ModeState::Discovering {
+                origin: super::snapshot::DiscoveryOrigin::Rescan,
+                ..
+            } => self.run_rescan().await,
+            ModeState::ShuttingDown => self.shutdown().await,
+            _ => Ok(()),
+        }
+    }
+
+    /// Complete a requested shutdown after the current request boundary.
+    /// Releasing the Session precedes the final SQLite flush so the serial
+    /// port is not retained while storage is slow.
+    pub async fn shutdown(&mut self) -> Result<()> {
+        self.snapshot.mode = ModeState::ShuttingDown;
+        self.session = None;
+        if let Some(persistence) = self.persistence.as_mut() {
+            persistence.flush().await?;
+        }
+        self.publish();
+        Ok(())
+    }
+
+    async fn run_diagnostic(&mut self) -> Result<()> {
+        let (protocol, session_fuel, modules) = {
+            let session = self
+                .session
+                .as_ref()
+                .ok_or_else(|| anyhow!("diagnostic requested without an active session"))?;
+            let mut modules = session
+                .discovery()
+                .map(|discovery| {
+                    discovery
+                        .modules
+                        .iter()
+                        .filter_map(|(id, resolved)| {
+                            let active = discovery.active_bus.as_ref();
+                            active
+                                .is_none_or(|bus| resolved.bus == bus.id)
+                                .then(|| id.clone())
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            modules.sort_by(|left, right| left.0.cmp(&right.0));
+            (
+                session.adapter_info().protocol,
+                session
+                    .spec()
+                    .map(|spec| spec.identity.engine.fuel_type.clone()),
+                modules,
+            )
+        };
+        let database_fuel = match self.vin.as_deref() {
+            Some(vin) => self
+                .store
+                .load_exact_vehicle_fuel_type(vin)
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        let gates = ServiceGates {
+            cached_mode05_unsupported: self.service_is_unsupported(0x05),
+            cached_readiness_unsupported: self.service_is_unsupported(0x01),
+            is_lly_profile: self
+                .context
+                .as_ref()
+                .is_some_and(|context| context.profile_id.contains("lly")),
+        };
+        let plan = request_plan(
+            resolve_fuel(session_fuel.as_deref(), database_fuel.as_deref()),
+            protocol,
+            gates,
+        );
+        let mut requests = Vec::new();
+        let module_names = modules
+            .iter()
+            .map(|module| module.0.clone())
+            .collect::<Vec<_>>();
+        for request in plan {
+            match request.phase {
+                DiagnosticPhase::Dtc if request.target == RequestTarget::Broadcast => {
+                    // The DTC expansion contains the broadcast trio once and
+                    // then concrete module-major triples.
+                    requests.extend(expand_dtc_requests(&module_names));
+                }
+                DiagnosticPhase::Dtc => {}
+                DiagnosticPhase::FreezeFrames => {
+                    // The detailed frame count is known only after decoding
+                    // DTCs. The runner currently has no decoded DTC payload
+                    // sink, so an empty-code scan correctly skips this phase.
+                }
+                DiagnosticPhase::ModuleRefresh
+                    if request.target == RequestTarget::DiscoveredModules =>
+                {
+                    for index in 0..modules.len() {
+                        requests.push(DiagnosticRequest {
+                            target: RequestTarget::Module(index),
+                            ..request
+                        });
+                    }
+                    if modules.is_empty() {
+                        requests.push(DiagnosticRequest {
+                            target: RequestTarget::Broadcast,
+                            ..request
+                        });
+                    }
+                }
+                _ => requests.push(request),
+            }
+        }
+
+        let total = requests.len() as u32;
+        let mut profile_dtc_ran = false;
+        for (step, request) in requests.into_iter().enumerate() {
+            if self.foreground_cancel_requested {
+                self.finish_foreground();
+                return Ok(());
+            }
+            if !profile_dtc_ran && request.phase != DiagnosticPhase::Dtc {
+                self.run_profile_dtc().await?;
+                profile_dtc_ran = true;
+            }
+            self.snapshot.mode = ModeState::Diagnostic {
+                phase: request.phase as u8,
+                phase_total: 5,
+                step: step as u32,
+                total,
+            };
+            self.publish();
+            let result = {
+                let session = self
+                    .session
+                    .as_mut()
+                    .ok_or_else(|| anyhow!("diagnostic session was released"))?;
+                execute_session_request(session, &self.snapshot.mode, request, &modules).await
+            };
+            match result {
+                Ok(result) => self.record_diagnostic_outcome(request, &result),
+                Err(error) => {
+                    self.session = None;
+                    self.snapshot.mode = ModeState::Reconnecting {
+                        attempt: self.reconnect_attempt.saturating_add(1),
+                    };
+                    self.publish();
+                    return Err(error);
+                }
+            }
+        }
+        if !profile_dtc_ran {
+            self.run_profile_dtc().await?;
+        }
+        if let Some(persistence) = self.persistence.as_mut() {
+            let _ = persistence.flush().await;
+        }
+        self.finish_foreground();
+        Ok(())
+    }
+
+    async fn run_profile_dtc(&mut self) -> Result<()> {
+        let (Some(context), Some(selected)) =
+            (self.profile_context.clone(), self.selected_profile.clone())
+        else {
+            return Ok(());
+        };
+        let profile_results = {
+            let session = self
+                .session
+                .as_mut()
+                .ok_or_else(|| anyhow!("diagnostic session was released"))?;
+            execute_profile_dtc_requests(session, &context, &selected).await
+        };
+        for result in profile_results {
+            match result {
+                Ok(result) => {
+                    // Profile DTC services share phase one but own their
+                    // routing inside ProfileRuntime.
+                    self.record_diagnostic_outcome(profile_dtc_outcome_request(), &result);
+                }
+                Err(error) => {
+                    self.session = None;
+                    self.snapshot.mode = ModeState::Reconnecting {
+                        attempt: self.reconnect_attempt.saturating_add(1),
+                    };
+                    self.publish();
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn run_rescan(&mut self) -> Result<()> {
+        let total = 4u32
+            .saturating_add(self.profile_descriptors.len() as u32)
+            .saturating_add(1);
+        self.snapshot.mode = ModeState::Discovering {
+            origin: super::snapshot::DiscoveryOrigin::Rescan,
+            step: 0,
+            total,
+        };
+        self.publish();
+        if self.foreground_cancel_requested {
+            self.finish_foreground();
+            return Ok(());
+        }
+
+        let supported = match self
+            .session
+            .as_mut()
+            .ok_or_else(|| anyhow!("rescan requested without an active session"))?
+            .refresh_supported_pids()
+            .await
+        {
+            Ok(pids) => pids,
+            Err(error) => {
+                self.finish_foreground();
+                return Err(anyhow!("forced supported-PID refresh failed: {error}"));
+            }
+        };
+        self.snapshot.mode = ModeState::Discovering {
+            origin: super::snapshot::DiscoveryOrigin::Rescan,
+            step: 4,
+            total,
+        };
+        self.publish();
+        let mut staged = CapabilitySet::default();
+        for (index, descriptor) in self.profile_descriptors.clone().into_iter().enumerate() {
+            if self.foreground_cancel_requested {
+                self.finish_foreground();
+                return Ok(());
+            }
+            let pid = parse_standard_pid(&descriptor.key.request_id)?;
+            let forced = self.forced_standard_keys.contains(&descriptor.key);
+            let initial = if supported.contains(&pid) || forced {
+                CapabilityOutcome::Unverified
+            } else {
+                CapabilityOutcome::Unsupported
+            };
+            let outcome = if initial == CapabilityOutcome::Unverified {
+                match self.read_pid_probe(pid).await {
+                    Ok(value) => {
+                        let mut signals = (*self.snapshot.signals).clone();
+                        signals.insert(descriptor.key.request_id.clone(), value);
+                        self.snapshot.signals = std::sync::Arc::new(signals);
+                        CapabilityOutcome::Supported
+                    }
+                    Err(super::verifier::ProbeError::UnsupportedPid)
+                    | Err(super::verifier::ProbeError::ExplicitUnsupported) => {
+                        CapabilityOutcome::Unsupported
+                    }
+                    Err(_) => CapabilityOutcome::Unverified,
+                }
+            } else {
+                initial
+            };
+            staged.insert(descriptor.key, outcome);
+            self.snapshot.mode = ModeState::Discovering {
+                origin: super::snapshot::DiscoveryOrigin::Rescan,
+                step: 4 + index as u32 + 1,
+                total,
+            };
+            self.publish();
+        }
+        if self.foreground_cancel_requested {
+            self.finish_foreground();
+            return Ok(());
+        }
+        if let Some(persistence) = self.persistence.as_mut() {
+            if let Err(error) = persistence.replace_from_outcomes(&staged).await {
+                // The staged map never becomes active until the replacement
+                // transaction commits.  A store failure therefore resumes
+                // the previous in-memory/SQLite capability generation.
+                self.finish_foreground();
+                return Err(error);
+            }
+            self.snapshot.capability.persistence = CapabilityPersistence::Cached;
+        }
+        self.capabilities = staged;
+        self.rebuild_verifier_after_rescan();
+        self.snapshot.capability.verification = CapabilityVerification::Ready;
+        self.finish_foreground();
+        Ok(())
+    }
+
+    fn service_is_unsupported(&self, service: u8) -> bool {
+        self.capabilities.outcome(&CapabilityKey::new(
+            CapabilityKind::Service,
+            format!("{service:02X}"),
+            "broadcast",
+        )) == CapabilityOutcome::Unsupported
+    }
+
+    fn record_diagnostic_outcome(&mut self, request: DiagnosticRequest, result: &StepResult) {
+        let module = match request.target {
+            RequestTarget::Module(index) => format!("module-{index}"),
+            _ => "broadcast".to_string(),
+        };
+        let key = CapabilityKey::new(
+            CapabilityKind::Service,
+            format!("{:02X}", request.service),
+            module,
+        );
+        let prior_no_data = self.diagnostic_no_data.contains(&key);
+        let outcome = capability_outcome(result, prior_no_data);
+        match result {
+            StepResult::StepError {
+                kind: StepErrorKind::NoData,
+                ..
+            } => {
+                self.diagnostic_no_data.insert(key.clone());
+            }
+            _ => {
+                self.diagnostic_no_data.remove(&key);
+            }
+        }
+        self.capabilities.insert(key.clone(), outcome);
+        if let Some(persistence) = self.persistence.as_mut() {
+            let error_code = match result {
+                StepResult::Data(_) => None,
+                StepResult::StepError {
+                    kind: StepErrorKind::NoData,
+                    ..
+                } => Some("no_data".into()),
+                StepResult::StepError {
+                    kind: StepErrorKind::Unsupported,
+                    ..
+                } => Some("unsupported".into()),
+                StepResult::StepError {
+                    kind: StepErrorKind::Other,
+                    ..
+                } => Some("error".into()),
+            };
+            persistence.observe(key, outcome, error_code);
+        }
+    }
+
+    fn rebuild_verifier_after_rescan(&mut self) {
+        self.verifier = Verifier::new();
+        for descriptor in &self.profile_descriptors {
+            if self.capabilities.outcome(&descriptor.key) == CapabilityOutcome::Unverified {
+                self.verifier.insert(
+                    descriptor.key.clone(),
+                    descriptor.tier,
+                    descriptor.view.clone(),
+                );
+            }
+        }
+    }
+
+    fn finish_foreground(&mut self) {
+        self.foreground_cancel_requested = false;
+        self.snapshot.mode = ModeState::Telemetry;
+        self.publish();
     }
 
     /// Keep reconnecting until a complete identity/cache acquisition succeeds.
