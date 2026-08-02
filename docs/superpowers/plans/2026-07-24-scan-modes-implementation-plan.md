@@ -81,6 +81,26 @@ errors resolved Unverified, so no service could ever be pruned.
 the typed `Obd2Error` in `map_obd2_result`; the outcome test routes real
 core errors through the mapper end to end.
 
+**Slice 11 (`3052c65`, audited + fixed in the follow-up commit):** real
+foreground execution — diagnostics through `execute_session_request` (gate
+enforced at the wire), profile DTC via `ProfileRuntime`, typed outcome
+persistence with separated NO DATA, staged rescan honoring §9.1/§9.5
+semantics, shutdown flush after session drop, narrow raw-request allowlist
+extension. Audit fixes: persisted diagnostic module keys used
+session-local indices (`module-0`) instead of canonical ids — reordering
+between sessions would attach cached outcomes to the wrong module; and
+`is_lly_profile` used a substring match. Prominent remaining gaps:
+**decoded DTC payloads are discarded — a diagnostic scan currently
+persists service support but surfaces no codes to the operator** (freeze
+frames therefore structurally skip, and `ProfileResponse::Dtcs` maps to
+empty `Data`); profile DTC evidence goes to `NullEvidenceSink` (the legacy
+GUI records evidence — GUI-0001 must wire a real sink before deleting it);
+profile DTC services do not consult cached-unsupported service rows;
+Mode-05 runs as a bare `0x05` probe rather than `read_all_o2_monitoring`
+enumeration. Executor's own honest list also open: bounded async command
+channel with oneshot acks, concurrent in-flight cancellation control,
+`RequestActiveTest` routing.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
