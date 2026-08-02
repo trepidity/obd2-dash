@@ -69,6 +69,18 @@ instead of aborting to reconnect. `Io` now aborts alongside `Transport`;
 Remaining: wire requests to Session/ProfileRuntime operations (including
 GM Class-2 backoff) and persist diagnostic outcomes.
 
+**Slice 10 (`bbf6960`, audited + fixed in the follow-up commit):**
+`capability_outcome` maps step results to persisted capability state with
+separated NO DATA confirmation. Audit fix: the classifier matched error
+DISPLAY strings and every non-Data arm was dead code against real core
+errors (`NoData` renders "no data (vehicle did not respond)",
+`UnsupportedPid` renders "not supported", negative responses render
+Debug-style with no spaces) — its tests fed invented strings. All step
+errors resolved Unverified, so no service could ever be pruned.
+`StepResult::StepError` now carries a typed `StepErrorKind` assigned from
+the typed `Obd2Error` in `map_obd2_result`; the outcome test routes real
+core errors through the mapper end to end.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
