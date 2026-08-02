@@ -14,15 +14,20 @@ use obd2_db::models::{
 };
 
 use super::capability::{probe_fingerprint, CapabilityKey, CapabilitySet};
-use super::command::{reply_for, CommandReply, RunnerCommand};
+use super::command::{
+    reply_for, CommandReply, ControlCommand, ControlInput, RunnerCommand, RunnerControlReceiver,
+};
 use super::diagnostic::{
-    capability_outcome, execute_profile_dtc_requests, execute_session_request, expand_dtc_requests,
-    profile_dtc_outcome_request, request_plan, resolve_fuel, DiagnosticPhase, DiagnosticRequest,
-    RequestTarget, ServiceGates, StepErrorKind, StepResult,
+    capability_outcome, execute_freeze_frame_pid, execute_profile_dtc_results,
+    execute_session_request, expand_dtc_requests, profile_dtc_outcome_request, request_plan,
+    resolve_fuel, DiagnosticPhase, DiagnosticRequest, RequestTarget, ServiceGates, StepErrorKind,
+    StepResult,
 };
 use super::persistence::Persistence;
 use super::scheduler::{RequestDescriptor, Scheduler, Tier, ViewId};
-use super::snapshot::{CapabilityPersistence, CapabilityVerification, ModeState, RunnerSnapshot};
+use super::snapshot::{
+    CapabilityPersistence, CapabilityVerification, DiagnosticResult, ModeState, RunnerSnapshot,
+};
 use super::store::CapabilityStore;
 use super::verifier::Verifier;
 use crate::profiles::registry::ProfileRegistry;
@@ -168,6 +173,7 @@ where
     selected_profile: Option<SelectedProfile>,
     foreground_cancel_requested: bool,
     diagnostic_no_data: BTreeSet<CapabilityKey>,
+    control: Option<RunnerControlReceiver>,
 }
 
 impl<C, S> ModeRunner<C, S>
@@ -197,6 +203,7 @@ where
             selected_profile: None,
             foreground_cancel_requested: false,
             diagnostic_no_data: BTreeSet::new(),
+            control: None,
         }
     }
 
@@ -214,6 +221,70 @@ where
 
     pub fn capabilities(&self) -> &CapabilitySet {
         &self.capabilities
+    }
+
+    /// Attach the bounded control receiver owned by the runner task. The
+    /// producer is kept by GUI/TUI command surfaces; lifecycle polls this only
+    /// at serial request boundaries.
+    pub fn attach_control(&mut self, control: RunnerControlReceiver) {
+        self.control = Some(control);
+    }
+
+    /// Apply queued controls at a request boundary. A closed producer follows
+    /// the same orderly cleanup as Shutdown and cannot trigger reconnect.
+    pub async fn process_control_boundary(&mut self) -> Result<()> {
+        loop {
+            let input = self
+                .control
+                .as_mut()
+                .and_then(RunnerControlReceiver::try_recv);
+            let Some(input) = input else { return Ok(()) };
+            match input {
+                ControlInput::Closed => return self.shutdown().await,
+                ControlInput::Command(queued) => {
+                    let (command, acknowledgement) = queued.into_parts();
+                    let reply = command.reply_for(&self.snapshot.mode);
+                    if reply != CommandReply::Accepted {
+                        let _ = acknowledgement.send(reply);
+                        continue;
+                    }
+                    match command {
+                        ControlCommand::RunDiagnostic => {
+                            let _ = self.command(RunnerCommand::RunDiagnostic);
+                            let _ = acknowledgement.send(CommandReply::Accepted);
+                        }
+                        ControlCommand::RescanVehicle => {
+                            let _ = self.command(RunnerCommand::RescanVehicle);
+                            let _ = acknowledgement.send(CommandReply::Accepted);
+                        }
+                        ControlCommand::CancelForeground => {
+                            let _ = self.command(RunnerCommand::CancelForeground);
+                            let _ = acknowledgement.send(CommandReply::Accepted);
+                        }
+                        ControlCommand::RequestActiveTest(command) => {
+                            let execution =
+                                super::diagnostic::execute_locked_active_test(command).await;
+                            if let Some(error) = execution.evidence_write_error {
+                                tracing::warn!("{error}");
+                            }
+                            tracing::info!(
+                                result = ?execution.result,
+                                evidence = ?execution.profile_evidence,
+                                "locked active-test request recorded"
+                            );
+                            let _ = acknowledgement.send(CommandReply::Accepted);
+                        }
+                        ControlCommand::Shutdown => {
+                            // Ack only once the Session is dropped and the
+                            // latest accepted persistence batch is flushed.
+                            self.shutdown().await?;
+                            let _ = acknowledgement.send(CommandReply::Accepted);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Apply one bounded foreground command. Rejected commands are never
@@ -583,6 +654,29 @@ where
         }
     }
 
+    /// Drive one runner iteration for callers that use the bounded control
+    /// plane. A foreground command accepted at the preceding boundary is
+    /// executed by this same Session owner; it is never handed back to a GUI
+    /// handler or a second task.
+    pub async fn run_once(&mut self) -> Result<bool> {
+        self.process_control_boundary().await?;
+        match self.snapshot.mode {
+            ModeState::Diagnostic { .. }
+            | ModeState::Discovering {
+                origin: super::snapshot::DiscoveryOrigin::Rescan,
+                ..
+            }
+            | ModeState::ShuttingDown => {
+                self.run_foreground().await?;
+                Ok(true)
+            }
+            ModeState::Telemetry => self.poll_cycle().await,
+            ModeState::Connecting
+            | ModeState::Reconnecting { .. }
+            | ModeState::Discovering { .. } => Ok(false),
+        }
+    }
+
     /// Complete a requested shutdown after the current request boundary.
     /// Releasing the Session precedes the final SQLite flush so the serial
     /// port is not retained while storage is slow.
@@ -597,7 +691,7 @@ where
     }
 
     async fn run_diagnostic(&mut self) -> Result<()> {
-        let (protocol, session_fuel, modules) = {
+        let (protocol, session_fuel, spec, modules) = {
             let session = self
                 .session
                 .as_ref()
@@ -623,6 +717,7 @@ where
                 session
                     .spec()
                     .map(|spec| spec.identity.engine.fuel_type.clone()),
+                session.spec().cloned(),
                 modules,
             )
         };
@@ -692,13 +787,17 @@ where
 
         let total = requests.len() as u32;
         let mut profile_dtc_ran = false;
+        let mut diagnostic = DiagnosticResult::default();
+        self.snapshot.diagnostic = std::sync::Arc::new(diagnostic.clone());
         for (step, request) in requests.into_iter().enumerate() {
+            self.process_control_boundary().await?;
             if self.foreground_cancel_requested {
                 self.finish_foreground();
                 return Ok(());
             }
             if !profile_dtc_ran && request.phase != DiagnosticPhase::Dtc {
-                self.run_profile_dtc().await?;
+                self.run_profile_dtc(&mut diagnostic).await?;
+                self.run_freeze_frames(&mut diagnostic).await?;
                 profile_dtc_ran = true;
             }
             self.snapshot.mode = ModeState::Diagnostic {
@@ -716,7 +815,15 @@ where
                 execute_session_request(session, &self.snapshot.mode, request, &modules).await
             };
             match result {
-                Ok(result) => self.record_diagnostic_outcome(request, &result, &modules),
+                Ok(result) => {
+                    diagnostic.record_standard_dtc_payload(
+                        request,
+                        &result,
+                        &modules,
+                        spec.as_ref(),
+                    );
+                    self.record_diagnostic_outcome(request, &result, &modules);
+                }
                 Err(error) => {
                     self.session = None;
                     self.snapshot.mode = ModeState::Reconnecting {
@@ -728,16 +835,18 @@ where
             }
         }
         if !profile_dtc_ran {
-            self.run_profile_dtc().await?;
+            self.run_profile_dtc(&mut diagnostic).await?;
+            self.run_freeze_frames(&mut diagnostic).await?;
         }
         if let Some(persistence) = self.persistence.as_mut() {
             let _ = persistence.flush().await;
         }
+        self.snapshot.diagnostic = std::sync::Arc::new(diagnostic);
         self.finish_foreground();
         Ok(())
     }
 
-    async fn run_profile_dtc(&mut self) -> Result<()> {
+    async fn run_profile_dtc(&mut self, diagnostic: &mut DiagnosticResult) -> Result<()> {
         let (Some(context), Some(selected)) =
             (self.profile_context.clone(), self.selected_profile.clone())
         else {
@@ -748,14 +857,19 @@ where
                 .session
                 .as_mut()
                 .ok_or_else(|| anyhow!("diagnostic session was released"))?;
-            execute_profile_dtc_requests(session, &context, &selected).await
+            execute_profile_dtc_results(session, &context, &selected).await
         };
         for result in profile_results {
             match result {
                 Ok(result) => {
                     // Profile DTC services share phase one but own their
                     // routing inside ProfileRuntime.
-                    self.record_diagnostic_outcome(profile_dtc_outcome_request(), &result, &[]);
+                    diagnostic.record_profile_dtcs(selected.profile_id().as_str(), result.dtcs);
+                    self.record_diagnostic_outcome(
+                        profile_dtc_outcome_request(),
+                        &result.result,
+                        &[],
+                    );
                 }
                 Err(error) => {
                     self.session = None;
@@ -765,6 +879,30 @@ where
                     self.publish();
                     return Err(error);
                 }
+            }
+        }
+        Ok(())
+    }
+
+    async fn run_freeze_frames(&mut self, diagnostic: &mut DiagnosticResult) -> Result<()> {
+        let spec = self
+            .session
+            .as_ref()
+            .and_then(|session| session.spec().cloned());
+        for work in diagnostic.freeze_frame_work(spec.as_ref()) {
+            for pid in &work.pids {
+                self.process_control_boundary().await?;
+                if self.foreground_cancel_requested {
+                    return Ok(());
+                }
+                let reading = {
+                    let session = self
+                        .session
+                        .as_mut()
+                        .ok_or_else(|| anyhow!("diagnostic session was released"))?;
+                    execute_freeze_frame_pid(session, *pid).await
+                }?;
+                diagnostic.record_freeze_frame_reading(&work, reading);
             }
         }
         Ok(())
@@ -967,6 +1105,7 @@ where
     /// due this cycle is polled; verifier work runs only through
     /// [`Verifier::next`] so retry backoff and NO DATA separation hold.
     pub async fn poll_cycle(&mut self) -> Result<bool> {
+        self.process_control_boundary().await?;
         // Telemetry pauses for foreground modes (spec §11) and must never run
         // after Shutdown — a session-gone transport error here would send a
         // driver loop into reconnect against an intentionally released port.
@@ -980,6 +1119,10 @@ where
         let mut did_work = false;
 
         for request in plan {
+            self.process_control_boundary().await?;
+            if !matches!(self.snapshot.mode, ModeState::Telemetry) {
+                return Ok(did_work);
+            }
             let key = request.0;
             // The plan tail may nominate unverified work; the verifier owns
             // that below, with its own due-time pacing.

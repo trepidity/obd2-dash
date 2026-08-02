@@ -1,17 +1,25 @@
-use super::snapshot::ModeState;
+use std::collections::BTreeSet;
+
+use super::snapshot::{
+    DiagnosticDtc, DiagnosticDtcKey, DiagnosticDtcOrigin, DiagnosticDtcStatus,
+    DiagnosticFreezeFrame, DiagnosticFreezeFrameReading, DiagnosticResult, DiagnosticResultError,
+    DiagnosticResultErrorKind, ModeState,
+};
 use async_trait::async_trait;
 use obd2_core::adapter::Adapter;
 use obd2_core::error::Obd2Error;
+use obd2_core::protocol::dtc::{Dtc, DtcStatus, Severity};
 use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::service::Target;
 use obd2_core::session::Session;
-use obd2_core::vehicle::ModuleId;
 use obd2_core::vehicle::Protocol;
+use obd2_core::vehicle::{ModuleId, VehicleSpec};
 use obd2_db::models::CapabilityOutcome;
 
+use crate::gm_active::{GmActiveTestCommand, GmActiveTestResult};
 use crate::profiles::{
-    CapabilityId, CoverageMap, DispatchError, NullEvidenceSink, ProfileRegistry, ProfileResponse,
-    ProfileRuntime, SelectedProfile, VehicleContext,
+    CapabilityId, CoverageMap, DispatchError, NullEvidenceSink, ProfileEvidenceRecord,
+    ProfileRegistry, ProfileResponse, ProfileRuntime, SelectedProfile, VehicleContext,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +132,85 @@ pub enum StepResult {
     StepError { kind: StepErrorKind, detail: String },
 }
 
+/// Freeze-frame work derived from a retained decoded DTC.  The exact DTC key
+/// stays attached to the work so a response can never be published against a
+/// different code merely because two scans overlap in time.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreezeFrameWork {
+    pub dtc: DiagnosticDtcKey,
+    pub pids: Vec<Pid>,
+}
+
+/// Retained response from a selected-profile DTC service.  Unlike the older
+/// `StepResult`-only API, this keeps the profile decoder's actual output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProfileDtcExecution {
+    pub result: StepResult,
+    pub dtcs: Vec<crate::profiles::DecodedDtc>,
+}
+
+const DEFAULT_FREEZE_FRAME_PIDS: [Pid; 8] = [
+    Pid::ENGINE_RPM,
+    Pid::VEHICLE_SPEED,
+    Pid::COOLANT_TEMP,
+    Pid::ENGINE_LOAD,
+    Pid::SHORT_FUEL_TRIM_B1,
+    Pid::LONG_FUEL_TRIM_B1,
+    Pid::THROTTLE_POSITION,
+    Pid::MAF,
+];
+
+/// The result of a runner-owned active-test request.
+///
+/// Active tests are presently locked because no verified Class-2 actuator
+/// bytes exist.  The command is still an auditable operator action: this
+/// carries both evidence formats the lifecycle must publish, and never takes
+/// a [`Session`] reference.  That makes an adapter write structurally
+/// impossible while the profile remains locked.
+#[derive(Debug, Clone)]
+pub struct LockedActiveTestExecution {
+    pub result: GmActiveTestResult,
+    pub profile_evidence: ProfileEvidenceRecord,
+    /// Set when the append-only raw evidence file could not be flushed.  The
+    /// lifecycle must surface this; a failed audit write is not a successful
+    /// evidence capture.
+    pub evidence_write_error: Option<String>,
+}
+
+/// Record a locked active-test request without blocking the runner's async
+/// task on filesystem I/O.
+///
+/// Lifecycle integration: on an accepted `RequestActiveTest`, await this
+/// helper, publish `profile_evidence`, then publish `result`; log or display
+/// `evidence_write_error` as an audit failure.  No Session call belongs in
+/// that branch until a profile owns verified actuator bytes and a separately
+/// reviewed executor exists.
+pub async fn execute_locked_active_test(command: GmActiveTestCommand) -> LockedActiveTestExecution {
+    let mut result = crate::gm_active::blocked_active_test_result(&command);
+    let write_command = command.clone();
+    let write_result = result.clone();
+    let evidence_write_error = match tokio::task::spawn_blocking(move || {
+        crate::gm_active::write_active_test_evidence(&write_command, &write_result)
+    })
+    .await
+    {
+        Ok(Ok(path)) => {
+            result.evidence_path = Some(path.display().to_string());
+            None
+        }
+        Ok(Err(error)) => Some(format!("active-test evidence write failed: {error}")),
+        Err(error) => Some(format!("active-test evidence task failed: {error}")),
+    };
+    let profile_evidence =
+        crate::profiles::gm::active::active_test_profile_evidence_record(&command, &result);
+
+    LockedActiveTestExecution {
+        result,
+        profile_evidence,
+        evidence_write_error,
+    }
+}
+
 /// Typed classification of a step failure, assigned from the TYPED core
 /// error in [`map_obd2_result`] — never recovered from display strings.
 /// (String matching against `Obd2Error` Display output silently fails:
@@ -186,6 +273,247 @@ pub fn map_obd2_result(result: Result<Vec<u8>, Obd2Error>) -> anyhow::Result<Ste
                 detail: error.to_string(),
             })
         }
+    }
+}
+
+impl From<DtcStatus> for DiagnosticDtcStatus {
+    fn from(status: DtcStatus) -> Self {
+        match status {
+            DtcStatus::Stored => Self::Stored,
+            DtcStatus::Pending => Self::Pending,
+            DtcStatus::Permanent => Self::Permanent,
+        }
+    }
+}
+
+fn dtc_status_for_service(service: u8) -> Option<DtcStatus> {
+    match service {
+        0x03 => Some(DtcStatus::Stored),
+        0x07 => Some(DtcStatus::Pending),
+        0x0A => Some(DtcStatus::Permanent),
+        _ => None,
+    }
+}
+
+fn severity_label(severity: Severity) -> &'static str {
+    match severity {
+        Severity::Info => "info",
+        Severity::Low => "low",
+        Severity::Medium => "medium",
+        Severity::High => "high",
+        Severity::Critical => "critical",
+    }
+}
+
+fn module_for_request(request: DiagnosticRequest, modules: &[ModuleId]) -> Option<String> {
+    match request.target {
+        RequestTarget::Module(index) => modules.get(index).map(|module| module.0.clone()),
+        RequestTarget::Broadcast | RequestTarget::DiscoveredModules => None,
+    }
+}
+
+/// Decode one Mode-03/07/0A payload into snapshot-safe DTC records.  The
+/// session response is deliberately decoded here while its service, target,
+/// and matched spec are still available; carrying only raw bytes to the GUI
+/// previously made every successful DTC response disappear.
+pub fn decode_standard_dtc_payload(
+    request: DiagnosticRequest,
+    payload: &[u8],
+    modules: &[ModuleId],
+    spec: Option<&VehicleSpec>,
+) -> Vec<DiagnosticDtc> {
+    let Some(status) = dtc_status_for_service(request.service) else {
+        return Vec::new();
+    };
+    let module = module_for_request(request, modules);
+    let mut decoded = Vec::new();
+    let mut raw_records = Vec::new();
+    for pair in payload.chunks_exact(2) {
+        if pair == [0, 0] {
+            continue;
+        }
+        let mut dtc = Dtc::from_bytes(pair[0], pair[1]);
+        dtc.status = status;
+        dtc.source_module = module.clone();
+        raw_records.push([pair[0], pair[1]]);
+        decoded.push(dtc);
+    }
+    obd2_core::session::diagnostics::enrich_dtcs(&mut decoded, spec);
+
+    decoded
+        .into_iter()
+        .zip(raw_records)
+        .map(|(dtc, raw)| DiagnosticDtc {
+            key: DiagnosticDtcKey {
+                code: dtc.code,
+                status: dtc.status.into(),
+                module: dtc.source_module,
+            },
+            origin: DiagnosticDtcOrigin::Standard,
+            description: dtc.description,
+            notes: dtc.notes,
+            severity: dtc.severity.map(severity_label).map(str::to_owned),
+            status_raw: None,
+            status_flags: Vec::new(),
+            raw: raw.to_vec(),
+        })
+        .collect()
+}
+
+fn profile_dtc_to_snapshot(profile_id: &str, dtc: crate::profiles::DecodedDtc) -> DiagnosticDtc {
+    DiagnosticDtc {
+        key: DiagnosticDtcKey {
+            code: dtc.code,
+            status: dtc.status.into(),
+            module: dtc.module.map(|module| module.0),
+        },
+        origin: DiagnosticDtcOrigin::Profile {
+            profile_id: profile_id.to_owned(),
+        },
+        description: None,
+        notes: dtc.notes,
+        severity: None,
+        status_raw: dtc.status_raw,
+        status_flags: dtc.status_flags,
+        raw: dtc.raw,
+    }
+}
+
+impl DiagnosticResult {
+    /// Retain standard DTCs from this request, if it completed with payload.
+    pub fn record_standard_dtc_payload(
+        &mut self,
+        request: DiagnosticRequest,
+        result: &StepResult,
+        modules: &[ModuleId],
+        spec: Option<&VehicleSpec>,
+    ) {
+        let StepResult::Data(payload) = result else {
+            return;
+        };
+        self.standard_dtcs
+            .extend(decode_standard_dtc_payload(request, payload, modules, spec));
+    }
+
+    /// Retain the `ProfileRuntime` decode result; profile routing and decoder
+    /// ownership remain with the profile rather than being recreated here.
+    pub fn record_profile_dtcs(
+        &mut self,
+        profile_id: &str,
+        dtcs: Vec<crate::profiles::DecodedDtc>,
+    ) {
+        self.profile_dtcs.extend(
+            dtcs.into_iter()
+                .map(|dtc| profile_dtc_to_snapshot(profile_id, dtc)),
+        );
+    }
+
+    /// Build explicit Mode-02 work after DTC collection.  Known-spec
+    /// `related_pids` win; an absent correlation gets the bounded headline
+    /// fallback so a valid DTC can never structurally skip freeze-frame work.
+    pub fn freeze_frame_work(&self, spec: Option<&VehicleSpec>) -> Vec<FreezeFrameWork> {
+        let mut seen = BTreeSet::new();
+        let mut work = Vec::new();
+        for dtc in self.standard_dtcs.iter().chain(&self.profile_dtcs) {
+            if !seen.insert(dtc.key.clone()) {
+                continue;
+            }
+            let pids = spec
+                .and_then(|spec| spec.lookup_dtc(&dtc.key.code))
+                .and_then(|entry| entry.related_pids.as_deref())
+                .map(|related| {
+                    related
+                        .iter()
+                        .filter_map(|pid| u8::try_from(*pid).ok())
+                        .map(Pid)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| DEFAULT_FREEZE_FRAME_PIDS.to_vec());
+            work.push(FreezeFrameWork {
+                dtc: dtc.key.clone(),
+                pids,
+            });
+        }
+        work
+    }
+
+    pub fn record_freeze_frame_reading(
+        &mut self,
+        work: &FreezeFrameWork,
+        reading: DiagnosticFreezeFrameReading,
+    ) {
+        let frame = match self
+            .freeze_frames
+            .iter_mut()
+            .find(|frame| frame.dtc == work.dtc)
+        {
+            Some(frame) => frame,
+            None => {
+                self.freeze_frames.push(DiagnosticFreezeFrame {
+                    dtc: work.dtc.clone(),
+                    readings: Vec::new(),
+                });
+                // The frame was just appended and is therefore present.
+                self.freeze_frames
+                    .last_mut()
+                    .expect("invariant: appended frame")
+            }
+        };
+        frame.readings.push(reading);
+    }
+}
+
+fn snapshot_error_from_step(result: StepResult) -> DiagnosticResultError {
+    match result {
+        StepResult::StepError { kind, detail } => DiagnosticResultError {
+            kind: match kind {
+                StepErrorKind::NoData => DiagnosticResultErrorKind::NoData,
+                StepErrorKind::Unsupported => DiagnosticResultErrorKind::Unsupported,
+                StepErrorKind::Other => DiagnosticResultErrorKind::Other,
+            },
+            detail,
+        },
+        StepResult::Data(_) => unreachable!("freeze-frame error conversion requires step error"),
+    }
+}
+
+/// Execute one concrete PID within previously derived freeze-frame work.
+/// Normal protocol failures become per-PID retained errors; only link loss
+/// returns `Err` so lifecycle can reconnect without losing earlier samples.
+pub async fn execute_freeze_frame_pid<A: Adapter>(
+    session: &mut Session<A>,
+    pid: Pid,
+) -> anyhow::Result<DiagnosticFreezeFrameReading> {
+    match session.read_freeze_frame(pid, 0).await {
+        Ok(reading) => match reading.value.as_f64() {
+            Ok(value) => Ok(DiagnosticFreezeFrameReading {
+                pid: pid.0,
+                value: Some(value),
+                unit: Some(reading.unit.to_owned()),
+                raw: reading.raw_bytes,
+                error: None,
+            }),
+            Err(error) => Ok(DiagnosticFreezeFrameReading {
+                pid: pid.0,
+                value: None,
+                unit: Some(reading.unit.to_owned()),
+                raw: reading.raw_bytes,
+                error: Some(DiagnosticResultError {
+                    kind: DiagnosticResultErrorKind::Other,
+                    detail: error.to_string(),
+                }),
+            }),
+        },
+        Err(error) => match map_obd2_result(Err(error))? {
+            as_step_error @ StepResult::StepError { .. } => Ok(DiagnosticFreezeFrameReading {
+                pid: pid.0,
+                value: None,
+                unit: None,
+                raw: Vec::new(),
+                error: Some(snapshot_error_from_step(as_step_error)),
+            }),
+            StepResult::Data(_) => unreachable!("error mapping cannot produce data"),
+        },
     }
 }
 
@@ -260,7 +588,13 @@ pub async fn execute_session_request<A: Adapter>(
             .await
             .map(|reading| reading.raw_bytes),
         DiagnosticPhase::Readiness => session.read_readiness().await.map(|_| Vec::new()),
-        DiagnosticPhase::Mode05O2 => session.raw_request(0x05, &[], target).await,
+        // A bare 05 request is not an OBD service operation.  The core
+        // Session API owns Mode-05's required TID/sensor request matrix and
+        // response decoding; it intentionally broadcasts those requests.
+        DiagnosticPhase::Mode05O2 => {
+            let _ = target;
+            session.read_all_o2_monitoring().await.map(|_| Vec::new())
+        }
         // Module refresh asks Mode 01 PID 00 through each resolved target;
         // callers expand DiscoveredModules before reaching this boundary.
         DiagnosticPhase::ModuleRefresh => session.raw_request(0x01, &[0x00], target).await,
@@ -277,6 +611,20 @@ pub async fn execute_profile_dtc_requests<A: Adapter>(
     context: &VehicleContext,
     selected: &SelectedProfile,
 ) -> Vec<anyhow::Result<StepResult>> {
+    execute_profile_dtc_results(session, context, selected)
+        .await
+        .into_iter()
+        .map(|result| result.map(|execution| execution.result))
+        .collect()
+}
+
+/// Same profile DTC execution path as [`execute_profile_dtc_requests`], but
+/// retains `ProfileResponse::Dtcs` for the runner snapshot.
+pub async fn execute_profile_dtc_results<A: Adapter>(
+    session: &mut Session<A>,
+    context: &VehicleContext,
+    selected: &SelectedProfile,
+) -> Vec<anyhow::Result<ProfileDtcExecution>> {
     let registry = ProfileRegistry::with_builtins();
     let runtime = ProfileRuntime::new(&registry);
     let coverage = CoverageMap::new(Vec::new()).with_discovered_modules(
@@ -304,15 +652,29 @@ pub async fn execute_profile_dtc_requests<A: Adapter>(
             )
             .await
         {
-            Ok(ProfileResponse::Dtcs(_)) => Ok(StepResult::Data(Vec::new())),
-            Ok(ProfileResponse::Signal(_)) => Ok(StepResult::StepError {
-                kind: StepErrorKind::Other,
-                detail: "profile DTC capability returned a signal".into(),
+            Ok(ProfileResponse::Dtcs(dtcs)) => Ok(ProfileDtcExecution {
+                result: StepResult::Data(Vec::new()),
+                dtcs,
             }),
-            Err(DispatchError::Transport(error)) => map_obd2_result(Err(error)),
-            Err(error) => Ok(StepResult::StepError {
-                kind: StepErrorKind::Other,
-                detail: format!("profile DTC dispatch failed: {error:?}"),
+            Ok(ProfileResponse::Signal(_)) => Ok(ProfileDtcExecution {
+                result: StepResult::StepError {
+                    kind: StepErrorKind::Other,
+                    detail: "profile DTC capability returned a signal".into(),
+                },
+                dtcs: Vec::new(),
+            }),
+            Err(DispatchError::Transport(error)) => {
+                map_obd2_result(Err(error)).map(|result| ProfileDtcExecution {
+                    result,
+                    dtcs: Vec::new(),
+                })
+            }
+            Err(error) => Ok(ProfileDtcExecution {
+                result: StepResult::StepError {
+                    kind: StepErrorKind::Other,
+                    detail: format!("profile DTC dispatch failed: {error:?}"),
+                },
+                dtcs: Vec::new(),
             }),
         };
         results.push(result);
@@ -740,6 +1102,52 @@ mod tests {
             .all(|request| request.target == RequestTarget::Broadcast));
     }
 
+    #[test]
+    fn standard_dtc_payload_retains_status_module_and_raw_pairs() {
+        let request = DiagnosticRequest {
+            phase: DiagnosticPhase::Dtc,
+            service: 0x07,
+            target: RequestTarget::Module(0),
+            expansion: RequestExpansion::Static,
+        };
+        let modules = [ModuleId("tcm".into())];
+        let dtcs = decode_standard_dtc_payload(request, &[0x25, 0x63, 0, 0], &modules, None);
+
+        assert_eq!(dtcs.len(), 1);
+        assert_eq!(dtcs[0].key.code, "P2563");
+        assert_eq!(dtcs[0].key.status, DiagnosticDtcStatus::Pending);
+        assert_eq!(dtcs[0].key.module.as_deref(), Some("tcm"));
+        assert_eq!(dtcs[0].raw, vec![0x25, 0x63]);
+        assert!(matches!(dtcs[0].origin, DiagnosticDtcOrigin::Standard));
+    }
+
+    #[test]
+    fn every_retained_dtc_derives_bounded_freeze_frame_work_without_spec_links() {
+        let mut result = DiagnosticResult::default();
+        result.standard_dtcs.push(DiagnosticDtc {
+            key: DiagnosticDtcKey {
+                code: "P0100".into(),
+                status: DiagnosticDtcStatus::Stored,
+                module: Some("ecm".into()),
+            },
+            origin: DiagnosticDtcOrigin::Standard,
+            description: None,
+            notes: None,
+            severity: None,
+            status_raw: None,
+            status_flags: Vec::new(),
+            raw: vec![0x01, 0x00],
+        });
+        // A duplicate DTC from a broadcast and addressed scan must be
+        // retained as evidence but must not make duplicate Mode-02 traffic.
+        result.standard_dtcs.push(result.standard_dtcs[0].clone());
+
+        let work = result.freeze_frame_work(None);
+        assert_eq!(work.len(), 1);
+        assert_eq!(work[0].dtc.code, "P0100");
+        assert_eq!(work[0].pids, DEFAULT_FREEZE_FRAME_PIDS);
+    }
+
     struct RecordingTransport {
         seen: Vec<DiagnosticRequest>,
         /// (request index → scripted result) for non-default responses.
@@ -824,6 +1232,33 @@ mod tests {
         assert_eq!(aborted.step_errors, 1);
         // Nothing past the transport loss was attempted.
         assert_eq!(transport.seen.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn mode05_execution_uses_the_session_owned_o2_monitoring_matrix() {
+        use obd2_core::adapter::mock::MockAdapter;
+
+        let mut session = Session::new(MockAdapter::new());
+        let mode = ModeState::Diagnostic {
+            phase: 3,
+            phase_total: 5,
+            step: 0,
+            total: 1,
+        };
+        let request = DiagnosticRequest {
+            phase: DiagnosticPhase::Mode05O2,
+            service: 0x05,
+            target: RequestTarget::Broadcast,
+            expansion: RequestExpansion::Static,
+        };
+
+        // MockAdapter answers only well-formed [TID, sensor] Mode-05
+        // requests.  A bare raw 05 would produce NoData here; Session's O2
+        // method performs the required request matrix and decodes it.
+        assert!(matches!(
+            execute_session_request(&mut session, &mode, request, &[]).await,
+            Ok(StepResult::Data(_))
+        ));
     }
 
     #[test]

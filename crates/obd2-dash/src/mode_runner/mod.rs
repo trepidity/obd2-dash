@@ -20,12 +20,16 @@ pub use capability::{
     default_probe_fingerprint, protocol_token, CapabilityKey, CapabilityKind, CapabilityOutcome,
     CapabilitySet,
 };
-pub use command::{reply_for, CommandReply, RunnerCommand};
+pub use command::{
+    control_channel, reply_for, CommandReply, ControlCommand, ControlInput, QueuedCommand,
+    RunnerCommand, RunnerControl, RunnerControlReceiver, CONTROL_CHANNEL_CAPACITY,
+};
 pub use diagnostic::{
-    capability_outcome, execute_requests, expand_dtc_requests, map_obd2_result, mode05_allowed,
-    phases as diagnostic_phases, request_plan, resolve_fuel, service_allowed, DiagnosticAborted,
-    DiagnosticExecution, DiagnosticPhase, DiagnosticRequest, DiagnosticTransport, FuelClass,
-    RequestExpansion, RequestTarget, ServiceGates, StepErrorKind, StepResult,
+    capability_outcome, execute_locked_active_test, execute_requests, expand_dtc_requests,
+    map_obd2_result, mode05_allowed, phases as diagnostic_phases, request_plan, resolve_fuel,
+    service_allowed, DiagnosticAborted, DiagnosticExecution, DiagnosticPhase, DiagnosticRequest,
+    DiagnosticTransport, FuelClass, LockedActiveTestExecution, RequestExpansion, RequestTarget,
+    ServiceGates, StepErrorKind, StepResult,
 };
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;

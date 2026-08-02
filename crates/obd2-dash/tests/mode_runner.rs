@@ -817,3 +817,120 @@ async fn runner_snapshot_preserves_generic_and_lly_signal_shapes() {
         CapabilityPersistence::Pending
     );
 }
+
+// ── DASH-0004 closure: runner-level control-plane contracts ───────────────
+
+use obd2_dash::mode_runner::{control_channel, ControlCommand};
+
+/// OWL invariant 8 at the runner level: a cancel submitted while a
+/// diagnostic request is in flight takes effect after that request
+/// completes, and no further request ever starts.
+#[tokio::test]
+async fn channel_cancel_is_observed_at_the_next_request_boundary() {
+    let connector = ScriptedConnector::new(VIN);
+    let script = connector.script.clone();
+    let (control, receiver) = control_channel();
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    runner.attach_control(receiver);
+
+    let baseline = script.requests().await.len();
+    let gate = script.gate().await;
+    let diagnostic_ack = control.submit(ControlCommand::RunDiagnostic);
+    let handle = tokio::spawn(async move {
+        let result = runner.run_once().await;
+        (runner, result)
+    });
+    assert_eq!(
+        diagnostic_ack.await.unwrap(),
+        obd2_dash::mode_runner::CommandReply::Accepted
+    );
+
+    // Wait until exactly one wire request is in flight behind the gate.
+    for _ in 0..100 {
+        if script.requests().await.len() == baseline + 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(script.requests().await.len(), baseline + 1);
+
+    let cancel_ack = control.submit(ControlCommand::CancelForeground);
+    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    gate.notify_waiters();
+
+    let (runner, result) = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+        .await
+        .expect(
+            "runner must finish after cancel — a hang means a request started past the boundary",
+        )
+        .unwrap();
+    result.unwrap();
+    assert_eq!(
+        cancel_ack.await.unwrap(),
+        obd2_dash::mode_runner::CommandReply::Accepted
+    );
+    assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+    assert_eq!(
+        script.requests().await.len(),
+        baseline + 1,
+        "the in-flight request completes; nothing starts after cancel"
+    );
+}
+
+/// Shutdown acknowledges only after the session is released; the ack path
+/// runs strictly after `shutdown()` completes its drop + flush sequence.
+#[tokio::test]
+async fn shutdown_command_acks_after_session_release() {
+    let connector = ScriptedConnector::new(VIN);
+    let (control, receiver) = control_channel();
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    runner.attach_control(receiver);
+
+    let ack = control.submit(ControlCommand::Shutdown);
+    runner.run_once().await.unwrap();
+    assert_eq!(
+        ack.await.unwrap(),
+        obd2_dash::mode_runner::CommandReply::Accepted
+    );
+    assert!(matches!(runner.snapshot().mode, ModeState::ShuttingDown));
+    assert!(
+        runner
+            .read_pid(obd2_core::protocol::pid::Pid(0x0C))
+            .await
+            .is_err(),
+        "the session must be released before the acknowledgement resolves"
+    );
+}
+
+/// A dropped control producer is orderly shutdown, never a reconnect
+/// trigger (spec §13: closed control channel is shutdown).
+#[tokio::test]
+async fn closed_control_channel_shuts_down_instead_of_reconnecting() {
+    let connector = ScriptedConnector::new(VIN);
+    let calls = connector.calls.clone();
+    let (control, receiver) = control_channel();
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    runner.attach_control(receiver);
+
+    drop(control);
+    runner.run_once().await.unwrap();
+
+    assert!(matches!(runner.snapshot().mode, ModeState::ShuttingDown));
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "channel close must never invoke the connector again"
+    );
+}

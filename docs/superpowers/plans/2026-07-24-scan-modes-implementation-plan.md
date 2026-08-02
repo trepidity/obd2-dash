@@ -101,6 +101,18 @@ enumeration. Executor's own honest list also open: bounded async command
 channel with oneshot acks, concurrent in-flight cancellation control,
 `RequestActiveTest` routing.
 
+**Slice 12 (TASK-DASH-0004 closure):** retained typed standard and profile
+DTC results in the runner snapshot, with decoded-code-correlated Mode-02
+freeze-frame work; Mode-05 now delegates its TID/sensor matrix to
+`Session::read_all_o2_monitoring`. The bounded capacity-8 control plane uses
+oneshot replies and a watch-backed view value, observes cancellation/shutdown
+only at request boundaries, and treats channel close as orderly shutdown.
+Locked active tests route through that control plane, write evidence in
+`spawn_blocking`, and remain structurally unable to issue a Session request.
+The runner's `run_once` is the single-session execution entry point for the
+control receiver. Verified with the full `obd2-dash` test suite, strict
+clippy, fmt, and architectural import gates.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
