@@ -761,6 +761,11 @@ machinery, Shutdown persistence flush + acknowledgement ordering,
 acknowledgements (the current surface is the synchronous state machine the
 channel will wrap in TASK-GUI-0001).
 
+**Slice 2:** added the diagnostic phase contract and fail-closed Mode-05
+eligibility gate. The five phases are stable and ordered; Mode-05 requires
+explicit gasoline, a non-CAN protocol, no cached unsupported outcome, and no
+LLY profile. Wire execution and fuel resolution from Session/DB remain next.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
 - **COMP:** `COMP-DASH-PROF`

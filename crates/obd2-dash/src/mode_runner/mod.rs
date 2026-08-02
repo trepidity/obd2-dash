@@ -6,6 +6,7 @@
 
 pub mod capability;
 pub mod command;
+pub mod diagnostic;
 pub mod lifecycle;
 pub mod persistence;
 pub mod scheduler;
@@ -20,6 +21,7 @@ pub use capability::{
     CapabilitySet,
 };
 pub use command::{reply_for, CommandReply, RunnerCommand};
+pub use diagnostic::{mode05_allowed, phases as diagnostic_phases, DiagnosticPhase, FuelClass};
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};
