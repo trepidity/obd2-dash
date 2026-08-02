@@ -48,6 +48,17 @@ REPLACES `request_plan`'s six DTC summary rows so broadcast is never
 double-scanned. Selected-profile DTC routing and GM Class-2 backoff remain
 wire-execution obligations.
 
+**Slice 8 (`b2e471b`, audited + fixed in `fc91f40`):** request-boundary
+diagnostic executor over `DiagnosticTransport`; cancellation observed only
+between completed requests; no in-flight future dropped. Audit fix: the
+executor aborted the whole bundle on ANY transport error — spec §11 records
+non-transport step failures (NO DATA, negative responses) and continues,
+aborting only on transport loss. The contract now returns `StepResult`
+(`Data` | `StepError`) with `Err` reserved for transport loss, and an abort
+carries partial progress (`DiagnosticAborted`) so the interrupted result is
+reportable per §13. Session binding must map `Obd2Error` accordingly:
+transport-class loss → `Err`; everything else → `StepError`.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
