@@ -144,6 +144,30 @@ pub fn request_plan(
     requests
 }
 
+/// Expand the DTC summary into the wire order used by the legacy scanner:
+/// broadcast stored/pending/permanent first, then the same trio module-major.
+pub fn expand_dtc_requests(modules: &[String]) -> Vec<DiagnosticRequest> {
+    let services = [0x03, 0x07, 0x0A];
+    let mut requests = services
+        .into_iter()
+        .map(|service| DiagnosticRequest {
+            phase: DiagnosticPhase::Dtc,
+            service,
+            target: RequestTarget::Broadcast,
+            expansion: RequestExpansion::Static,
+        })
+        .collect::<Vec<_>>();
+    for _module in modules {
+        requests.extend(services.into_iter().map(|service| DiagnosticRequest {
+            phase: DiagnosticPhase::Dtc,
+            service,
+            target: RequestTarget::DiscoveredModules,
+            expansion: RequestExpansion::Static,
+        }));
+    }
+    requests
+}
+
 impl DiagnosticPhase {
     pub const ORDER: [Self; 5] = [
         Self::Dtc,
@@ -369,5 +393,28 @@ mod tests {
         assert!(attempted
             .iter()
             .any(|request| request.phase == DiagnosticPhase::Readiness));
+    }
+
+    #[test]
+    fn dtc_expansion_is_broadcast_then_module_major() {
+        let requests = expand_dtc_requests(&["ecm".into(), "tcm".into()]);
+        let sequence: Vec<(u8, RequestTarget)> = requests
+            .iter()
+            .map(|request| (request.service, request.target))
+            .collect();
+        assert_eq!(
+            sequence,
+            vec![
+                (0x03, RequestTarget::Broadcast),
+                (0x07, RequestTarget::Broadcast),
+                (0x0A, RequestTarget::Broadcast),
+                (0x03, RequestTarget::DiscoveredModules),
+                (0x07, RequestTarget::DiscoveredModules),
+                (0x0A, RequestTarget::DiscoveredModules),
+                (0x03, RequestTarget::DiscoveredModules),
+                (0x07, RequestTarget::DiscoveredModules),
+                (0x0A, RequestTarget::DiscoveredModules),
+            ]
+        );
     }
 }
