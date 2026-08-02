@@ -25,9 +25,17 @@ only after the DTC phase); readiness/module-refresh sharing `service: 0x01`
 means the execution contract needs a richer request model than a bare
 service byte.
 
-**Slice 6:** each request now carries target scope and expansion semantics:
-DTC broadcast/module routing, per-DTC freeze-frame expansion, and explicit
-readiness/Mode-05/module-refresh ownership are represented in the plan.
+**Slice 6 (`b261340`, audited + fixed in `a232da0`):** requests carry
+target scope (Broadcast / DiscoveredModules) and expansion (Static /
+PerDtc). Audit fix: the DTC phase collapsed the scan matrix — stored (03)
+was broadcast-only and pending/permanent (07/0A) module-only, silently
+dropping per-module stored codes and broadcast pending/permanent. The plan
+now emits the full 3×2 matrix (broadcast S/P/P, then per-module S/P/P),
+matching spec §11 and the TUI's `scan_standard_dtcs`, pinned by an
+exact-sequence test. Wire execution must still add the selected-profile
+DTC path (ProfileRuntime, not a raw service byte) with GM Class-2 backoff,
+and iterate DiscoveredModules groups module-major to match legacy capture
+ordering.
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
