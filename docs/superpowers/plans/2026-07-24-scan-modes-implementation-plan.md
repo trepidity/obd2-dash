@@ -113,6 +113,22 @@ The runner's `run_once` is the single-session execution entry point for the
 control receiver. Verified with the full `obd2-dash` test suite, strict
 clippy, fmt, and architectural import gates.
 
+**Closure audit (2026-08-02): TASK-DASH-0004 CONFIRMED CLOSED.** All
+behaviors verified in code; the executor's channel-level tests were
+supplemented with three runner-level contracts the closure lacked:
+`channel_cancel_is_observed_at_the_next_request_boundary` (gated in-flight
+request; cancel takes effect after it completes, nothing starts after),
+`shutdown_command_acks_after_session_release`, and
+`closed_control_channel_shuts_down_instead_of_reconnecting` (connector
+never re-invoked). `CancelForeground` was verified to set the boundary
+flag rather than flipping the mode under an in-flight bundle (the slice-1
+behavior would have left the wire gate denying mid-bundle requests).
+Carried forward to TASK-GUI-0001 as explicit obligations: profile DTC
+evidence still uses `NullEvidenceSink` (the legacy GUI records evidence —
+wire a real sink before deleting `LiveBackend`); Mode-05 O2 values and
+readiness results are executed but not yet retained in the snapshot
+(legacy publishes both); GUI recording port per the earlier note.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
