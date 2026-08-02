@@ -783,9 +783,14 @@ spec ships `fuel_type: unknown` and gasoline vehicles have no embedded
 spec) / unrecognized, which resolves Unknown without consulting the DB.
 Vocabulary verified against shipped specs (lowercase `diesel`, `unknown`).
 
-**Slice 4:** added the diagnostic service gate: `03`, `07`, and `0A` are
-accepted only in accepted Diagnostic mode, while Mode-06 is permanently denied.
-Telemetry and all pre-command states are denied by construction.
+**Slice 4 (`dde3883`, audit hardened in `a133786`):** `service_allowed`
+accepts `03/07/0A` only in Diagnostic mode and permanently denies Mode-06.
+Audit note: the gate is a pure predicate — "denied by construction" holds
+only if every composer routes through it, so an architecture scan now fails
+the suite if any mode_runner file outside `diagnostic.rs` composes DTC
+service bytes. The gate covers DTC services only; phase execution must
+apply its own mode gating to Mode-02 freeze frames and Mode-05 (which
+`service_allowed` would deny even in Diagnostic mode if misrouted).
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
