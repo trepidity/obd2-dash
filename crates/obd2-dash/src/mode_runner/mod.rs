@@ -22,7 +22,8 @@ pub use capability::{
 };
 pub use command::{reply_for, CommandReply, RunnerCommand};
 pub use diagnostic::{
-    mode05_allowed, phases as diagnostic_phases, resolve_fuel, DiagnosticPhase, FuelClass,
+    mode05_allowed, phases as diagnostic_phases, resolve_fuel, service_allowed, DiagnosticPhase,
+    FuelClass,
 };
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;

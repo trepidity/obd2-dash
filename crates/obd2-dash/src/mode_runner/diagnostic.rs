@@ -1,3 +1,4 @@
+use super::snapshot::ModeState;
 use obd2_core::vehicle::Protocol;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +88,15 @@ pub fn mode05_allowed(
 
 pub fn phases() -> &'static [DiagnosticPhase; 5] {
     &DiagnosticPhase::ORDER
+}
+
+/// Gate diagnostic service IDs at the request boundary. Telemetry and every
+/// non-diagnostic foreground state are denied; Mode-06 is never permitted.
+pub fn service_allowed(mode: &ModeState, service: u8) -> bool {
+    if !matches!(mode, ModeState::Diagnostic { .. }) {
+        return false;
+    }
+    matches!(service, 0x03 | 0x07 | 0x0A)
 }
 
 #[cfg(test)]
@@ -186,5 +196,29 @@ mod tests {
         assert_eq!(resolve_fuel(None, Some("Other")), FuelClass::Other);
         assert_eq!(resolve_fuel(None, Some("unlisted")), FuelClass::Unknown);
         assert_eq!(resolve_fuel(None, None), FuelClass::Unknown);
+    }
+
+    #[test]
+    fn diagnostic_services_are_impossible_before_command_and_mode06_is_locked() {
+        assert!(!service_allowed(&ModeState::Telemetry, 0x03));
+        assert!(!service_allowed(&ModeState::Connecting, 0x07));
+        assert!(!service_allowed(
+            &ModeState::Diagnostic {
+                phase: 0,
+                phase_total: 5,
+                step: 0,
+                total: 0,
+            },
+            0x06
+        ));
+        assert!(service_allowed(
+            &ModeState::Diagnostic {
+                phase: 0,
+                phase_total: 5,
+                step: 0,
+                total: 0,
+            },
+            0x03
+        ));
     }
 }

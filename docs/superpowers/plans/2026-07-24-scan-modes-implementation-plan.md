@@ -783,6 +783,10 @@ spec ships `fuel_type: unknown` and gasoline vehicles have no embedded
 spec) / unrecognized, which resolves Unknown without consulting the DB.
 Vocabulary verified against shipped specs (lowercase `diesel`, `unknown`).
 
+**Slice 4:** added the diagnostic service gate: `03`, `07`, and `0A` are
+accepted only in accepted Diagnostic mode, while Mode-06 is permanently denied.
+Telemetry and all pre-command states are denied by construction.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
 - **COMP:** `COMP-DASH-PROF`
