@@ -638,10 +638,14 @@ where
         let gates = ServiceGates {
             cached_mode05_unsupported: self.service_is_unsupported(0x05),
             cached_readiness_unsupported: self.service_is_unsupported(0x01),
+            // Exact id: a substring test would also match unrelated
+            // profiles ("rally" contains "lly"), and the durable diesel
+            // guarantee is the fuel class — this flag is belt-and-suspenders
+            // for exactly one known profile.
             is_lly_profile: self
                 .context
                 .as_ref()
-                .is_some_and(|context| context.profile_id.contains("lly")),
+                .is_some_and(|context| context.profile_id == "gm.gmt800.lly.class2"),
         };
         let plan = request_plan(
             resolve_fuel(session_fuel.as_deref(), database_fuel.as_deref()),
@@ -712,7 +716,7 @@ where
                 execute_session_request(session, &self.snapshot.mode, request, &modules).await
             };
             match result {
-                Ok(result) => self.record_diagnostic_outcome(request, &result),
+                Ok(result) => self.record_diagnostic_outcome(request, &result, &modules),
                 Err(error) => {
                     self.session = None;
                     self.snapshot.mode = ModeState::Reconnecting {
@@ -751,7 +755,7 @@ where
                 Ok(result) => {
                     // Profile DTC services share phase one but own their
                     // routing inside ProfileRuntime.
-                    self.record_diagnostic_outcome(profile_dtc_outcome_request(), &result);
+                    self.record_diagnostic_outcome(profile_dtc_outcome_request(), &result, &[]);
                 }
                 Err(error) => {
                     self.session = None;
@@ -867,9 +871,23 @@ where
         )) == CapabilityOutcome::Unsupported
     }
 
-    fn record_diagnostic_outcome(&mut self, request: DiagnosticRequest, result: &StepResult) {
+    fn record_diagnostic_outcome(
+        &mut self,
+        request: DiagnosticRequest,
+        result: &StepResult,
+        modules: &[obd2_core::vehicle::ModuleId],
+    ) {
+        // Spec §8.1: module values are canonical module ids or the fixed
+        // sentinels — never session-local indices, which reorder between
+        // sessions and would attach cached outcomes to the wrong module.
         let module = match request.target {
-            RequestTarget::Module(index) => format!("module-{index}"),
+            RequestTarget::Module(index) => match modules.get(index) {
+                Some(module) => module.0.clone(),
+                None => {
+                    tracing::warn!("dropping diagnostic outcome for stale module index {index}");
+                    return;
+                }
+            },
             _ => "broadcast".to_string(),
         };
         let key = CapabilityKey::new(
