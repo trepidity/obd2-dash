@@ -60,6 +60,20 @@ pub enum DiagnosticPhase {
 pub struct DiagnosticRequest {
     pub phase: DiagnosticPhase,
     pub service: u8,
+    pub target: RequestTarget,
+    pub expansion: RequestExpansion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestTarget {
+    Broadcast,
+    DiscoveredModules,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequestExpansion {
+    Static,
+    PerDtc,
 }
 
 /// Service eligibility inputs for one diagnostic pass. Spec §11: readiness
@@ -82,24 +96,34 @@ pub fn request_plan(
         DiagnosticRequest {
             phase: DiagnosticPhase::Dtc,
             service: 0x03,
+            target: RequestTarget::Broadcast,
+            expansion: RequestExpansion::Static,
         },
         DiagnosticRequest {
             phase: DiagnosticPhase::Dtc,
             service: 0x07,
+            target: RequestTarget::DiscoveredModules,
+            expansion: RequestExpansion::Static,
         },
         DiagnosticRequest {
             phase: DiagnosticPhase::Dtc,
             service: 0x0A,
+            target: RequestTarget::DiscoveredModules,
+            expansion: RequestExpansion::Static,
         },
         DiagnosticRequest {
             phase: DiagnosticPhase::FreezeFrames,
             service: 0x02,
+            target: RequestTarget::Broadcast,
+            expansion: RequestExpansion::PerDtc,
         },
     ];
     if !gates.cached_readiness_unsupported {
         requests.push(DiagnosticRequest {
             phase: DiagnosticPhase::Readiness,
             service: 0x01,
+            target: RequestTarget::Broadcast,
+            expansion: RequestExpansion::Static,
         });
     }
     if mode05_allowed(
@@ -111,11 +135,15 @@ pub fn request_plan(
         requests.push(DiagnosticRequest {
             phase: DiagnosticPhase::Mode05O2,
             service: 0x05,
+            target: RequestTarget::Broadcast,
+            expansion: RequestExpansion::Static,
         });
     }
     requests.push(DiagnosticRequest {
         phase: DiagnosticPhase::ModuleRefresh,
         service: 0x01,
+        target: RequestTarget::DiscoveredModules,
+        expansion: RequestExpansion::Static,
     });
     requests
 }

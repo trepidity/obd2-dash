@@ -25,6 +25,10 @@ only after the DTC phase); readiness/module-refresh sharing `service: 0x01`
 means the execution contract needs a richer request model than a bare
 service byte.
 
+**Slice 6:** each request now carries target scope and expansion semantics:
+DTC broadcast/module routing, per-DTC freeze-frame expansion, and explicit
+readiness/Mode-05/module-refresh ownership are represented in the plan.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
