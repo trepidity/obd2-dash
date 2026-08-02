@@ -772,6 +772,9 @@ Wire execution and fuel resolution from Session/DB remain next; when the
 fuel resolver lands it must normalize only exact recognized labels
 (spec §11) — no substring or heuristic matching, unknown stays Unknown.
 
+**Slice 3:** strict fuel resolution now applies Session-spec precedence,
+exact-VIN database fallback, and `Unknown` for absent or unrecognized labels.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
 - **COMP:** `COMP-DASH-PROF`

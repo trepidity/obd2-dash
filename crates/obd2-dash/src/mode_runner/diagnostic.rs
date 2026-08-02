@@ -8,6 +8,25 @@ pub enum FuelClass {
     Unknown,
 }
 
+/// Resolve fuel using the approved precedence: embedded session identity,
+/// then exact-VIN database data, otherwise Unknown. Unrecognized labels never
+/// fall through to gasoline.
+pub fn resolve_fuel(session: Option<&str>, database: Option<&str>) -> FuelClass {
+    session
+        .and_then(normalize_fuel)
+        .or_else(|| database.and_then(normalize_fuel))
+        .unwrap_or(FuelClass::Unknown)
+}
+
+fn normalize_fuel(raw: &str) -> Option<FuelClass> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "gasoline" => Some(FuelClass::Gasoline),
+        "diesel" => Some(FuelClass::Diesel),
+        "other" => Some(FuelClass::Other),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticPhase {
     Dtc,
@@ -116,5 +135,26 @@ mod tests {
         ] {
             assert!(mode05_allowed(FuelClass::Gasoline, legacy, false, false));
         }
+    }
+
+    #[test]
+    fn fuel_resolution_is_exact_and_precedence_ordered() {
+        assert_eq!(
+            resolve_fuel(Some("Diesel"), Some("Gasoline")),
+            FuelClass::Diesel
+        );
+        assert_eq!(
+            resolve_fuel(Some("mild gasoline blend"), Some("Gasoline")),
+            FuelClass::Gasoline
+        );
+        assert_eq!(
+            resolve_fuel(Some("unlisted"), Some("Diesel")),
+            FuelClass::Diesel
+        );
+        assert_eq!(
+            resolve_fuel(Some("unlisted"), Some("unlisted")),
+            FuelClass::Unknown
+        );
+        assert_eq!(resolve_fuel(None, Some("Other")), FuelClass::Other);
     }
 }
