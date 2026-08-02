@@ -99,7 +99,22 @@ pub struct DiagnosticExecution {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepResult {
     Data(Vec<u8>),
-    StepError(String),
+    StepError { kind: StepErrorKind, detail: String },
+}
+
+/// Typed classification of a step failure, assigned from the TYPED core
+/// error in [`map_obd2_result`] — never recovered from display strings.
+/// (String matching against `Obd2Error` Display output silently fails:
+/// `NoData` renders as "no data (vehicle did not respond)" and negative
+/// responses render Debug-style with no spaces.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StepErrorKind {
+    /// Vehicle did not answer; prunable only after separated confirmation.
+    NoData,
+    /// Explicitly rejected: unsupported PID/service or request-out-of-range.
+    Unsupported,
+    /// Everything else (timeout, decode, stale): stays unverified.
+    Other,
 }
 
 /// A bundle aborted by transport loss. Partial progress is preserved so the
@@ -126,11 +141,29 @@ pub trait DiagnosticTransport {
 /// error taxonomy lists it separately from `transport`, and a single request
 /// can time out on a busy bus while the link is healthy.
 pub fn map_obd2_result(result: Result<Vec<u8>, Obd2Error>) -> anyhow::Result<StepResult> {
+    use obd2_core::error::NegativeResponse;
     match result {
         Ok(bytes) => Ok(StepResult::Data(bytes)),
         Err(Obd2Error::Transport(error)) => Err(anyhow::anyhow!("transport: {error}")),
         Err(Obd2Error::Io(error)) => Err(anyhow::Error::new(error).context("serial io")),
-        Err(error) => Ok(StepResult::StepError(error.to_string())),
+        Err(error) => {
+            let kind = match &error {
+                Obd2Error::NoData => StepErrorKind::NoData,
+                Obd2Error::UnsupportedPid { .. } => StepErrorKind::Unsupported,
+                Obd2Error::NegativeResponse {
+                    nrc:
+                        NegativeResponse::ServiceNotSupported
+                        | NegativeResponse::SubFunctionNotSupported
+                        | NegativeResponse::RequestOutOfRange,
+                    ..
+                } => StepErrorKind::Unsupported,
+                _ => StepErrorKind::Other,
+            };
+            Ok(StepResult::StepError {
+                kind,
+                detail: error.to_string(),
+            })
+        }
     }
 }
 
@@ -140,20 +173,24 @@ pub fn map_obd2_result(result: Result<Vec<u8>, Obd2Error>) -> anyhow::Result<Ste
 pub fn capability_outcome(step: &StepResult, prior_no_data: bool) -> CapabilityOutcome {
     match step {
         StepResult::Data(_) => CapabilityOutcome::Supported,
-        StepResult::StepError(error) if error.eq_ignore_ascii_case("no data") => {
+        StepResult::StepError {
+            kind: StepErrorKind::NoData,
+            ..
+        } => {
             if prior_no_data {
                 CapabilityOutcome::Unsupported
             } else {
                 CapabilityOutcome::Unverified
             }
         }
-        StepResult::StepError(error)
-            if error.to_ascii_lowercase().contains("unsupported")
-                || error.to_ascii_lowercase().contains("request out of range") =>
-        {
-            CapabilityOutcome::Unsupported
-        }
-        StepResult::StepError(_) => CapabilityOutcome::Unverified,
+        StepResult::StepError {
+            kind: StepErrorKind::Unsupported,
+            ..
+        } => CapabilityOutcome::Unsupported,
+        StepResult::StepError {
+            kind: StepErrorKind::Other,
+            ..
+        } => CapabilityOutcome::Unverified,
     }
 }
 
@@ -182,7 +219,7 @@ where
         }
         match transport.request(*request).await {
             Ok(StepResult::Data(_)) => completed += 1,
-            Ok(StepResult::StepError(_)) => {
+            Ok(StepResult::StepError { .. }) => {
                 completed += 1;
                 step_errors += 1;
             }
@@ -610,9 +647,13 @@ mod tests {
     async fn step_errors_continue_the_bundle() {
         let requests = expand_dtc_requests(&["ecm".into()]);
         let mut transport = RecordingTransport::recording();
-        transport
-            .script
-            .push((1, Ok(StepResult::StepError("NO DATA".into()))));
+        transport.script.push((
+            1,
+            Ok(StepResult::StepError {
+                kind: StepErrorKind::NoData,
+                detail: "NO DATA".into(),
+            }),
+        ));
         let result = execute_requests(&mut transport, &requests, || false)
             .await
             .unwrap();
@@ -626,9 +667,13 @@ mod tests {
     async fn transport_loss_aborts_with_partial_progress() {
         let requests = expand_dtc_requests(&["ecm".into()]);
         let mut transport = RecordingTransport::recording();
-        transport
-            .script
-            .push((0, Ok(StepResult::StepError("NO DATA".into()))));
+        transport.script.push((
+            0,
+            Ok(StepResult::StepError {
+                kind: StepErrorKind::NoData,
+                detail: "NO DATA".into(),
+            }),
+        ));
         transport
             .script
             .push((2, Err(anyhow::anyhow!("serial gone"))));
@@ -654,7 +699,10 @@ mod tests {
             },
         ] {
             assert!(
-                matches!(map_obd2_result(Err(nonfatal)), Ok(StepResult::StepError(_))),
+                matches!(
+                    map_obd2_result(Err(nonfatal)),
+                    Ok(StepResult::StepError { .. })
+                ),
                 "protocol failures must record and continue"
             );
         }
@@ -668,18 +716,39 @@ mod tests {
         assert!(map_obd2_result(Err(Obd2Error::Io(std::io::Error::other("unplugged")))).is_err());
     }
 
+    /// Classification must survive the REAL core error types end to end —
+    /// the prior string matcher passed its tests against invented strings
+    /// while every real `Obd2Error` fell through to Unverified.
     #[test]
     fn diagnostic_outcomes_prune_only_confirmed_unsupported_results() {
+        use obd2_core::error::NegativeResponse;
+        let through = |error: Obd2Error| map_obd2_result(Err(error)).unwrap();
+
+        let no_data = through(Obd2Error::NoData);
         assert_eq!(
-            capability_outcome(&StepResult::StepError("NO DATA".into()), false),
+            capability_outcome(&no_data, false),
             CapabilityOutcome::Unverified
         );
         assert_eq!(
-            capability_outcome(&StepResult::StepError("NO DATA".into()), true),
+            capability_outcome(&no_data, true),
             CapabilityOutcome::Unsupported
         );
         assert_eq!(
-            capability_outcome(&StepResult::StepError("timeout".into()), false),
+            capability_outcome(&through(Obd2Error::UnsupportedPid { pid: 0x23 }), false),
+            CapabilityOutcome::Unsupported
+        );
+        assert_eq!(
+            capability_outcome(
+                &through(Obd2Error::NegativeResponse {
+                    service: 0x03,
+                    nrc: NegativeResponse::ServiceNotSupported,
+                }),
+                false
+            ),
+            CapabilityOutcome::Unsupported
+        );
+        assert_eq!(
+            capability_outcome(&through(Obd2Error::Timeout), false),
             CapabilityOutcome::Unverified
         );
         assert_eq!(

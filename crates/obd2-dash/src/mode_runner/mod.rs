@@ -25,7 +25,7 @@ pub use diagnostic::{
     capability_outcome, execute_requests, expand_dtc_requests, map_obd2_result, mode05_allowed,
     phases as diagnostic_phases, request_plan, resolve_fuel, service_allowed, DiagnosticAborted,
     DiagnosticExecution, DiagnosticPhase, DiagnosticRequest, DiagnosticTransport, FuelClass,
-    RequestExpansion, RequestTarget, ServiceGates, StepResult,
+    RequestExpansion, RequestTarget, ServiceGates, StepErrorKind, StepResult,
 };
 pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
 pub use persistence::Persistence;
