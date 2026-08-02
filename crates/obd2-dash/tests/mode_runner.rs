@@ -132,7 +132,9 @@ async fn duplicate_foreground_command_returns_busy_without_queueing() {
 }
 
 #[tokio::test]
-async fn foreground_command_pauses_and_resumes_background_verifier() {
+async fn cancel_foreground_returns_to_telemetry() {
+    // NOTE: this is NOT the plan-named pause/resume contract — verifier
+    // pause machinery does not exist yet. It pins only the mode round-trip.
     let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
         Database::open_in_memory().unwrap(),
     );
@@ -147,6 +149,44 @@ async fn foreground_command_pauses_and_resumes_background_verifier() {
         CommandReply::Accepted
     );
     assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+}
+
+/// Telemetry must not execute in foreground modes (spec §11) or after
+/// Shutdown — a post-shutdown transport error would trigger reconnect
+/// against a deliberately released port.
+#[tokio::test]
+async fn poll_cycle_is_inert_outside_telemetry() {
+    let store = obd2_dash::mode_runner::SqliteCapabilityStore::from_database(
+        Database::open_in_memory().unwrap(),
+    );
+    let connector = ScriptedConnector::new(VIN);
+    let script = connector.script.clone();
+    let mut runner = ModeRunner::new(connector, store);
+    runner.connect().await.unwrap();
+    let requests_before = script.requests().await.len();
+
+    assert_eq!(
+        runner.command(RunnerCommand::RunDiagnostic),
+        CommandReply::Accepted
+    );
+    assert!(!runner.poll_cycle().await.unwrap());
+    assert_eq!(
+        runner.command(RunnerCommand::CancelForeground),
+        CommandReply::Accepted
+    );
+    assert_eq!(
+        runner.command(RunnerCommand::Shutdown),
+        CommandReply::Accepted
+    );
+    assert!(
+        !runner.poll_cycle().await.unwrap(),
+        "no reconnect-bait error"
+    );
+    assert_eq!(
+        script.requests().await.len(),
+        requests_before,
+        "no serial requests may occur in Diagnostic or ShuttingDown modes"
+    );
 }
 
 #[tokio::test]

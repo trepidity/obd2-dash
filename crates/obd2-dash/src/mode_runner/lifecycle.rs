@@ -551,6 +551,12 @@ where
     /// due this cycle is polled; verifier work runs only through
     /// [`Verifier::next`] so retry backoff and NO DATA separation hold.
     pub async fn poll_cycle(&mut self) -> Result<bool> {
+        // Telemetry pauses for foreground modes (spec §11) and must never run
+        // after Shutdown — a session-gone transport error here would send a
+        // driver loop into reconnect against an intentionally released port.
+        if !matches!(self.snapshot.mode, ModeState::Telemetry) {
+            return Ok(false);
+        }
         self.cycle = self.cycle.saturating_add(1);
         let plan = self
             .scheduler
