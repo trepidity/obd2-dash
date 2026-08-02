@@ -59,6 +59,16 @@ carries partial progress (`DiagnosticAborted`) so the interrupted result is
 reportable per §13. Session binding must map `Obd2Error` accordingly:
 transport-class loss → `Err`; everything else → `StepError`.
 
+**Slice 9 (`a14867b`, audited + fixed in the follow-up commit):**
+`map_obd2_result` binds core errors to the executor contract. Audit fix:
+only `Obd2Error::Transport` counted as link loss — `Obd2Error::Io` (how a
+yanked USB adapter actually surfaces through mio-serial) was recorded as a
+step error, grinding the bundle through remaining requests at full timeout
+instead of aborting to reconnect. `Io` now aborts alongside `Transport`;
+`Timeout` deliberately remains a step error per the §8.2 error taxonomy.
+Remaining: wire requests to Session/ProfileRuntime operations (including
+GM Class-2 backoff) and persist diagnostic outcomes.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
