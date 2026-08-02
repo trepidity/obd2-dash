@@ -8,22 +8,41 @@ pub enum FuelClass {
     Unknown,
 }
 
-/// Resolve fuel using the approved precedence: embedded session identity,
-/// then exact-VIN database data, otherwise Unknown. Unrecognized labels never
-/// fall through to gasoline.
-pub fn resolve_fuel(session: Option<&str>, database: Option<&str>) -> FuelClass {
-    session
-        .and_then(normalize_fuel)
-        .or_else(|| database.and_then(normalize_fuel))
-        .unwrap_or(FuelClass::Unknown)
+/// A raw fuel label is one of three things: a recognized class, an explicit
+/// "no claim" (the embedded generic spec ships `fuel_type: unknown`, and a
+/// blank field means the same), or an unrecognized claim — a vocabulary gap.
+enum FuelLabel {
+    Class(FuelClass),
+    Absent,
+    Unrecognized,
 }
 
-fn normalize_fuel(raw: &str) -> Option<FuelClass> {
+/// Resolve fuel using the approved precedence: embedded session identity,
+/// then exact-VIN database data, otherwise Unknown.
+///
+/// Precedence is by SOURCE, not by value: if the curated embedded spec makes
+/// a claim we cannot parse, the answer is Unknown — the cached NHTSA row is
+/// never consulted to overrule the authoritative source. Only an explicit
+/// "unknown"/blank sentinel (spec makes no claim) falls through to the
+/// database. Unrecognized labels never resolve to gasoline.
+pub fn resolve_fuel(session: Option<&str>, database: Option<&str>) -> FuelClass {
+    match session.map(classify_fuel_label) {
+        Some(FuelLabel::Class(class)) => class,
+        Some(FuelLabel::Unrecognized) => FuelClass::Unknown,
+        Some(FuelLabel::Absent) | None => match database.map(classify_fuel_label) {
+            Some(FuelLabel::Class(class)) => class,
+            _ => FuelClass::Unknown,
+        },
+    }
+}
+
+fn classify_fuel_label(raw: &str) -> FuelLabel {
     match raw.trim().to_ascii_lowercase().as_str() {
-        "gasoline" => Some(FuelClass::Gasoline),
-        "diesel" => Some(FuelClass::Diesel),
-        "other" => Some(FuelClass::Other),
-        _ => None,
+        "gasoline" => FuelLabel::Class(FuelClass::Gasoline),
+        "diesel" => FuelLabel::Class(FuelClass::Diesel),
+        "other" => FuelLabel::Class(FuelClass::Other),
+        "" | "unknown" => FuelLabel::Absent,
+        _ => FuelLabel::Unrecognized,
     }
 }
 
@@ -139,22 +158,33 @@ mod tests {
 
     #[test]
     fn fuel_resolution_is_exact_and_precedence_ordered() {
+        // The recognized session claim always wins.
         assert_eq!(
             resolve_fuel(Some("Diesel"), Some("Gasoline")),
             FuelClass::Diesel
         );
+        // An unparseable session CLAIM resolves Unknown — the cached NHTSA
+        // row never overrules the curated spec (no value shopping).
         assert_eq!(
             resolve_fuel(Some("mild gasoline blend"), Some("Gasoline")),
-            FuelClass::Gasoline
-        );
-        assert_eq!(
-            resolve_fuel(Some("unlisted"), Some("Diesel")),
-            FuelClass::Diesel
-        );
-        assert_eq!(
-            resolve_fuel(Some("unlisted"), Some("unlisted")),
             FuelClass::Unknown
         );
+        assert_eq!(
+            resolve_fuel(Some("bio-diesel b20"), Some("Gasoline")),
+            FuelClass::Unknown
+        );
+        // The embedded generic spec ships fuel_type: unknown — an explicit
+        // "no claim" that falls through to the database, like a blank field.
+        assert_eq!(
+            resolve_fuel(Some("unknown"), Some("Gasoline")),
+            FuelClass::Gasoline
+        );
+        assert_eq!(resolve_fuel(Some("  "), Some("Diesel")), FuelClass::Diesel);
+        // Shipped embedded specs use lowercase labels.
+        assert_eq!(resolve_fuel(Some("diesel"), None), FuelClass::Diesel);
+        // Absent session falls through; unrecognized database stays Unknown.
         assert_eq!(resolve_fuel(None, Some("Other")), FuelClass::Other);
+        assert_eq!(resolve_fuel(None, Some("unlisted")), FuelClass::Unknown);
+        assert_eq!(resolve_fuel(None, None), FuelClass::Unknown);
     }
 }
