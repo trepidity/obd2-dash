@@ -761,10 +761,16 @@ machinery, Shutdown persistence flush + acknowledgement ordering,
 acknowledgements (the current surface is the synchronous state machine the
 channel will wrap in TASK-GUI-0001).
 
-**Slice 2:** added the diagnostic phase contract and fail-closed Mode-05
-eligibility gate. The five phases are stable and ordered; Mode-05 requires
-explicit gasoline, a non-CAN protocol, no cached unsupported outcome, and no
-LLY profile. Wire execution and fuel resolution from Session/DB remain next.
+**Slice 2 (`988f2fa`, audited + fixed in `28196af`):** diagnostic phase
+contract and Mode-05 eligibility gate. Five stable ordered phases; Mode-05
+requires explicit gasoline, a positively identified legacy protocol, no
+cached unsupported outcome, and no LLY profile. Audit fix: the protocol
+check was a CAN deny-list — `Protocol::Auto` (unresolved) and any future
+non-exhaustive core variant passed it; it is now an allow-list
+(J1850 VPW/PWM, ISO 9141, KWP2000) so unknown protocols deny by default.
+Wire execution and fuel resolution from Session/DB remain next; when the
+fuel resolver lands it must normalize only exact recognized labels
+(spec §11) — no substring or heuristic matching, unknown stays Unknown.
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
