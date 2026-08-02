@@ -62,11 +62,21 @@ pub struct DiagnosticRequest {
     pub service: u8,
 }
 
+/// Service eligibility inputs for one diagnostic pass. Spec §11: readiness
+/// is skipped only when its cached service row is already `unsupported`
+/// (`unverified` is attempted — the operator explicitly asked); Mode-05 has
+/// its own fail-closed gate.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ServiceGates {
+    pub cached_mode05_unsupported: bool,
+    pub cached_readiness_unsupported: bool,
+    pub is_lly_profile: bool,
+}
+
 pub fn request_plan(
     fuel: FuelClass,
     protocol: Protocol,
-    cached_mode05_unsupported: bool,
-    is_lly_profile: bool,
+    gates: ServiceGates,
 ) -> Vec<DiagnosticRequest> {
     let mut requests = vec![
         DiagnosticRequest {
@@ -85,12 +95,19 @@ pub fn request_plan(
             phase: DiagnosticPhase::FreezeFrames,
             service: 0x02,
         },
-        DiagnosticRequest {
+    ];
+    if !gates.cached_readiness_unsupported {
+        requests.push(DiagnosticRequest {
             phase: DiagnosticPhase::Readiness,
             service: 0x01,
-        },
-    ];
-    if mode05_allowed(fuel, protocol, cached_mode05_unsupported, is_lly_profile) {
+        });
+    }
+    if mode05_allowed(
+        fuel,
+        protocol,
+        gates.cached_mode05_unsupported,
+        gates.is_lly_profile,
+    ) {
         requests.push(DiagnosticRequest {
             phase: DiagnosticPhase::Mode05O2,
             service: 0x05,
@@ -274,8 +291,7 @@ mod tests {
         let plan = request_plan(
             FuelClass::Gasoline,
             Protocol::Iso9141(KLineInit::SlowInit),
-            false,
-            false,
+            ServiceGates::default(),
         );
         assert_eq!(plan[0].service, 0x03);
         assert_eq!(plan[1].service, 0x07);
@@ -286,9 +302,33 @@ mod tests {
         let diesel = request_plan(
             FuelClass::Diesel,
             Protocol::Iso9141(KLineInit::SlowInit),
-            false,
-            false,
+            ServiceGates::default(),
         );
         assert!(diesel.iter().all(|request| request.service != 0x05));
+    }
+
+    #[test]
+    fn readiness_skips_only_when_cached_unsupported() {
+        let skipped = request_plan(
+            FuelClass::Diesel,
+            Protocol::J1850Vpw,
+            ServiceGates {
+                cached_readiness_unsupported: true,
+                ..ServiceGates::default()
+            },
+        );
+        assert!(skipped
+            .iter()
+            .all(|request| request.phase != DiagnosticPhase::Readiness));
+        // Unverified (i.e. not cached-unsupported) is attempted: the
+        // operator explicitly requested diagnostics.
+        let attempted = request_plan(
+            FuelClass::Diesel,
+            Protocol::J1850Vpw,
+            ServiceGates::default(),
+        );
+        assert!(attempted
+            .iter()
+            .any(|request| request.phase == DiagnosticPhase::Readiness));
     }
 }
