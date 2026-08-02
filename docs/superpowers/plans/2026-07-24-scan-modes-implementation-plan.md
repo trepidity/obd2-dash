@@ -129,6 +129,24 @@ wire a real sink before deleting `LiveBackend`); Mode-05 O2 values and
 readiness results are executed but not yet retained in the snapshot
 (legacy publishes both); GUI recording port per the earlier note.
 
+**TASK-GUI-0001 (`06387e2`): audit-confirmed CLOSED.** `LiveBackend` and
+all GUI serial I/O deleted (−3,814 lines); Session/adapter/transport types
+exist only in `serial_connector.rs`, pinned by the architecture test (OWL
+invariant 9). Tauri commands are snapshot reads + bounded-control acks.
+Carried obligations resolved: profile DTC evidence flows through a
+collecting sink into the snapshot and the recording worker persists it;
+recording runs on a dedicated OS thread fed per published runner snapshot
+via a non-blocking bridge (drop-on-saturation); frontend polls with
+completion-scheduled 500 ms timeouts, gated off in replay. Audit notes:
+(1) the executor's verification omitted Playwright — the suite requires a
+running vite dev server and passes 4/4 with one; EV-0001 must script that
+prerequisite; (2) a mid-recording write failure still surfaces only at
+Stop (error ack), not live — GUI-0002 owns showing recording state
+truthfully; (3) O2/readiness were never GUI-displayed (TUI-only), so no
+GUI parity loss — runner retention stays a Phase-2 TUI item; (4) the
+`LiveBackend`-name scan test is a deletion candidate at EV-0001 close per
+the test-selection standard (the import scan already guards the harm).
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
