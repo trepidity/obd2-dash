@@ -2,6 +2,7 @@ use super::snapshot::ModeState;
 use async_trait::async_trait;
 use obd2_core::error::Obd2Error;
 use obd2_core::vehicle::Protocol;
+use obd2_db::models::CapabilityOutcome;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FuelClass {
@@ -130,6 +131,29 @@ pub fn map_obd2_result(result: Result<Vec<u8>, Obd2Error>) -> anyhow::Result<Ste
         Err(Obd2Error::Transport(error)) => Err(anyhow::anyhow!("transport: {error}")),
         Err(Obd2Error::Io(error)) => Err(anyhow::Error::new(error).context("serial io")),
         Err(error) => Ok(StepResult::StepError(error.to_string())),
+    }
+}
+
+/// Convert a completed diagnostic service result into the persisted capability
+/// state. A bare no-data response is provisional; only a separated second
+/// no-data confirmation is prunable as Unsupported.
+pub fn capability_outcome(step: &StepResult, prior_no_data: bool) -> CapabilityOutcome {
+    match step {
+        StepResult::Data(_) => CapabilityOutcome::Supported,
+        StepResult::StepError(error) if error.eq_ignore_ascii_case("no data") => {
+            if prior_no_data {
+                CapabilityOutcome::Unsupported
+            } else {
+                CapabilityOutcome::Unverified
+            }
+        }
+        StepResult::StepError(error)
+            if error.to_ascii_lowercase().contains("unsupported")
+                || error.to_ascii_lowercase().contains("request out of range") =>
+        {
+            CapabilityOutcome::Unsupported
+        }
+        StepResult::StepError(_) => CapabilityOutcome::Unverified,
     }
 }
 
@@ -642,5 +666,25 @@ mod tests {
         // so the runner reconnects instead of grinding through timeouts.
         assert!(map_obd2_result(Err(Obd2Error::Transport("gone".into()))).is_err());
         assert!(map_obd2_result(Err(Obd2Error::Io(std::io::Error::other("unplugged")))).is_err());
+    }
+
+    #[test]
+    fn diagnostic_outcomes_prune_only_confirmed_unsupported_results() {
+        assert_eq!(
+            capability_outcome(&StepResult::StepError("NO DATA".into()), false),
+            CapabilityOutcome::Unverified
+        );
+        assert_eq!(
+            capability_outcome(&StepResult::StepError("NO DATA".into()), true),
+            CapabilityOutcome::Unsupported
+        );
+        assert_eq!(
+            capability_outcome(&StepResult::StepError("timeout".into()), false),
+            CapabilityOutcome::Unverified
+        );
+        assert_eq!(
+            capability_outcome(&StepResult::Data(Vec::new()), false),
+            CapabilityOutcome::Supported
+        );
     }
 }
