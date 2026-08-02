@@ -117,10 +117,18 @@ pub trait DiagnosticTransport {
     async fn request(&mut self, request: DiagnosticRequest) -> anyhow::Result<StepResult>;
 }
 
+/// Classify a core result at the diagnostic transport boundary. Bundle-fatal
+/// (`Err`) means the serial link itself is gone: `Transport` and `Io` (a
+/// yanked USB adapter surfaces as an io error — treating it as a step error
+/// would grind through every remaining request at full timeout instead of
+/// reconnecting). `Timeout` stays a recorded step error: the spec's §8.2
+/// error taxonomy lists it separately from `transport`, and a single request
+/// can time out on a busy bus while the link is healthy.
 pub fn map_obd2_result(result: Result<Vec<u8>, Obd2Error>) -> anyhow::Result<StepResult> {
     match result {
         Ok(bytes) => Ok(StepResult::Data(bytes)),
-        Err(Obd2Error::Transport(error)) => Err(anyhow::anyhow!(error.to_string())),
+        Err(Obd2Error::Transport(error)) => Err(anyhow::anyhow!("transport: {error}")),
+        Err(Obd2Error::Io(error)) => Err(anyhow::Error::new(error).context("serial io")),
         Err(error) => Ok(StepResult::StepError(error.to_string())),
     }
 }
@@ -611,9 +619,28 @@ mod tests {
 
     #[test]
     fn core_mapping_keeps_protocol_failures_nonfatal() {
-        assert!(matches!(
-            map_obd2_result(Err(Obd2Error::NoData)),
-            Ok(StepResult::StepError(_))
-        ));
+        use obd2_core::error::NegativeResponse;
+        for nonfatal in [
+            Obd2Error::NoData,
+            Obd2Error::Timeout,
+            Obd2Error::ParseError("bad payload".into()),
+            Obd2Error::NegativeResponse {
+                service: 0x03,
+                nrc: NegativeResponse::ServiceNotSupported,
+            },
+        ] {
+            assert!(
+                matches!(map_obd2_result(Err(nonfatal)), Ok(StepResult::StepError(_))),
+                "protocol failures must record and continue"
+            );
+        }
+    }
+
+    #[test]
+    fn core_mapping_treats_link_loss_as_bundle_fatal() {
+        // A yanked USB adapter surfaces as Io; both link classes must abort
+        // so the runner reconnects instead of grinding through timeouts.
+        assert!(map_obd2_result(Err(Obd2Error::Transport("gone".into()))).is_err());
+        assert!(map_obd2_result(Err(Obd2Error::Io(std::io::Error::other("unplugged")))).is_err());
     }
 }
