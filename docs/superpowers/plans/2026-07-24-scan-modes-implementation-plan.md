@@ -772,8 +772,16 @@ Wire execution and fuel resolution from Session/DB remain next; when the
 fuel resolver lands it must normalize only exact recognized labels
 (spec §11) — no substring or heuristic matching, unknown stays Unknown.
 
-**Slice 3:** strict fuel resolution now applies Session-spec precedence,
-exact-VIN database fallback, and `Unknown` for absent or unrecognized labels.
+**Slice 3 (`179fa49`, audited + fixed in `f136d0d`):** strict fuel
+resolution with Session-spec precedence and exact-VIN database fallback.
+Audit fix: precedence is by source, not value — a present-but-unparseable
+session claim resolved via the DB, letting a cached NHTSA row overrule the
+curated spec (a hypothetical spec "bio-diesel b20" + DB "Gasoline" enabled
+Mode-05 on a diesel). Labels now classify recognized / explicit-no-claim
+("unknown"/blank, which must keep falling through — the generic embedded
+spec ships `fuel_type: unknown` and gasoline vehicles have no embedded
+spec) / unrecognized, which resolves Unknown without consulting the DB.
+Vocabulary verified against shipped specs (lowercase `diesel`, `unknown`).
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
