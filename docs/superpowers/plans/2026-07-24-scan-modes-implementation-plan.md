@@ -37,6 +37,17 @@ DTC path (ProfileRuntime, not a raw service byte) with GM Class-2 backoff,
 and iterate DiscoveredModules groups module-major to match legacy capture
 ordering.
 
+**Slice 7 (`a9de1c8`, audited + fixed in `fa6928e`):** DTC wire-order
+expansion (broadcast trio, then module-major trios). Audit fix: the
+expansion discarded the module binding — N modules produced N
+indistinguishable `DiscoveredModules` triples an executor could count but
+never address — and ordering was whatever the caller passed. Targets now
+carry `Module(index)` into the caller's slice, emitted in id-sorted order
+(matching `dtc_scan_modules`), and `expand_dtc_requests` documents that it
+REPLACES `request_plan`'s six DTC summary rows so broadcast is never
+double-scanned. Selected-profile DTC routing and GM Class-2 backoff remain
+wire-execution obligations.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
