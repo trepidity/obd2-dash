@@ -147,6 +147,19 @@ GUI parity loss — runner retention stays a Phase-2 TUI item; (4) the
 `LiveBackend`-name scan test is a deletion candidate at EV-0001 close per
 the test-selection standard (the import scan already guards the harm).
 
+**TASK-GUI-0002 (`760e995`): audit-confirmed CLOSED.** Completion-scheduled
+500 ms polling with a StrictMode-safe zero-delay start (the dev
+double-effect cleans up before IPC fires, preserving single in-flight);
+duplicate foreground commands guarded through the ack-to-snapshot latency
+window via an in-flight ref plus `foregroundPending`, cleared on mode
+transitions and rejections; conditional Cancel; Diagnostics as an
+always-available tab; replay freezes live polling (exact call-count
+assertion) and resumes on exit. Seven Playwright tests pass against the
+mocked Tauri IPC boundary — cadence window, delayed-response non-overlap,
+one-command dedup, cancel emission, latest-view, replay pause/resume —
+all seam-level, spec-named, and mutation-falsifiable. No Rust changes.
+Remaining: TASK-EV-0001 only.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
