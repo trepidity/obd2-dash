@@ -745,11 +745,21 @@ startup performs no post-initialization capability mask walk.
 
 ## TASK-DASH-0004: Add bounded foreground commands and diagnostic bundle
 
-**Slice 1:** added the transport-independent bounded command contract and
-mode-table enforcement (`RunDiagnostic`, `RescanVehicle`, `CancelForeground`,
-`Shutdown`). Rejected commands are not retained, accepted commands publish
-their foreground mode transition, and cancellation returns to telemetry. The
-diagnostic bundle and staged rescan executor remain outstanding.
+**Slice 1 (`3d3802f`, audited + fixed in `d95a07e`):** transport-independent
+bounded command contract and mode-table enforcement (`RunDiagnostic`,
+`RescanVehicle`, `CancelForeground`, `Shutdown`); mode table verified
+faithful to the spec. Rejected commands are not retained, accepted commands
+publish their transition, cancellation returns to telemetry. Audit fixes:
+`poll_cycle` now refuses to run outside Telemetry (it previously kept
+polling during Diagnostic and would reconnect after Shutdown via the
+session-gone transport error); the vacuous pause/resume test was renamed to
+what it asserts (`cancel_foreground_returns_to_telemetry`) — the plan-named
+verifier pause/resume contract remains open. Still outstanding beyond the
+diagnostic bundle and staged rescan executor: verifier pause/resume
+machinery, Shutdown persistence flush + acknowledgement ordering,
+`RequestActiveTest` routing, and the async command channel with oneshot
+acknowledgements (the current surface is the synchronous state machine the
+channel will wrap in TASK-GUI-0001).
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
