@@ -56,6 +56,53 @@ pub enum DiagnosticPhase {
     ModuleRefresh,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiagnosticRequest {
+    pub phase: DiagnosticPhase,
+    pub service: u8,
+}
+
+pub fn request_plan(
+    fuel: FuelClass,
+    protocol: Protocol,
+    cached_mode05_unsupported: bool,
+    is_lly_profile: bool,
+) -> Vec<DiagnosticRequest> {
+    let mut requests = vec![
+        DiagnosticRequest {
+            phase: DiagnosticPhase::Dtc,
+            service: 0x03,
+        },
+        DiagnosticRequest {
+            phase: DiagnosticPhase::Dtc,
+            service: 0x07,
+        },
+        DiagnosticRequest {
+            phase: DiagnosticPhase::Dtc,
+            service: 0x0A,
+        },
+        DiagnosticRequest {
+            phase: DiagnosticPhase::FreezeFrames,
+            service: 0x02,
+        },
+        DiagnosticRequest {
+            phase: DiagnosticPhase::Readiness,
+            service: 0x01,
+        },
+    ];
+    if mode05_allowed(fuel, protocol, cached_mode05_unsupported, is_lly_profile) {
+        requests.push(DiagnosticRequest {
+            phase: DiagnosticPhase::Mode05O2,
+            service: 0x05,
+        });
+    }
+    requests.push(DiagnosticRequest {
+        phase: DiagnosticPhase::ModuleRefresh,
+        service: 0x01,
+    });
+    requests
+}
+
 impl DiagnosticPhase {
     pub const ORDER: [Self; 5] = [
         Self::Dtc,
@@ -220,5 +267,28 @@ mod tests {
             },
             0x03
         ));
+    }
+
+    #[test]
+    fn request_plan_preserves_phase_order_and_excludes_mode06() {
+        let plan = request_plan(
+            FuelClass::Gasoline,
+            Protocol::Iso9141(KLineInit::SlowInit),
+            false,
+            false,
+        );
+        assert_eq!(plan[0].service, 0x03);
+        assert_eq!(plan[1].service, 0x07);
+        assert_eq!(plan[2].service, 0x0A);
+        assert_eq!(plan[3].service, 0x02);
+        assert!(plan.iter().any(|request| request.service == 0x05));
+        assert!(plan.iter().all(|request| request.service != 0x06));
+        let diesel = request_plan(
+            FuelClass::Diesel,
+            Protocol::Iso9141(KLineInit::SlowInit),
+            false,
+            false,
+        );
+        assert!(diesel.iter().all(|request| request.service != 0x05));
     }
 }

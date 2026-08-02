@@ -12,6 +12,11 @@ atomic per-vehicle capability persistence.
 
 **Traceability:**
 
+**Slice 5:** added the ordered diagnostic request plan. DTC services, Mode-02
+freeze frames, readiness, conditional Mode-05, and module refresh are explicit
+phase-owned requests; Mode-06 is absent from the plan and Mode-05 remains
+fuel/protocol gated. Session I/O execution remains the next step.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
