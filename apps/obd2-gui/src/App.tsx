@@ -44,6 +44,7 @@ type CapabilityTabId = `cap:${string}`;
 type TabId = UtilityTabId | CapabilityTabId;
 
 type RecordingKind = "structured" | "raw" | "compressed" | "unknown";
+type RunnerCommandReply = "accepted" | "busy" | "not_ready" | "not_running" | "closed";
 
 interface DiagnosticServiceSnapshot {
   key: string;
@@ -218,7 +219,7 @@ function initialSnapshot(): DiagnosticSnapshot {
   return {
     ...fallbackSnapshot,
     connection: "connecting live",
-    voltage: 0,
+    voltage: null,
     rpm: 0,
     speed_mph: 0,
     alerts: ["Opening live serial session"],
@@ -230,6 +231,10 @@ function initialSnapshot(): DiagnosticSnapshot {
 function formatSigned(value: number, digits = 1): string {
   const formatted = value.toFixed(digits);
   return value > 0 ? `+${formatted}` : formatted;
+}
+
+function formatAdapterVoltage(voltage: number | null): string {
+  return voltage == null ? "unavailable" : `${voltage.toFixed(1)} V`;
 }
 
 function psiToKpa(psi: number): number {
@@ -602,8 +607,8 @@ function Toolbar({
   replayRunning: boolean;
   replayPaused: boolean;
   replayError: string | null;
-  onStartRecording: () => void;
-  onStopRecording: () => void;
+  onStartRecording: () => void | Promise<void>;
+  onStopRecording: () => void | Promise<void>;
   openRecordingFile: (file: File) => void;
   openRecordingPath: (path: string) => void;
   setReplayRunning: (running: boolean) => void;
@@ -1009,8 +1014,8 @@ function StatusStrip({
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
-        <div className="text-[11px] text-zinc-400">Voltage</div>
-        <div className="mt-1 text-lg font-semibold text-zinc-100">{snapshot.voltage.toFixed(1)} V</div>
+        <div className="text-[11px] text-zinc-400">Adapter voltage</div>
+        <div className="mt-1 text-lg font-semibold text-zinc-100">{formatAdapterVoltage(snapshot.voltage)}</div>
       </div>
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
         <div className="text-[11px] text-zinc-400">Engine RPM</div>
@@ -1196,18 +1201,72 @@ function DiagnosticServicesPanel({ services }: { services: DiagnosticServiceSnap
   );
 }
 
-function DiagnosticsView({ snapshot }: { snapshot: DiagnosticSnapshot }) {
+function DiagnosticsView({
+  snapshot,
+  commandStatus,
+  foregroundPending,
+  onRunDiagnostic,
+  onRescanVehicle,
+  onCancelForeground,
+}: {
+  snapshot: DiagnosticSnapshot;
+  commandStatus: string | null;
+  foregroundPending: boolean;
+  onRunDiagnostic: () => void;
+  onRescanVehicle: () => void;
+  onCancelForeground: () => void;
+}) {
   const services = capabilitySnapshot(snapshot).diagnostic_services ?? [];
+  const foregroundActive =
+    snapshot.mode.state === "diagnostic" ||
+    (snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan") ||
+    foregroundPending;
+  const canCancel = foregroundActive;
+  const progress =
+    snapshot.mode.state === "diagnostic"
+      ? `Phase ${snapshot.mode.phase}/${snapshot.mode.phase_total}; request ${snapshot.mode.step}/${snapshot.mode.total}`
+      : snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan"
+        ? `Rescan ${snapshot.mode.step}/${snapshot.mode.total}`
+        : null;
   return (
     <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
       <div className="flex flex-col gap-3">
-        <DtcPanel dtcs={snapshot.dtcs} />
+        <DtcPanel dtcs={snapshot.dtcs} scanned={snapshot.dtc_scan_complete ?? true} />
         <Panel title="Diagnostic status" icon={<ShieldAlert size={14} />}>
           <div className="space-y-3 text-sm">
             <SettingRow label="MIL" value={snapshot.statuses.find((item) => item.label === "MIL")?.value ?? "--"} />
-            <SettingRow label="DTC count" value={snapshot.dtcs.length.toString()} />
+            <SettingRow label="DTC count" value={(snapshot.dtc_scan_complete ?? true) ? snapshot.dtcs.length.toString() : "not scanned"} />
             <SettingRow label="Modules" value={snapshot.modules.length.toString()} />
           </div>
+          <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-800 pt-3">
+            <button
+              className="inline-flex h-8 items-center rounded-md border border-cyan-500/40 bg-cyan-500/10 px-3 text-xs font-semibold text-cyan-100 hover:border-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={foregroundActive}
+              onClick={onRunDiagnostic}
+              type="button"
+            >
+              Run diagnostic
+            </button>
+            <button
+              className="inline-flex h-8 items-center rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={foregroundActive}
+              onClick={onRescanVehicle}
+              type="button"
+            >
+              Rescan vehicle
+            </button>
+            {canCancel ? (
+              <button
+                className="inline-flex h-8 items-center rounded-md border border-amber-500/40 bg-amber-500/10 px-3 text-xs font-semibold text-amber-100 hover:border-amber-400"
+                onClick={onCancelForeground}
+                type="button"
+              >
+                Cancel scan
+              </button>
+            ) : null}
+          </div>
+          {progress ? <div className="mt-3 text-xs text-cyan-200">{progress}</div> : null}
+          {commandStatus ? <div className="mt-3 text-xs text-zinc-400">{commandStatus}</div> : null}
         </Panel>
       </div>
       <div className="flex min-w-0 flex-col gap-3">
@@ -1483,7 +1542,7 @@ function CapabilityOverviewView({ snapshot, unitMode }: { snapshot: DiagnosticSn
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
       <TelemetryBoard snapshot={snapshot} unitMode={unitMode} />
       <div className="flex flex-col gap-3">
-        <DtcPanel dtcs={snapshot.dtcs} />
+        <DtcPanel dtcs={snapshot.dtcs} scanned={snapshot.dtc_scan_complete ?? true} />
         <AlertsPanel alerts={snapshot.alerts} />
       </div>
     </div>
@@ -1508,14 +1567,18 @@ function AlertsPanel({ alerts }: { alerts: string[] }) {
   );
 }
 
-function DtcPanel({ dtcs }: { dtcs: DtcSnapshot[] }) {
+function DtcPanel({ dtcs, scanned }: { dtcs: DtcSnapshot[]; scanned: boolean }) {
   const pendingCount = dtcs.filter((dtc) => dtc.status.includes("pending")).length;
   const currentCount = dtcs.filter((dtc) => dtc.status.includes("current")).length;
   const storedCount = Math.max(0, dtcs.length - pendingCount);
 
   return (
     <Panel title="DTCs" icon={<FileText size={14} />}>
-      {dtcs.length === 0 ? (
+      {!scanned ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">
+          DTC scan has not run. Open Diagnostics and select Run diagnostic.
+        </div>
+      ) : dtcs.length === 0 ? (
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 text-sm text-emerald-200">
           No diagnostic codes
         </div>
@@ -1572,6 +1635,10 @@ function SettingsPanel({
   unitMode: UnitMode;
   setUnitMode: (mode: UnitMode) => void;
 }) {
+  const presentationAgeMs = snapshot.sample_at_unix_ms == null
+    ? null
+    : Math.max(0, Date.now() - snapshot.sample_at_unix_ms);
+
   return (
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Panel title="Runtime settings" icon={<Settings size={14} />} className="min-h-[420px]">
@@ -1611,6 +1678,14 @@ function SettingsPanel({
             <div className="text-[11px] font-semibold uppercase text-zinc-400">Polling</div>
             <div className="mt-3 space-y-3 text-sm">
               <SettingRow label="Standard PID poll" value={`${snapshot.poll_ms} ms`} />
+              <SettingRow
+                label="Runner sample age"
+                value={snapshot.runner_sample_age_ms == null ? "not sampled" : `${snapshot.runner_sample_age_ms} ms`}
+              />
+              <SettingRow
+                label="GUI presentation age"
+                value={presentationAgeMs == null ? "not sampled" : `${presentationAgeMs} ms`}
+              />
               <SettingRow label="Enhanced refresh" value="2.5 s live" />
               <SettingRow label="Mode" value="live snapshot" />
             </div>
@@ -1628,11 +1703,11 @@ function SettingsPanel({
           <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
             <div className="text-[11px] font-semibold uppercase text-zinc-400">Diagnostics</div>
             <div className="mt-3 space-y-3 text-sm">
-              <SettingRow label="Enhanced DTC service" value="GM Class 2 $19" tone="ok" />
-              <SettingRow label="Desired fuel rail" value="GM $22 163D 01" tone="ok" />
-              <SettingRow label="Barometer" value="GM $22 1251 01 candidate" tone="warn" />
-              <SettingRow label="Desired MAP" value="GM $22 1542 01 candidate" tone="warn" />
-              <SettingRow label="Status byte map" value="GM status byte" />
+              <SettingRow label="Standard diagnostics" value="manual scan only" />
+              <SettingRow label="Profile telemetry" value="runner-owned when confirmed" tone="muted" />
+              <div className="text-xs leading-5 text-zinc-500">
+                Enhanced reads run only after explicit profile confirmation.
+              </div>
             </div>
           </section>
         </div>
@@ -1642,7 +1717,7 @@ function SettingsPanel({
         <div className="space-y-3 text-sm">
           <SettingRow label="Vehicle" value={snapshot.vehicle} />
           <SettingRow label="VIN" value={snapshot.vin} />
-          <SettingRow label="Voltage" value={`${snapshot.voltage.toFixed(1)} V`} />
+          <SettingRow label="Adapter voltage" value={formatAdapterVoltage(snapshot.voltage)} />
           <SettingRow label="Connection" value={snapshot.connection} tone="ok" />
         </div>
         <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
@@ -1660,10 +1735,16 @@ function SettingRow({
 }: {
   label: string;
   value: string;
-  tone?: "default" | "ok" | "warn";
+  tone?: "default" | "ok" | "warn" | "muted";
 }) {
   const valueClass =
-    tone === "ok" ? "text-emerald-300" : tone === "warn" ? "text-amber-300" : "text-zinc-200";
+    tone === "ok"
+      ? "text-emerald-300"
+      : tone === "warn"
+        ? "text-amber-300"
+        : tone === "muted"
+          ? "text-zinc-500"
+          : "text-zinc-200";
   return (
     <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2 last:border-0 last:pb-0">
       <span className="text-zinc-400">{label}</span>
@@ -1683,38 +1764,127 @@ function App() {
   const [replayRunning, setReplayRunning] = useState(false);
   const [selectedRecording, setSelectedRecording] = useState<RecordingSummary | null>(null);
   const [replayError, setReplayError] = useState<string | null>(null);
+  const [commandStatus, setCommandStatus] = useState<string | null>(null);
+  const [foregroundPending, setForegroundPending] = useState(false);
+  const foregroundObserved = useRef(false);
+  const foregroundCommandInFlight = useRef(false);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<boolean> => {
     if (isTauriRuntime()) {
       try {
         const next = await invoke<DiagnosticSnapshot>("diagnostic_snapshot");
         setSnapshot(next);
+        setLastRefresh(new Date());
+        return true;
       } catch (error) {
         console.error("diagnostic_snapshot failed", error);
+        return false;
       }
     }
-    setLastRefresh(new Date());
+    return false;
   }, []);
 
   useEffect(() => {
-    void refresh();
-    const timer = window.setInterval(() => {
-      void refresh();
-    }, 2_500);
-    return () => window.clearInterval(timer);
-  }, [refresh]);
+    if (!isTauriRuntime() || replayMode) return;
+    let cancelled = false;
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(async () => {
+        await refresh();
+        if (!cancelled) schedule();
+      }, 500);
+    };
+    // Start through a zero-delay timer rather than an immediate promise.
+    // React StrictMode cleans up its first development-only effect before
+    // this timer can issue IPC, so it cannot create a second in-flight
+    // snapshot request while still retaining immediate live startup.
+    timer = window.setTimeout(async () => {
+      await refresh();
+      if (!cancelled) schedule();
+    }, 0);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [refresh, replayMode]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const view = activeTab.startsWith("cap:") ? activeTab.slice(4) : activeTab;
+    void invoke("set_active_view", { view }).catch((error) => {
+      console.error("set_active_view failed", error);
+    });
+  }, [activeTab]);
+
+  useEffect(() => {
+    const foreground =
+      snapshot.mode.state === "diagnostic" ||
+      (snapshot.mode.state === "discovering" && snapshot.mode.origin === "rescan");
+    if (foreground) {
+      foregroundObserved.current = true;
+      foregroundCommandInFlight.current = false;
+      setForegroundPending(false);
+    } else if (foregroundObserved.current) {
+      foregroundObserved.current = false;
+      foregroundCommandInFlight.current = false;
+      setForegroundPending(false);
+    }
+  }, [snapshot.mode]);
 
   const sessionMode: SessionMode = replayMode ? "replay" : recording ? "recording" : "live";
 
-  const startRecording = useCallback(() => {
+  const startRecording = useCallback(async () => {
+    if (isTauriRuntime()) {
+      try {
+        await invoke("start_recording");
+      } catch (error) {
+        setReplayError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     setReplayMode(false);
     setReplayPaused(false);
     setReplayRunning(false);
     setRecording(true);
   }, []);
 
-  const stopRecording = useCallback(() => {
+  const stopRecording = useCallback(async () => {
+    if (isTauriRuntime()) {
+      try {
+        await invoke("stop_recording");
+      } catch (error) {
+        setReplayError(error instanceof Error ? error.message : String(error));
+        return;
+      }
+    }
     setRecording(false);
+  }, []);
+
+  const submitRunnerCommand = useCallback(async (command: "run_diagnostic" | "rescan_vehicle" | "cancel_foreground") => {
+    const startsForeground = command !== "cancel_foreground";
+    if (startsForeground && foregroundCommandInFlight.current) return;
+    if (startsForeground) foregroundCommandInFlight.current = true;
+    if (!isTauriRuntime()) {
+      if (startsForeground) foregroundCommandInFlight.current = false;
+      setCommandStatus("Runner controls are available only in the desktop application.");
+      return;
+    }
+    try {
+      const reply = await invoke<RunnerCommandReply>(command);
+      const label = command.replace(/_/g, " ");
+      if (reply === "accepted") {
+        if (command !== "cancel_foreground") setForegroundPending(true);
+        setCommandStatus(`${label}: accepted at the next request boundary.`);
+      } else {
+        foregroundCommandInFlight.current = false;
+        setForegroundPending(false);
+        setCommandStatus(`${label}: ${reply.replace(/_/g, " ")}.`);
+      }
+    } catch (error) {
+      foregroundCommandInFlight.current = false;
+      setForegroundPending(false);
+      setCommandStatus(`${command.replace(/_/g, " ")}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }, []);
 
   const loadRecording = useCallback((loader: Promise<RecordingSummary>) => {
@@ -1810,6 +1980,12 @@ function App() {
 
     const utilityTabs: CategoryTab[] = [
       {
+        id: "diagnostics",
+        label: "Diagnostics",
+        summary: dtcAlertSummary,
+        icon: <ShieldAlert size={14} />,
+      },
+      {
         id: "raw",
         label: "Raw",
         summary: `${snapshot.poll_ms} ms snapshot`,
@@ -1885,7 +2061,14 @@ function App() {
             ) : activeTab === "active" ? (
               <GenericActiveTestsPanel snapshot={snapshot} />
             ) : activeTab === "diagnostics" ? (
-              <DiagnosticsView snapshot={snapshot} />
+              <DiagnosticsView
+                snapshot={snapshot}
+                commandStatus={commandStatus}
+                foregroundPending={foregroundPending}
+                onRunDiagnostic={() => void submitRunnerCommand("run_diagnostic")}
+                onRescanVehicle={() => void submitRunnerCommand("rescan_vehicle")}
+                onCancelForeground={() => void submitRunnerCommand("cancel_foreground")}
+              />
             ) : (
               <CapabilityOverviewView snapshot={snapshot} unitMode={unitMode} />
             )}

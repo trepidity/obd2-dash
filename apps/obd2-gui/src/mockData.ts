@@ -131,6 +131,9 @@ const sourceConfidence = [
 ];
 
 export const fallbackSnapshot: MockDiagnosticSnapshot = {
+  mode: { state: "telemetry" },
+  capability_state: { persistence: "cached", verification: "ready", remaining: null },
+  foreground_result: null,
   vehicle: "2004 GMC Sierra",
   vin: "1GTHK29294E391526",
   protocol: "J1850 VPW",

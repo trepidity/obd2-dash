@@ -1,5 +1,107 @@
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CapabilityKind {
+    Pid,
+    ProfileSignal,
+    Service,
+}
+
+impl CapabilityKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pid => "pid",
+            Self::ProfileSignal => "profile_signal",
+            Self::Service => "service",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pid" => Some(Self::Pid),
+            "profile_signal" => Some(Self::ProfileSignal),
+            "service" => Some(Self::Service),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CapabilityOutcome {
+    Supported,
+    Unsupported,
+    Unverified,
+}
+
+impl CapabilityOutcome {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Supported => "supported",
+            Self::Unsupported => "unsupported",
+            Self::Unverified => "unverified",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "supported" => Some(Self::Supported),
+            "unsupported" => Some(Self::Unsupported),
+            "unverified" => Some(Self::Unverified),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityContext {
+    pub protocol: String,
+    pub profile_id: String,
+    pub probe_schema_version: i64,
+    pub probe_fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityRecord {
+    pub kind: CapabilityKind,
+    pub request_id: String,
+    pub module: String,
+    pub outcome: CapabilityOutcome,
+    pub observation_seq: i64,
+    pub rtt_ms: Option<i64>,
+    pub attempted_at: String,
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VehicleCapabilitySet {
+    pub vin: String,
+    pub set_id: String,
+    pub context: CapabilityContext,
+    pub completed_at: String,
+    pub records: Vec<CapabilityRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilitySetReplacement {
+    pub vin: String,
+    pub context: CapabilityContext,
+    pub completed_at: String,
+    pub records: Vec<CapabilityRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityLoad {
+    Hit(VehicleCapabilitySet),
+    Miss,
+    ContextMismatch,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutcomeUpdate {
+    Applied,
+    StaleSet,
+}
+
 /// Alert severity level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlertLevel {

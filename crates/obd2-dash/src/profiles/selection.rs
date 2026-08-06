@@ -92,7 +92,7 @@ pub async fn acquire_identity<A: Adapter>(
     session: &mut Session<A>,
     extra_reads: u8,
 ) -> IdentityOutcome {
-    let mut accepted_vin = match session.identify_vehicle().await {
+    let mut accepted_vin = match session.identify_vehicle_identity().await {
         Ok(profile) => Some(profile.vin),
         Err(err) => {
             tracing::warn!("vehicle identity read failed: {err}");

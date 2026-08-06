@@ -110,6 +110,15 @@ Options:
       --max-storage-mb <MB>        Max recording storage in MB [default: 500]
 ```
 
+For protocol development, run a headless raw capture until you press Ctrl-C:
+
+```bash
+cargo run -p obd2-dash -- --port /dev/ttyUSB0 record raw
+cargo run -p obd2-dash -- --ble --ble-name "OBDLink CX" record raw --output raw-captures/my-vehicle.obd2raw
+```
+
+The capture contains the adapter request/response stream needed to develop new vehicle profiles and decoders.
+
 ## Keyboard Controls
 
 ### Normal Mode

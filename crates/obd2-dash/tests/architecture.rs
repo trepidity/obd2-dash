@@ -233,3 +233,34 @@ fn relative_source_path(path: &Path) -> String {
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
+
+/// DTC service IDs may be composed only inside `mode_runner/diagnostic.rs`,
+/// where `service_allowed` gates them by mode (OWL invariant 7). Any other
+/// mode_runner file constructing an 0x03/0x07/0x0A request bypasses the gate.
+#[test]
+fn mode_runner_dtc_service_ids_live_only_in_diagnostic_module() {
+    let root = manifest_dir().join("src/mode_runner");
+    for path in source_files(&root) {
+        let rel = relative_source_path(&path);
+        if rel.ends_with("diagnostic.rs") {
+            continue;
+        }
+        let content =
+            fs::read_to_string(&path).unwrap_or_else(|err| panic!("failed to read {rel}: {err}"));
+        for needle in [
+            "0x03,",
+            "service_id: 0x03",
+            "raw_request(0x03",
+            "raw_request(0x07",
+            "raw_request(0x0A",
+            "service_id: 0x07",
+            "service_id: 0x0A",
+        ] {
+            assert!(
+                !content.contains(needle),
+                "{rel} composes DTC service bytes (`{needle}`); route through \
+                 mode_runner/diagnostic.rs so service_allowed gates them"
+            );
+        }
+    }
+}

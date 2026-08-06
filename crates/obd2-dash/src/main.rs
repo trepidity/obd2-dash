@@ -6,21 +6,20 @@ mod debug_log;
 mod domain;
 mod mock_profile;
 mod nhtsa;
-pub mod recording;
 mod scanner;
 mod session_runner;
 mod tui;
 pub mod vehicle_data;
 mod widget;
 
-use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{fs, io::IsTerminal};
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tokio::sync::mpsc;
 use tracing_appender::rolling;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -39,6 +38,11 @@ use tui::{
 };
 use widget::config::DashboardConfig;
 use widget::edit_mode::{EditModeState, EditPhase};
+
+// The recording module lives in the library target; re-export it so the
+// binary's existing crate-relative recording paths keep resolving against the
+// single lib-compiled copy of the types.
+pub use obd2_dash::recording;
 
 // New obd2-core imports
 use obd2_core::adapter::elm327::Elm327Adapter;
@@ -62,6 +66,8 @@ const DTC_SCENARIO_COUNT: u8 = 4;
 #[derive(Parser, Debug)]
 #[command(name = "obd2-dash", about = "OBD2 vehicle diagnostics TUI dashboard")]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
     /// Serial port path (e.g. /dev/ttyUSB0, /dev/cu.usbserial-*)
     #[arg(short, long)]
     port: Option<String>,
@@ -117,6 +123,25 @@ struct Cli {
     /// Connect to ELM327 emulator (sets baud to 38400)
     #[arg(long)]
     emu: bool,
+}
+
+#[derive(Subcommand, Debug)]
+enum CliCommand {
+    /// Record raw adapter traffic for protocol and vehicle-support development.
+    Record {
+        #[command(subcommand)]
+        kind: RecordCommand,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum RecordCommand {
+    /// Capture the serial/BLE request and response stream until Ctrl-C.
+    Raw {
+        /// Output path. Defaults to <recordings-dir>/raw-<timestamp>.obd2raw.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 /// Helper: get all pollable PIDs (standard Mode 01 PIDs that are scalar).
@@ -349,7 +374,13 @@ async fn main() -> Result<()> {
     };
     let storage_manager = StorageManager::new(storage_config);
 
-    if headless {
+    let raw_record_output = cli.command.as_ref().map(
+        |CliCommand::Record {
+             kind: RecordCommand::Raw { output },
+         }| output.clone(),
+    );
+
+    if headless || raw_record_output.is_some() {
         run_headless(
             cli.poll_ms,
             &mut obd_rx,
@@ -358,6 +389,7 @@ async fn main() -> Result<()> {
             vehicle_info,
             thresholds,
             database,
+            raw_record_output,
         )
         .await
     } else {
@@ -814,6 +846,7 @@ async fn run_tui(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_headless(
     poll_ms: u64,
     obd_rx: &mut mpsc::UnboundedReceiver<Message>,
@@ -822,12 +855,14 @@ async fn run_headless(
     vehicle_info: Option<obd2_db::models::VehicleInfo>,
     thresholds: std::collections::HashMap<u8, obd2_db::models::ResolvedThreshold>,
     database: obd2_db::Database,
+    raw_record_output: Option<Option<PathBuf>>,
 ) -> Result<()> {
     let mut state = AppState::new(poll_ms);
     state.domain.vehicle_info = vehicle_info;
     state.domain.thresholds_cache = thresholds;
     let mut print_interval = tokio::time::interval(Duration::from_millis(500));
     let mut cycles = 0u64;
+    let mut raw_record_path: Option<PathBuf> = None;
 
     let vehicle_name = state
         .domain
@@ -843,6 +878,53 @@ async fn run_headless(
         tokio::select! {
             msg = obd_rx.recv() => {
                 match msg {
+                    Some(Message::CaptureReady {
+                        handle,
+                        tx,
+                        baud_rate,
+                    }) if raw_record_output.is_some() => {
+                        let path = raw_record_output
+                            .as_ref()
+                            .and_then(Clone::clone)
+                            .unwrap_or_else(|| {
+                                let stamp = SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .map(|duration| duration.as_secs())
+                                    .unwrap_or_default();
+                                handle
+                                    .recordings_dir()
+                                    .join(format!("raw-{stamp}.obd2raw"))
+                            });
+                        let metadata = obd2_core::transport::CaptureMetadata {
+                            transport_type: "elm327".to_string(),
+                            port_or_device: "cli-record-raw".to_string(),
+                            baud_rate,
+                        };
+                        if let Some(parent) = path.parent() {
+                            fs::create_dir_all(parent).map_err(|error| {
+                                anyhow::anyhow!(
+                                    "failed to create raw capture directory {}: {error}",
+                                    parent.display()
+                                )
+                            })?;
+                        }
+                        if let Err(error) = tx.send(app::CaptureCommand::Start {
+                            path: path.clone(),
+                            metadata,
+                        }) {
+                            return Err(anyhow::anyhow!(
+                                "failed to request raw capture: {error}"
+                            ));
+                        }
+                        raw_record_path = Some(path.clone());
+                        state.capture_handle = Some(handle);
+                        state.capture_tx = Some(tx);
+                        println!("Raw capture starting: {}", path.display());
+                    }
+                    Some(Message::RawCaptureStopped(path)) => {
+                        println!("Raw capture saved: {}", path.display());
+                        state.update(Message::RawCaptureStopped(path));
+                    }
                     Some(Message::VinDetected(vin)) => {
                         handle_vin_detected(&mut state, &vin, &database, &obd_tx);
                     }
@@ -932,6 +1014,12 @@ async fn run_headless(
                 }
             }
             _ = tokio::signal::ctrl_c() => {
+                if raw_record_path.is_some() {
+                    if let Some(tx) = state.capture_tx.as_ref() {
+                        let _ = tx.send(app::CaptureCommand::Stop);
+                    }
+                    tokio::time::sleep(Duration::from_millis(poll_ms.saturating_add(100))).await;
+                }
                 println!("\nShutting down...");
                 break;
             }
@@ -1414,10 +1502,8 @@ fn handle_edit_mode_key(state: &mut AppState, key: crossterm::event::KeyEvent) {
             KeyCode::Up => edit.picker_up(),
             KeyCode::Down => edit.picker_down(),
             KeyCode::Enter => edit.select_category(),
-            KeyCode::Esc => {
-                if !edit.go_back() {
-                    state.edit_mode = None;
-                }
+            KeyCode::Esc if !edit.go_back() => {
+                state.edit_mode = None;
             }
             _ => {}
         },

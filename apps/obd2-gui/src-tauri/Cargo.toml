@@ -9,7 +9,10 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+anyhow = { workspace = true }
+async-trait = { workspace = true }
 obd2-dash = { path = "../../../crates/obd2-dash" }
+obd2-db = { path = "../../../crates/obd2-db" }
 obd2-core = { workspace = true, features = ["serial", "embedded-specs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -12,6 +12,154 @@ atomic per-vehicle capability persistence.
 
 **Traceability:**
 
+**Slice 5 (`f5be016`, audited + fixed in `787d4be`):** ordered diagnostic
+request plan: DTC services, Mode-02 freeze frames, readiness, conditional
+Mode-05, module refresh; Mode-06 absent, Mode-05 fuel/protocol gated. Audit
+fix: readiness now skips when its cached service row is `unsupported`
+(spec §11; unverified is still attempted) — gate inputs are a named
+`ServiceGates` struct. Wire-execution notes for the next slice: the plan is
+service-level only — the DTC phase must fan out broadcast-then-per-module
+including the selected-profile DTC path and GM Class-2 backoff; the
+freeze-frame phase expands to one substep per code found (sub-total known
+only after the DTC phase); readiness/module-refresh sharing `service: 0x01`
+means the execution contract needs a richer request model than a bare
+service byte.
+
+**Slice 6 (`b261340`, audited + fixed in `a232da0`):** requests carry
+target scope (Broadcast / DiscoveredModules) and expansion (Static /
+PerDtc). Audit fix: the DTC phase collapsed the scan matrix — stored (03)
+was broadcast-only and pending/permanent (07/0A) module-only, silently
+dropping per-module stored codes and broadcast pending/permanent. The plan
+now emits the full 3×2 matrix (broadcast S/P/P, then per-module S/P/P),
+matching spec §11 and the TUI's `scan_standard_dtcs`, pinned by an
+exact-sequence test. Wire execution must still add the selected-profile
+DTC path (ProfileRuntime, not a raw service byte) with GM Class-2 backoff,
+and iterate DiscoveredModules groups module-major to match legacy capture
+ordering.
+
+**Slice 7 (`a9de1c8`, audited + fixed in `fa6928e`):** DTC wire-order
+expansion (broadcast trio, then module-major trios). Audit fix: the
+expansion discarded the module binding — N modules produced N
+indistinguishable `DiscoveredModules` triples an executor could count but
+never address — and ordering was whatever the caller passed. Targets now
+carry `Module(index)` into the caller's slice, emitted in id-sorted order
+(matching `dtc_scan_modules`), and `expand_dtc_requests` documents that it
+REPLACES `request_plan`'s six DTC summary rows so broadcast is never
+double-scanned. Selected-profile DTC routing and GM Class-2 backoff remain
+wire-execution obligations.
+
+**Slice 8 (`b2e471b`, audited + fixed in `fc91f40`):** request-boundary
+diagnostic executor over `DiagnosticTransport`; cancellation observed only
+between completed requests; no in-flight future dropped. Audit fix: the
+executor aborted the whole bundle on ANY transport error — spec §11 records
+non-transport step failures (NO DATA, negative responses) and continues,
+aborting only on transport loss. The contract now returns `StepResult`
+(`Data` | `StepError`) with `Err` reserved for transport loss, and an abort
+carries partial progress (`DiagnosticAborted`) so the interrupted result is
+reportable per §13. Session binding must map `Obd2Error` accordingly:
+transport-class loss → `Err`; everything else → `StepError`.
+
+**Slice 9 (`a14867b`, audited + fixed in the follow-up commit):**
+`map_obd2_result` binds core errors to the executor contract. Audit fix:
+only `Obd2Error::Transport` counted as link loss — `Obd2Error::Io` (how a
+yanked USB adapter actually surfaces through mio-serial) was recorded as a
+step error, grinding the bundle through remaining requests at full timeout
+instead of aborting to reconnect. `Io` now aborts alongside `Transport`;
+`Timeout` deliberately remains a step error per the §8.2 error taxonomy.
+Remaining: wire requests to Session/ProfileRuntime operations (including
+GM Class-2 backoff) and persist diagnostic outcomes.
+
+**Slice 10 (`bbf6960`, audited + fixed in the follow-up commit):**
+`capability_outcome` maps step results to persisted capability state with
+separated NO DATA confirmation. Audit fix: the classifier matched error
+DISPLAY strings and every non-Data arm was dead code against real core
+errors (`NoData` renders "no data (vehicle did not respond)",
+`UnsupportedPid` renders "not supported", negative responses render
+Debug-style with no spaces) — its tests fed invented strings. All step
+errors resolved Unverified, so no service could ever be pruned.
+`StepResult::StepError` now carries a typed `StepErrorKind` assigned from
+the typed `Obd2Error` in `map_obd2_result`; the outcome test routes real
+core errors through the mapper end to end.
+
+**Slice 11 (`3052c65`, audited + fixed in the follow-up commit):** real
+foreground execution — diagnostics through `execute_session_request` (gate
+enforced at the wire), profile DTC via `ProfileRuntime`, typed outcome
+persistence with separated NO DATA, staged rescan honoring §9.1/§9.5
+semantics, shutdown flush after session drop, narrow raw-request allowlist
+extension. Audit fixes: persisted diagnostic module keys used
+session-local indices (`module-0`) instead of canonical ids — reordering
+between sessions would attach cached outcomes to the wrong module; and
+`is_lly_profile` used a substring match. Prominent remaining gaps:
+**decoded DTC payloads are discarded — a diagnostic scan currently
+persists service support but surfaces no codes to the operator** (freeze
+frames therefore structurally skip, and `ProfileResponse::Dtcs` maps to
+empty `Data`); profile DTC evidence goes to `NullEvidenceSink` (the legacy
+GUI records evidence — GUI-0001 must wire a real sink before deleting it);
+profile DTC services do not consult cached-unsupported service rows;
+Mode-05 runs as a bare `0x05` probe rather than `read_all_o2_monitoring`
+enumeration. Executor's own honest list also open: bounded async command
+channel with oneshot acks, concurrent in-flight cancellation control,
+`RequestActiveTest` routing.
+
+**Slice 12 (TASK-DASH-0004 closure):** retained typed standard and profile
+DTC results in the runner snapshot, with decoded-code-correlated Mode-02
+freeze-frame work; Mode-05 now delegates its TID/sensor matrix to
+`Session::read_all_o2_monitoring`. The bounded capacity-8 control plane uses
+oneshot replies and a watch-backed view value, observes cancellation/shutdown
+only at request boundaries, and treats channel close as orderly shutdown.
+Locked active tests route through that control plane, write evidence in
+`spawn_blocking`, and remain structurally unable to issue a Session request.
+The runner's `run_once` is the single-session execution entry point for the
+control receiver. Verified with the full `obd2-dash` test suite, strict
+clippy, fmt, and architectural import gates.
+
+**Closure audit (2026-08-02): TASK-DASH-0004 CONFIRMED CLOSED.** All
+behaviors verified in code; the executor's channel-level tests were
+supplemented with three runner-level contracts the closure lacked:
+`channel_cancel_is_observed_at_the_next_request_boundary` (gated in-flight
+request; cancel takes effect after it completes, nothing starts after),
+`shutdown_command_acks_after_session_release`, and
+`closed_control_channel_shuts_down_instead_of_reconnecting` (connector
+never re-invoked). `CancelForeground` was verified to set the boundary
+flag rather than flipping the mode under an in-flight bundle (the slice-1
+behavior would have left the wire gate denying mid-bundle requests).
+Carried forward to TASK-GUI-0001 as explicit obligations: profile DTC
+evidence still uses `NullEvidenceSink` (the legacy GUI records evidence —
+wire a real sink before deleting `LiveBackend`); Mode-05 O2 values and
+readiness results are executed but not yet retained in the snapshot
+(legacy publishes both); GUI recording port per the earlier note.
+
+**TASK-GUI-0001 (`06387e2`): audit-confirmed CLOSED.** `LiveBackend` and
+all GUI serial I/O deleted (−3,814 lines); Session/adapter/transport types
+exist only in `serial_connector.rs`, pinned by the architecture test (OWL
+invariant 9). Tauri commands are snapshot reads + bounded-control acks.
+Carried obligations resolved: profile DTC evidence flows through a
+collecting sink into the snapshot and the recording worker persists it;
+recording runs on a dedicated OS thread fed per published runner snapshot
+via a non-blocking bridge (drop-on-saturation); frontend polls with
+completion-scheduled 500 ms timeouts, gated off in replay. Audit notes:
+(1) the executor's verification omitted Playwright — the suite requires a
+running vite dev server and passes 4/4 with one; EV-0001 must script that
+prerequisite; (2) a mid-recording write failure still surfaces only at
+Stop (error ack), not live — GUI-0002 owns showing recording state
+truthfully; (3) O2/readiness were never GUI-displayed (TUI-only), so no
+GUI parity loss — runner retention stays a Phase-2 TUI item; (4) the
+`LiveBackend`-name scan test is a deletion candidate at EV-0001 close per
+the test-selection standard (the import scan already guards the harm).
+
+**TASK-GUI-0002 (`760e995`): audit-confirmed CLOSED.** Completion-scheduled
+500 ms polling with a StrictMode-safe zero-delay start (the dev
+double-effect cleans up before IPC fires, preserving single in-flight);
+duplicate foreground commands guarded through the ack-to-snapshot latency
+window via an in-flight ref plus `foregroundPending`, cleared on mode
+transitions and rejections; conditional Cancel; Diagnostics as an
+always-available tab; replay freezes live polling (exact call-count
+assertion) and resumes on exit. Seven Playwright tests pass against the
+mocked Tauri IPC boundary — cadence window, delayed-response non-overlap,
+one-command dedup, cancel emission, latest-view, replay pause/resume —
+all seam-level, spec-named, and mutation-falsifiable. No Rust changes.
+Remaining: TASK-EV-0001 only.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`, `CAP-DIAG-DTC`,
   `CAP-DIAG-UI`
@@ -27,6 +175,37 @@ atomic per-vehicle capability persistence.
 
 **Tech stack:** Rust 2021, Tokio, async-trait, rusqlite, Tauri 2, React 18,
 TypeScript, Playwright.
+
+## Execution status
+
+- `TASK-PROG-0001`: registered in the workspace L0 matrix.
+- `TASK-CORE-0001`: committed in `obd2-core` as `0fe6e667`; full workspace
+  tests and clippy pass.
+- `TASK-DASH-0001`: dependency pin committed in `obd2-dash` as `52c9191`.
+  Core `codex/scan-modes` pushed to origin (`0fe6e667`); network-only resolve
+  then failed because the committed lock paired the rev with version `0.2.0`
+  while the rev declares `0.3.0-dev` — corrected via `cargo update -p
+  obd2-core` in `f01adeb`. Workspace check + tests (299 passed) verified
+  against the git source; `cargo tree -d` shows one core identity.
+- `TASK-DASH-0002`: pure capability, scheduler, and snapshot slice committed
+  as `9c911e2`; diagnostics type migration and full runner contracts remain.
+- `TASK-DB-0001`: versioned capability schema/models and transactional APIs
+  committed as `97e6683`; async store wrapping remains in `TASK-DASH-0003`.
+- `TASK-DASH-0003`: async `spawn_blocking` SQLite store boundary committed as
+  `68f1d69`; connector/lifecycle/discovery work remains.
+- `TASK-DASH-0003` (audit 2026-08-01): executor closed it; audit reopened it
+  as PARTIAL — verifier/persistence/harness/reconnect are sound, but
+  discovery staging, fallback paths, fingerprint/profile context, the
+  telemetry cycle executor, and reconnect policy diverge from spec or are
+  absent. Debug-format protocol tokens fixed in the audit (`protocol_token`).
+  See the task section for the itemized remainder.
+- Out-of-plan feature (`1fb8ee4`): GUI `.obd2rec` recording implemented inside
+  the legacy `LiveBackend` (per-snapshot cadence, not per serial poll), plus a
+  TUI `record raw` subcommand. The recording module moved into the lib
+  (single-compile; binary re-exports it). `TASK-GUI-0001` must port
+  start/stop/record into the runner when `LiveBackend` is deleted, and should
+  fix the mid-recording write-failure path, which currently drops the writer
+  silently while the frontend still shows recording.
 
 ## Global constraints
 
@@ -117,16 +296,16 @@ TASK-DASH-0001 pin exact core SHA
 - **Repos:** workspace L0 documents
 - **Files:** `HAULLOGIC-MASTER-DESIGN-MATRIX.md`
 
-- [ ] Add `WP-OBD-SCAN-MODES` to the work-package mapping with the four CAP
+- [x] Add `WP-OBD-SCAN-MODES` to the work-package mapping with the four CAP
   links and this spec/plan as artifacts.
-- [ ] Record `obd2-gui` as the R&D proving surface, not the production Desktop
+- [x] Record `obd2-gui` as the R&D proving surface, not the production Desktop
   owner.
-- [ ] Record the temporary `obd2-core` interface addition under
+- [x] Record the temporary `obd2-core` interface addition under
   `COMP-OBD-SESS`.
-- [ ] Note the `identify_vehicle` failure-propagation change under
+- [x] Note the `identify_vehicle` failure-propagation change under
   `COMP-OBD-SESS`: HaulLogic-Desktop inherits it at its next core rev bump and
   should adopt `identify_vehicle_identity` where lenient identity is intended.
-- [ ] Do not create a new long-lived component unless the matrix owner decides
+- [x] Do not create a new long-lived component unless the matrix owner decides
   the runner is broader than `COMP-DASH-PROF`.
 
 **Done when:** L0 traceability points to this plan without changing product
@@ -180,7 +359,7 @@ cargo test -p obd2-core refresh_supported_pids -- --nocapture
 
 Expected: APIs are absent and `identify_vehicle` still hides the error.
 
-- [ ] **Implement session split**
+- [x] **Implement session split**
   - Extract current VIN decode/spec match/profile population into
     `identify_vehicle_identity`.
   - Set the session profile/discovery exactly as today, with an empty supported
@@ -206,7 +385,7 @@ either clear the continuation bit while still proving cross-payload union, or
 return a valid terminating `0120` page. Cover claimed-page `NO DATA` only in the
 new error test.
 
-- [ ] **Implement ELM mask walk**
+- [x] **Implement ELM mask walk**
   - Start at base `0x00`.
   - Decode all payloads for the page and OR their PID bits.
   - Request the next page only if the union contains the continuation PID.
@@ -215,7 +394,7 @@ new error test.
   - Return the broadcast union.
   - Do not cache partial results.
 
-- [ ] **Run core gates**
+- [x] **Run core gates**
 
 ```bash
 cargo fmt --check
@@ -224,14 +403,14 @@ cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
 
-- [ ] **OWL audit**
+- [x] **OWL audit**
   - Search for `unwrap_or_default` around supported-PID discovery.
   - Search for a second bitmap page loop outside the adapter.
   - Confirm `identify_vehicle_identity` does not call supported-PID discovery.
     Do not count an initialization-time `0100` protocol liveness probe as
     identity discovery.
 
-- [ ] **Commit in `obd2-core`**
+- [x] **Commit in `obd2-core`**
 
 ```bash
 git add crates/obd2-core/src/session/mod.rs \
@@ -251,7 +430,7 @@ git commit -m "fix(session): split identity from forced PID discovery"
 - **Repo:** `obd2-dash`
 - **Files:** root `Cargo.toml`, `Cargo.lock`
 
-- [ ] Replace the `obd2-core` `rev` with the exact commit from
+- [x] Replace the `obd2-core` `rev` with the exact commit from
   `TASK-CORE-0001`.
 - [ ] Refresh the lockfile through Cargo; do not hand-edit the checksum/source.
 - [ ] Confirm there is one `obd2-core` source identity:
@@ -491,6 +670,79 @@ constructing a session or opening SQLite.
 
 ## TASK-DASH-0003: Implement lifecycle, discovery, cache, and reconnect
 
+**Status: COMPLETE (closed 2026-08-01; audit-confirmed in `26c8f99`).**
+Closure audit: all seven named contracts verified; two were strengthened to
+be falsifiable (`fallback_never_schedules_full_legacy_pid_set` had no forced
+mask failure and a `< 64` bound the legacy sweep passes;
+`reconnect_reacquires_vin_before_cache_load` now proves identity-before-load
+via a switched-VIN cache hit). `drive_reconnect` cancellation-by-drop is
+acceptable because the abandoned session is discarded wholesale; DASH-0004's
+Shutdown must still observe request boundaries. Delivered and verified:
+identity-only `acquire_identity` switch; verifier classification (separated
+`NO DATA`, transient stays `Unverified`, per-session retry cap + backoff);
+staged persistence (set-ID install-before-updates, latest-batch coalescing);
+`spawn_blocking` store boundary; scripted connector harness with
+request-boundary gating; fresh-session reconnect (connector re-invoked, old
+session dropped); stable protocol tokens (`protocol_token`, audit fix).
+
+**Slice 2 (`90c22f8`/`c69d177`, audited + fixed in `bfb8f7d`):** staging as
+`Unverified` with per-cycle verifier execution, mask-failure and missing-VIN
+conservative fallbacks, watch publication, set-ID/sequence adoption,
+reconnect backoff, deterministic fingerprint. Audit fixes: cache-miss
+outcomes were silently destroyed (staged replacement dropped; `flush()`
+cleared pending without a set) — completed passes now persist atomically
+via `replace_from_outcomes`; verification could never reach `Ready` after
+any entry exhausted retries — `unresolved()` now drives completion with
+`Degraded{unresolved}`; fingerprint included tier cadence via Debug
+formatting against §8.1 — now sorted/deduped request identities only, with
+the three spec-named fingerprint tests.
+
+**Slice 3 (`6f2a846`, audited + fixed in `b8e5e85`):** profile-derived cache
+`profile_id`, scheduler-backed telemetry, typed probe classification, watch
+publication. Audit fixes: `poll_cycle` executed only the first planned
+request (one gauge ever updated) — it now runs the full plan as an explicit
+request loop; failing supported requests demote to `Unverified` per §10
+instead of reaching `classify()` where one explicit NRC pruned a live gauge;
+unverified work runs only through `Verifier::next()` so NO DATA
+confirmations stay backoff-separated (the scheduler plan-tail bypassed
+`next_due`); verifier resume now requires the same VIN — context alone let
+two same-model trucks cross-contaminate no-data counters into persisted
+`Unsupported`; preserved entries keep counters and classified outcomes on
+the reconnect re-stage; verifier successes publish immediately (§9.1.5).
+Regression tests: full per-cycle polling, demotion,
+`reconnect_to_new_vin_discards_partial_verifier_state`,
+`same_context_reconnect_resumes_unfinished_initial_verifier`.
+
+**Remaining before this task can close** (spec references in parentheses):
+
+- [x] Seed the verifier, scheduler tiers, and fingerprint from selected
+  profile forced/display standard PIDs with deterministic Tier B/C cadences
+  (§8.1, §9.1, §10) — slice 4 (`31c519b`), audit-corrected in `f341bb7`:
+  tiers now match the §10 table (MAP and fuel-rail actual are Tier A, not
+  B/C), and view gating was removed from standard-PID descriptors — the
+  scheduler gates every tier by view, so `Some(Gauges)` would have silenced
+  all gauges at the first `SetActiveView`. Class-2 profile signals and the
+  `ATRV`/adapter row remain unseeded (later telemetry/diagnostics concern).
+  Known mild deviation (§9.1 bullet 2): mask-excluded configured PIDs are
+  staged `Unverified` and probed instead of starting `Unsupported`; the
+  verifier self-corrects them via separated NO DATA within one pass.
+- [x] Typed probe classification through the boundary; non-transport
+  failures session-local (§8.2, §9.1.6) — slice 3.
+- [x] Telemetry cycle executor with watch publication (§10) — slice 3 +
+  `b8e5e85` full-plan fix.
+- [x] Same-VIN/context verifier resume, different-VIN discard (§13) —
+  `b8e5e85`.
+- [x] Reconnect driver loop: `drive_reconnect()` retries indefinitely above
+  the capped `reconnect()` backoff and remains cancellation-safe at the future
+  boundary (§13).
+- [x] Plan-named regression contracts are covered:
+  `cache_miss_verifies_one_unknown_per_cycle`,
+  `successful_verifier_value_is_published_immediately` (behavior
+  implemented, unnamed), `fallback_never_schedules_full_legacy_pid_set`,
+  `missing_vin_never_calls_store_replace`,
+  `fingerprint_mismatch_runs_discovery`, the Tier-C gating pair, and
+  `runner_snapshot_preserves_generic_and_lly_signal_shapes`.
+
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-OBD-POLL`, `CAP-OBD-RECON`
 - **COMP:** `COMP-OBD-SESS`, `COMP-DASH-PROF`
@@ -640,6 +892,53 @@ startup performs no post-initialization capability mask walk.
 ---
 
 ## TASK-DASH-0004: Add bounded foreground commands and diagnostic bundle
+
+**Slice 1 (`3d3802f`, audited + fixed in `d95a07e`):** transport-independent
+bounded command contract and mode-table enforcement (`RunDiagnostic`,
+`RescanVehicle`, `CancelForeground`, `Shutdown`); mode table verified
+faithful to the spec. Rejected commands are not retained, accepted commands
+publish their transition, cancellation returns to telemetry. Audit fixes:
+`poll_cycle` now refuses to run outside Telemetry (it previously kept
+polling during Diagnostic and would reconnect after Shutdown via the
+session-gone transport error); the vacuous pause/resume test was renamed to
+what it asserts (`cancel_foreground_returns_to_telemetry`) — the plan-named
+verifier pause/resume contract remains open. Still outstanding beyond the
+diagnostic bundle and staged rescan executor: verifier pause/resume
+machinery, Shutdown persistence flush + acknowledgement ordering,
+`RequestActiveTest` routing, and the async command channel with oneshot
+acknowledgements (the current surface is the synchronous state machine the
+channel will wrap in TASK-GUI-0001).
+
+**Slice 2 (`988f2fa`, audited + fixed in `28196af`):** diagnostic phase
+contract and Mode-05 eligibility gate. Five stable ordered phases; Mode-05
+requires explicit gasoline, a positively identified legacy protocol, no
+cached unsupported outcome, and no LLY profile. Audit fix: the protocol
+check was a CAN deny-list — `Protocol::Auto` (unresolved) and any future
+non-exhaustive core variant passed it; it is now an allow-list
+(J1850 VPW/PWM, ISO 9141, KWP2000) so unknown protocols deny by default.
+Wire execution and fuel resolution from Session/DB remain next; when the
+fuel resolver lands it must normalize only exact recognized labels
+(spec §11) — no substring or heuristic matching, unknown stays Unknown.
+
+**Slice 3 (`179fa49`, audited + fixed in `f136d0d`):** strict fuel
+resolution with Session-spec precedence and exact-VIN database fallback.
+Audit fix: precedence is by source, not value — a present-but-unparseable
+session claim resolved via the DB, letting a cached NHTSA row overrule the
+curated spec (a hypothetical spec "bio-diesel b20" + DB "Gasoline" enabled
+Mode-05 on a diesel). Labels now classify recognized / explicit-no-claim
+("unknown"/blank, which must keep falling through — the generic embedded
+spec ships `fuel_type: unknown` and gasoline vehicles have no embedded
+spec) / unrecognized, which resolves Unknown without consulting the DB.
+Vocabulary verified against shipped specs (lowercase `diesel`, `unknown`).
+
+**Slice 4 (`dde3883`, audit hardened in `a133786`):** `service_allowed`
+accepts `03/07/0A` only in Diagnostic mode and permanently denies Mode-06.
+Audit note: the gate is a pure predicate — "denied by construction" holds
+only if every composer routes through it, so an architecture scan now fails
+the suite if any mode_runner file outside `diagnostic.rs` composes DTC
+service bytes. The gate covers DTC services only; phase execution must
+apply its own mode gating to Mode-02 freeze frames and Mode-05 (which
+`service_allowed` would deny even in Diagnostic mode if misrouted).
 
 - **WP:** `WP-OBD-SCAN-MODES`
 - **CAP:** `CAP-DIAG-DTC`, `CAP-OBD-POLL`
@@ -799,6 +1098,12 @@ and cancel/error cannot replace the old capability set.
     PID/profile request helpers.
   - Preserve recording file inspection commands; they are unrelated local file
     operations.
+  - Port the `1fb8ee4` GUI recording feature (`start_recording`,
+    `stop_recording`, per-sample writes) into the runner: record from runner
+    samples (per completed request, not per snapshot invoke), run file I/O off
+    the async path, and surface mid-recording write failures in the snapshot
+    instead of silently dropping the writer while the UI still shows
+    recording.
 
 - [ ] **Run Tauri gates**
 

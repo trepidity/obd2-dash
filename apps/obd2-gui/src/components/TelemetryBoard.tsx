@@ -129,14 +129,20 @@ function runtimeStateForTile(signal: SignalSnapshot | undefined): StateKind {
 }
 
 function criticalTiles(snapshot: DiagnosticSnapshot, signals: SignalSnapshot[], unitMode: TelemetryUnitMode): CriticalTile[] {
-  const coolant = signalByKey(signals, ["sae.coolant_temp", "coolant_temp", "generic_coolant", "gas_coolant"]);
-  const map = signalByKey(signals, ["sae.intake_map", "map_absolute", "generic_map", "gas_map"]);
-  const maf = signalByKey(signals, ["sae.maf", "maf", "generic_maf", "gas_maf"]);
+  const coolant = signalByKey(signals, ["0105", "sae.coolant_temp", "coolant_temp", "generic_coolant", "gas_coolant"]);
+  const map = signalByKey(signals, ["010B", "sae.intake_map", "map_absolute", "generic_map", "gas_map"]);
+  const maf = signalByKey(signals, ["0110", "sae.maf", "maf", "generic_maf", "gas_maf"]);
   const mil = snapshot.statuses.find((status) => status.label === "MIL");
   const dtcs = snapshot.statuses.find((status) => status.label === "DTCs");
+  const adapterVoltage = snapshot.voltage;
 
   return [
-    { key: "voltage", label: "Voltage", value: `${snapshot.voltage.toFixed(1)} V`, state: "ok" },
+    {
+      key: "voltage",
+      label: "Adapter voltage",
+      value: adapterVoltage == null ? "unavailable" : `${adapterVoltage.toFixed(1)} V`,
+      state: adapterVoltage == null ? "muted" : "ok",
+    },
     { key: "rpm", label: "Engine RPM", value: snapshot.rpm.toString(), state: "ok" },
     { key: "speed", label: "Speed", value: `${snapshot.speed_mph} mph`, state: "ok" },
     {

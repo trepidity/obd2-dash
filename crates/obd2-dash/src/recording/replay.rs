@@ -250,11 +250,11 @@ fn format_duration_ms(ms: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::recording::index::SessionEntry;
-    use chrono::Utc;
-    use obd2_dash::profiles::{
+    use crate::profiles::{
         ProfileDecodedEvidence, ProfileDtcEvidence, ProfileEvidenceRecord, RouteEvidence,
     };
+    use crate::recording::index::SessionEntry;
+    use chrono::Utc;
     use std::path::PathBuf;
 
     fn sample_entry() -> SessionEntry {
