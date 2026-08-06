@@ -68,6 +68,25 @@ pub fn protocol_token(protocol: Protocol) -> &'static str {
     }
 }
 
+/// Operator-facing protocol label. This is intentionally separate from
+/// [`protocol_token`], whose compact values are a persistence contract.
+pub fn protocol_display(protocol: Protocol) -> &'static str {
+    match protocol {
+        Protocol::J1850Vpw => "J1850 VPW",
+        Protocol::J1850Pwm => "J1850 PWM",
+        Protocol::Iso9141(_) => "ISO 9141",
+        Protocol::Kwp2000(_) => "KWP2000",
+        Protocol::Can11Bit500 => "CAN 11-bit 500 kbps",
+        Protocol::Can11Bit250 => "CAN 11-bit 250 kbps",
+        Protocol::Can29Bit500 => "CAN 29-bit 500 kbps",
+        Protocol::Can29Bit250 => "CAN 29-bit 250 kbps",
+        Protocol::Auto => "Automatic",
+        // Core marks Protocol non-exhaustive. A new protocol remains visible
+        // as unresolved instead of leaking an unstable Debug representation.
+        _ => "Unknown",
+    }
+}
+
 /// Stable capability namespace persisted by the runner.
 /// A capability's stable request identity. `module` is never optional.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -221,6 +240,15 @@ mod tests {
         assert_eq!(
             protocol_token(Protocol::Iso9141(KLineInit::FastInit)),
             protocol_token(Protocol::Iso9141(KLineInit::SlowInit)),
+        );
+    }
+
+    #[test]
+    fn protocol_display_is_explicit_and_human_readable() {
+        assert_eq!(protocol_display(Protocol::J1850Vpw), "J1850 VPW");
+        assert_eq!(
+            protocol_display(Protocol::Can11Bit500),
+            "CAN 11-bit 500 kbps"
         );
     }
 }

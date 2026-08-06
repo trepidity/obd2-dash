@@ -15,9 +15,10 @@ use std::{
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use obd2_dash::mode_runner::{
-    control_channel, CapabilityStore, CommandReply, ControlCommand, ModeRunner, ModeState,
-    RunnerControl, RunnerSnapshot, SessionConnector, SqliteCapabilityStore,
+    control_channel, CapabilityStore, CommandReply, ControlCommand, ManualProfileConfirmation,
+    ModeRunner, ModeState, RunnerControl, RunnerSnapshot, SessionConnector, SqliteCapabilityStore,
 };
+use obd2_dash::profiles::gm::LLY_PROFILE_ID;
 use obd2_dash::recording::writer::RecordingWriter;
 use obd2_db::models::{
     CapabilityContext, CapabilityLoad, CapabilityRecord, CapabilitySetReplacement, OutcomeUpdate,
@@ -93,6 +94,8 @@ impl CapabilityStore for GuiCapabilityStore {
 #[derive(Debug, Clone)]
 pub struct RunnerStateConfig {
     pub capability_db_path: PathBuf,
+    /// Explicit operator confirmation used only if live Mode 09 is unread.
+    pub manual_lly_vin: Option<String>,
     /// A completed runner cycle is followed by this delay.  The delay is in
     /// the session-owning task, so Tauri's 500 ms snapshot reader can never
     /// create overlapping serial work.
@@ -103,6 +106,7 @@ impl RunnerStateConfig {
     pub fn new(capability_db_path: PathBuf) -> Self {
         Self {
             capability_db_path,
+            manual_lly_vin: std::env::var("OBD2_MANUAL_LLY_VIN").ok(),
             cycle_delay: Duration::from_millis(250),
         }
     }
@@ -138,6 +142,7 @@ impl RunnerState {
         let runner_recording_tx = recording_tx.clone();
         let database_path = config.capability_db_path;
         let cycle_delay = config.cycle_delay;
+        let manual_lly_vin = config.manual_lly_vin;
 
         tauri::async_runtime::spawn(async move {
             let store = match SqliteCapabilityStore::open(&database_path).await {
@@ -157,6 +162,7 @@ impl RunnerState {
                 snapshot_tx,
                 runner_recording_tx,
                 cycle_delay,
+                manual_lly_vin,
             )
             .await
             {
@@ -248,6 +254,7 @@ async fn run_started_runner<C, S>(
     snapshot_tx: watch::Sender<RunnerSnapshot>,
     recording_tx: mpsc::Sender<RecordingCommand>,
     cycle_delay: Duration,
+    manual_lly_vin: Option<String>,
 ) -> Result<()>
 where
     C: SessionConnector + 'static,
@@ -255,6 +262,10 @@ where
     S: CapabilityStore + Clone + 'static,
 {
     let mut runner = ModeRunner::new(connector, store);
+    if let Some(vin) = manual_lly_vin {
+        let confirmation = ManualProfileConfirmation::new(vin, LLY_PROFILE_ID)?;
+        runner = runner.with_manual_profile_confirmation(confirmation);
+    }
     let runner_snapshots = runner.subscribe();
     runner.attach_control(receiver);
     let relay =

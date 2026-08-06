@@ -13,7 +13,7 @@ use obd2_db::models::{
     CapabilitySetReplacement,
 };
 
-use super::capability::{probe_fingerprint, CapabilityKey, CapabilitySet};
+use super::capability::{probe_fingerprint, protocol_display, CapabilityKey, CapabilitySet};
 use super::command::{
     reply_for, CommandReply, ControlCommand, ControlInput, RunnerCommand, RunnerControlReceiver,
 };
@@ -26,7 +26,8 @@ use super::diagnostic::{
 use super::persistence::Persistence;
 use super::scheduler::{RequestDescriptor, Scheduler, Tier, ViewId};
 use super::snapshot::{
-    CapabilityPersistence, CapabilityVerification, DiagnosticResult, ModeState, RunnerSnapshot,
+    CapabilityPersistence, CapabilityVerification, ConnectionMetadata, DiagnosticResult, ModeState,
+    RunnerSnapshot,
 };
 use super::store::CapabilityStore;
 use super::verifier::Verifier;
@@ -34,7 +35,11 @@ use crate::profiles::registry::ProfileRegistry;
 use crate::profiles::{
     acquire_identity, build_vehicle_context, next_generation, select_into_state, IdentityOutcome,
 };
-use crate::profiles::{DiagnosticProfile, SelectedProfile, SignalDisplaySource, VehicleContext};
+use crate::profiles::{
+    CapabilityId as ProfileCapabilityId, DiagnosticProfile, IdentityConfidence, NullEvidenceSink,
+    ProfileId, ProfileResponse, ProfileRuntime, RequestId as ProfileRequestId, SelectedProfile,
+    SignalCategory, SignalDisplaySource, VehicleContext,
+};
 use tokio::sync::watch;
 
 #[derive(Debug)]
@@ -77,6 +82,8 @@ fn profile_probe_descriptors(profile: Option<&dyn DiagnosticProfile>) -> Vec<Req
     pids.dedup();
     pids.into_iter().map(standard_pid_descriptor).collect()
 }
+
+const PROFILE_TURBO_SIGNAL_INTERVAL_CYCLES: u64 = 10;
 
 /// Standard-PID cadence tiers per the design's §10 telemetry table. Tier C is
 /// the low-cadence remainder for secondary PIDs; view gating is reserved for
@@ -138,6 +145,27 @@ pub struct NewSession<A: Adapter> {
     pub session: Session<A>,
 }
 
+/// Operator-supplied identity used only when a live Mode 09 read is unread.
+/// The selected profile must still return at least a partial match before the
+/// registry seals it as a manual confirmation.
+#[derive(Debug, Clone)]
+pub struct ManualProfileConfirmation {
+    vin: String,
+    profile_id: ProfileId,
+}
+
+impl ManualProfileConfirmation {
+    pub fn new(vin: impl Into<String>, profile_id: ProfileId) -> Result<Self> {
+        let vin = vin.into().trim().to_ascii_uppercase();
+        if !crate::profiles::validate_vin_charset(&vin) {
+            return Err(anyhow!(
+                "manual profile confirmation requires a 17-character VIN"
+            ));
+        }
+        Ok(Self { vin, profile_id })
+    }
+}
+
 #[async_trait]
 pub trait SessionConnector: Send + Sync {
     type Adapter: Adapter;
@@ -171,6 +199,7 @@ where
     forced_standard_keys: BTreeSet<CapabilityKey>,
     profile_context: Option<VehicleContext>,
     selected_profile: Option<SelectedProfile>,
+    manual_profile_confirmation: Option<ManualProfileConfirmation>,
     foreground_cancel_requested: bool,
     diagnostic_no_data: BTreeSet<CapabilityKey>,
     control: Option<RunnerControlReceiver>,
@@ -201,6 +230,7 @@ where
             forced_standard_keys: BTreeSet::new(),
             profile_context: None,
             selected_profile: None,
+            manual_profile_confirmation: None,
             foreground_cancel_requested: false,
             diagnostic_no_data: BTreeSet::new(),
             control: None,
@@ -209,6 +239,14 @@ where
 
     pub fn snapshot(&self) -> RunnerSnapshot {
         self.snapshot.clone()
+    }
+
+    pub fn with_manual_profile_confirmation(
+        mut self,
+        confirmation: ManualProfileConfirmation,
+    ) -> Self {
+        self.manual_profile_confirmation = Some(confirmation);
+        self
     }
 
     pub fn subscribe(&self) -> watch::Receiver<RunnerSnapshot> {
@@ -326,12 +364,16 @@ where
 
     pub async fn connect(&mut self) -> Result<()> {
         self.snapshot.mode = ModeState::Connecting;
+        self.snapshot.connection = ConnectionMetadata::default();
+        self.snapshot.adapter_voltage = None;
         self.cycle = 0;
         self.scheduler = Scheduler::default();
         self.profile_descriptors = profile_probe_descriptors(None);
         self.forced_standard_keys.clear();
         self.profile_context = None;
         self.selected_profile = None;
+        self.snapshot.selected_profile = None;
+        self.snapshot.profile_manually_confirmed = false;
         let mut new_session = self
             .connector
             .connect()
@@ -343,7 +385,21 @@ where
             .await
             .map_err(|error| anyhow!(ConnectError::Initialization(error.to_string())))?;
 
-        let identity = acquire_identity(&mut new_session.session, 2).await;
+        self.snapshot.connection.protocol =
+            Some(protocol_display(new_session.session.adapter_info().protocol).to_string());
+        // `ATRV` measures adapter supply voltage. It is intentionally kept
+        // separate from PID 01 42, which this vehicle has not advertised.
+        self.snapshot.adapter_voltage = new_session.session.battery_voltage().await.ok().flatten();
+
+        let observed_identity = acquire_identity(&mut new_session.session, 2).await;
+        let identity = match (&observed_identity.vin, &self.manual_profile_confirmation) {
+            (None, Some(confirmation)) => IdentityOutcome {
+                vin: Some(confirmation.vin.clone()),
+                confidence: IdentityConfidence::Single,
+            },
+            _ => observed_identity,
+        };
+        self.snapshot.connection.vin = identity.vin.clone();
         let Some(vin) = identity.vin.clone() else {
             let candidates = match new_session.session.supported_pids().await {
                 Ok(pids) if !pids.is_empty() => pids.into_iter().collect::<Vec<_>>(),
@@ -387,7 +443,18 @@ where
         let vehicle_context =
             build_vehicle_context(&new_session.session, next_generation(), &identity);
         let profile_registry = ProfileRegistry::with_builtins();
-        let profile_state = select_into_state(&profile_registry, &vehicle_context);
+        let mut profile_state = select_into_state(&profile_registry, &vehicle_context);
+        if let Some(confirmation) = &self.manual_profile_confirmation {
+            if identity.vin.as_deref() == Some(confirmation.vin.as_str()) {
+                profile_state.selected = Some(
+                    profile_registry
+                        .confirm_manual(&vehicle_context, confirmation.profile_id)
+                        .map_err(|error| {
+                            anyhow!("manual profile confirmation rejected: {error}")
+                        })?,
+                );
+            }
+        }
         let profile_id = profile_state
             .selected
             .as_ref()
@@ -412,6 +479,14 @@ where
         self.profile_descriptors = profile_descriptors.clone();
         self.profile_context = Some(vehicle_context.clone());
         self.selected_profile = profile_state.selected.clone();
+        self.snapshot.selected_profile = self
+            .selected_profile
+            .as_ref()
+            .map(SelectedProfile::profile_id);
+        self.snapshot.profile_manually_confirmed = self
+            .selected_profile
+            .as_ref()
+            .is_some_and(SelectedProfile::manual_confirmed);
         let context = CapabilityContext {
             protocol: super::capability::protocol_token(
                 new_session.session.adapter_info().protocol,
@@ -841,6 +916,7 @@ where
         if let Some(persistence) = self.persistence.as_mut() {
             let _ = persistence.flush().await;
         }
+        diagnostic.completed = true;
         self.snapshot.diagnostic = std::sync::Arc::new(diagnostic);
         self.finish_foreground();
         Ok(())
@@ -1119,6 +1195,13 @@ where
             .plan_cycle(self.cycle, &ViewId::Gauges, &self.capabilities);
         let mut did_work = false;
 
+        // Adapter voltage is independent of the ECU PID scheduler. Refresh
+        // it sparsely so the extra serial command cannot dominate J1850 bus
+        // time, while still exposing an actual electrical measurement.
+        if self.cycle.is_multiple_of(20) {
+            self.refresh_adapter_voltage().await;
+        }
+
         for request in plan {
             self.process_control_boundary().await?;
             if !matches!(self.snapshot.mode, ModeState::Telemetry) {
@@ -1166,6 +1249,13 @@ where
                     did_work = true;
                 }
             }
+        }
+
+        if self
+            .cycle
+            .is_multiple_of(PROFILE_TURBO_SIGNAL_INTERVAL_CYCLES)
+        {
+            did_work |= self.poll_profile_turbo_signals().await?;
         }
 
         let Some(key) = self.verifier.next(Instant::now(), &ViewId::Gauges).cloned() else {
@@ -1274,6 +1364,96 @@ where
             .map_err(|_| super::verifier::ProbeError::Decode)?;
         self.snapshot.sample_at = Some(Instant::now());
         Ok(value)
+    }
+
+    /// Poll only display-owned Turbo signals from a selected profile. This
+    /// keeps profile traffic bounded on J1850 and never dispatches active-test
+    /// capabilities; ProfileRuntime rejects those independently as well.
+    async fn poll_profile_turbo_signals(&mut self) -> Result<bool> {
+        let (context, selected) = match (&self.profile_context, &self.selected_profile) {
+            (Some(context), Some(selected)) => (context.clone(), selected.clone()),
+            _ => return Ok(false),
+        };
+        let registry = ProfileRegistry::with_builtins();
+        let Some(profile) = registry.get(selected.profile_id()) else {
+            return Ok(false);
+        };
+        let keys = profile
+            .signal_display()
+            .iter()
+            .filter_map(|display| match (display.category, display.source) {
+                (SignalCategory::Turbo, SignalDisplaySource::ProfileSignal(key)) => Some(key),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if keys.is_empty() {
+            return Ok(false);
+        }
+
+        let mut observed = Vec::new();
+        {
+            let session = self
+                .session
+                .as_mut()
+                .ok_or_else(|| anyhow!("profile telemetry requested without an active session"))?;
+            let runtime = ProfileRuntime::new(&registry);
+            let mut evidence = NullEvidenceSink;
+            for key in keys {
+                match runtime
+                    .execute_request(
+                        session,
+                        &context,
+                        &selected,
+                        ProfileCapabilityId::Signal(key),
+                        ProfileRequestId::SINGLE,
+                        &mut evidence,
+                    )
+                    .await
+                {
+                    Ok(ProfileResponse::Signal(signal)) => observed.push((key, signal.value)),
+                    Ok(ProfileResponse::Dtcs(_)) => {}
+                    Err(error) => {
+                        // A rejected profile signal must not disturb standard
+                        // telemetry. Evidence and capability backoff are added
+                        // by the profile-verifier phase; this bounded display
+                        // poll merely withholds an unobserved value.
+                        tracing::debug!(?error, profile_signal = key, "profile turbo read failed");
+                    }
+                }
+            }
+        }
+        if observed.is_empty() {
+            return Ok(false);
+        }
+        let mut signals = (*self.snapshot.signals).clone();
+        for (key, value) in observed {
+            signals.insert(key.to_string(), value);
+        }
+        self.snapshot.signals = std::sync::Arc::new(signals);
+        self.snapshot.sample_at = Some(Instant::now());
+        self.publish();
+        Ok(true)
+    }
+
+    async fn refresh_adapter_voltage(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        match session.battery_voltage().await {
+            Ok(Some(voltage)) => {
+                self.snapshot.adapter_voltage = Some(voltage);
+                self.publish();
+            }
+            Ok(None) => {
+                self.snapshot.adapter_voltage = None;
+                self.publish();
+            }
+            Err(error) => {
+                // Retain the last good reading; a transient ATRV failure is
+                // neither an ECU fault nor a reason to disturb telemetry.
+                tracing::debug!(%error, "adapter voltage refresh failed");
+            }
+        }
     }
 }
 

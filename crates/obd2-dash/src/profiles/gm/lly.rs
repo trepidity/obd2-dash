@@ -26,7 +26,7 @@ pub struct GmLlyClass2Profile;
 
 pub static GM_LLY_CLASS2_PROFILE: GmLlyClass2Profile = GmLlyClass2Profile;
 
-const ID: ProfileId = ProfileId::new("gm.gmt800.lly.class2");
+pub const LLY_PROFILE_ID: ProfileId = ProfileId::new("gm.gmt800.lly.class2");
 const ALLOWED_PROTOCOLS: &[Protocol] = &[Protocol::J1850Vpw];
 const J1850_BUS: BusKey = BusKey::new("j1850vpw");
 
@@ -917,7 +917,7 @@ const LLY_DTC_SERVICES: &[DtcServiceDefinition] = &[
 
 impl DiagnosticProfile for GmLlyClass2Profile {
     fn id(&self) -> ProfileId {
-        ID
+        LLY_PROFILE_ID
     }
 
     fn manufacturer(&self) -> Manufacturer {

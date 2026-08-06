@@ -4,9 +4,15 @@
 //! neither owns a Session nor performs a diagnostic request; the conversion is
 //! therefore safe to call from a Tauri command at any cadence.
 
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
 use obd2_dash::mode_runner::{
     CapabilityPersistence, CapabilityVerification, DiagnosticDtc, DiagnosticDtcOrigin, ModeState,
     RunnerSnapshot,
+};
+use obd2_dash::profiles::{
+    builtin_profile, PairRole, SignalCategory as ProfileSignalCategory,
+    SignalComposition as ProfileSignalComposition, SignalDisplaySource,
 };
 use serde::Serialize;
 
@@ -92,6 +98,15 @@ pub struct SignalEvidence {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SignalComposition {
     Scalar,
+    Pair {
+        group_key: String,
+        role: String,
+    },
+    TableRow {
+        table_key: String,
+        row_index: u8,
+        row_label: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -134,10 +149,9 @@ pub struct CapabilityStateDto {
     pub remaining: Option<usize>,
 }
 
-/// Wire-compatible shell used by the existing React client.  Fields whose
-/// source used to be inline-backend-only remain present but empty until their
-/// runner-owned equivalents are added; no command handler synthesizes serial
-/// data to fill them.
+/// Wire-compatible shell used by the existing React client. No command
+/// handler synthesizes serial data: absent runner observations remain absent
+/// or explicitly unread at this presentation boundary.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct DiagnosticSnapshot {
     pub mode: RunnerModeDto,
@@ -151,13 +165,24 @@ pub struct DiagnosticSnapshot {
     pub vin: String,
     pub protocol: String,
     pub connection: String,
-    pub voltage: f64,
+    /// Adapter supply voltage from `ATRV`, when the adapter reports it.
+    pub voltage: Option<f64>,
     pub rpm: u16,
     pub speed_mph: u16,
     pub poll_ms: u16,
+    /// Age of the latest runner-owned sample when this DTO was built. This
+    /// excludes frontend delivery/render time so the GUI can report its own
+    /// presentation age independently.
+    pub runner_sample_age_ms: Option<u64>,
+    /// Approximate wall-clock instant of the runner sample. This is display
+    /// telemetry only; runner scheduling remains monotonic.
+    pub sample_at_unix_ms: Option<u64>,
     pub units: String,
     pub statuses: Vec<StatusValue>,
     pub alerts: Vec<String>,
+    /// Whether the current DTC collection comes from a completed operator
+    /// diagnostic pass rather than the empty initial runner state.
+    pub dtc_scan_complete: bool,
     pub dtcs: Vec<DtcSnapshot>,
     pub modules: Vec<ModuleScan>,
     pub source_confidence: Vec<SignalEvidence>,
@@ -175,35 +200,55 @@ impl From<&RunnerSnapshot> for DiagnosticSnapshot {
             .chain(snapshot.diagnostic.profile_dtcs.iter())
             .map(dtc_snapshot)
             .collect::<Vec<_>>();
-        let signals = snapshot
+        let mut signals = snapshot
             .signals
             .iter()
-            .map(|(key, value)| standard_signal(key, *value))
+            .map(|(key, value)| profile_or_standard_signal(snapshot, key, *value))
             .collect::<Vec<_>>();
+        append_profile_derived_signals(snapshot, &mut signals);
         let signal_keys = signals.iter().map(|signal| signal.key.clone()).collect();
         let alerts = alerts(snapshot);
 
+        let runner_sample_age_ms = sample_age_ms(snapshot.sample_at);
         Self {
             mode: mode_dto(&snapshot.mode),
             capability_state: capability_state_dto(snapshot),
             foreground_result: None,
-            // Identity/protocol presentation will move onto RunnerSnapshot as
-            // part of the GUI connector bootstrap.  These stable placeholders
-            // are preferable to re-reading a Session from the Tauri thread.
             vehicle: "Live OBD-II".to_string(),
-            vin: "--".to_string(),
-            protocol: "--".to_string(),
+            vin: snapshot
+                .connection
+                .vin
+                .clone()
+                .unwrap_or_else(|| "unread".to_string()),
+            protocol: snapshot
+                .connection
+                .protocol
+                .clone()
+                .unwrap_or_else(|| "unresolved".to_string()),
             connection: connection_label(&snapshot.mode),
-            voltage: snapshot.signals.get("0142").copied().unwrap_or_default(),
+            voltage: snapshot.adapter_voltage,
             rpm: rounded_signal(snapshot, "010C"),
             speed_mph: speed_mph(snapshot),
             poll_ms: GUI_POLL_MS,
+            runner_sample_age_ms,
+            sample_at_unix_ms: sample_at_unix_ms(runner_sample_age_ms),
             units: "US".to_string(),
             statuses: vec![
                 StatusValue {
                     label: "DTCs".to_string(),
-                    value: dtcs.len().to_string(),
-                    state: if dtcs.is_empty() { "ok" } else { "warn" }.to_string(),
+                    value: if snapshot.diagnostic.completed {
+                        dtcs.len().to_string()
+                    } else {
+                        "--".to_string()
+                    },
+                    state: if !snapshot.diagnostic.completed {
+                        "muted"
+                    } else if dtcs.is_empty() {
+                        "ok"
+                    } else {
+                        "warn"
+                    }
+                    .to_string(),
                 },
                 StatusValue {
                     label: "Runner".to_string(),
@@ -217,6 +262,7 @@ impl From<&RunnerSnapshot> for DiagnosticSnapshot {
                 },
             ],
             alerts,
+            dtc_scan_complete: snapshot.diagnostic.completed,
             dtcs,
             modules: Vec::new(),
             source_confidence: Vec::new(),
@@ -233,6 +279,21 @@ impl From<&RunnerSnapshot> for DiagnosticSnapshot {
             active_tests_v2: Vec::new(),
         }
     }
+}
+
+fn sample_age_ms(sample_at: Option<Instant>) -> Option<u64> {
+    let elapsed = Instant::now().checked_duration_since(sample_at?)?;
+    Some(duration_millis(elapsed))
+}
+
+fn sample_at_unix_ms(age_ms: Option<u64>) -> Option<u64> {
+    let sample_time = SystemTime::now().checked_sub(Duration::from_millis(age_ms?))?;
+    let since_epoch = sample_time.duration_since(UNIX_EPOCH).ok()?;
+    Some(duration_millis(since_epoch))
+}
+
+fn duration_millis(duration: Duration) -> u64 {
+    duration.as_millis().min(u128::from(u64::MAX)) as u64
 }
 
 fn mode_dto(mode: &ModeState) -> RunnerModeDto {
@@ -336,6 +397,120 @@ fn standard_signal(key: &str, value: f64) -> SignalSnapshot {
         preferred_over: None,
         evidence: None,
         composition: SignalComposition::Scalar,
+    }
+}
+
+fn profile_or_standard_signal(snapshot: &RunnerSnapshot, key: &str, value: f64) -> SignalSnapshot {
+    let Some(profile) = snapshot.selected_profile.and_then(builtin_profile) else {
+        return standard_signal(key, value);
+    };
+    let Some(display) = profile.signal_display().iter().find(|display| {
+        matches!(display.source, SignalDisplaySource::ProfileSignal(profile_key) if profile_key == key)
+    }) else {
+        return standard_signal(key, value);
+    };
+    SignalSnapshot {
+        key: key.to_string(),
+        label: display.label.to_string(),
+        category: profile_category(display.category).to_string(),
+        module: "ecm".to_string(),
+        unit: display.unit.to_string(),
+        value: Some(value),
+        state: "ok".to_string(),
+        confidence: "LiveObserved".to_string(),
+        provenance: vec!["confirmed profile runtime".to_string()],
+        source_fields: None,
+        request: Some(key.to_string()),
+        decoder_id: Some("profile runtime".to_string()),
+        evidence_policy: "normal".to_string(),
+        failure_policy: "retain".to_string(),
+        preferred_over: None,
+        evidence: None,
+        composition: profile_composition(display.composition),
+    }
+}
+
+fn append_profile_derived_signals(snapshot: &RunnerSnapshot, signals: &mut Vec<SignalSnapshot>) {
+    let Some(profile) = snapshot.selected_profile.and_then(builtin_profile) else {
+        return;
+    };
+    for display in profile.signal_display() {
+        let ProfileSignalDisplaySource::Derived {
+            formula_key,
+            input_keys,
+        } = display.source
+        else {
+            continue;
+        };
+        if formula_key != "actual_minus_desired" || input_keys.len() != 2 {
+            continue;
+        }
+        let Some(actual) = snapshot.signals.get(input_keys[0]) else {
+            continue;
+        };
+        let Some(desired) = snapshot.signals.get(input_keys[1]) else {
+            continue;
+        };
+        signals.push(SignalSnapshot {
+            key: display.key.to_string(),
+            label: display.label.to_string(),
+            category: profile_category(display.category).to_string(),
+            module: "derived".to_string(),
+            unit: display.unit.to_string(),
+            value: Some(actual - desired),
+            state: "ok".to_string(),
+            confidence: "LiveObserved".to_string(),
+            provenance: vec!["derived from confirmed profile runtime".to_string()],
+            source_fields: None,
+            request: None,
+            decoder_id: Some(formula_key.to_string()),
+            evidence_policy: "normal".to_string(),
+            failure_policy: "retain".to_string(),
+            preferred_over: None,
+            evidence: None,
+            composition: profile_composition(display.composition),
+        });
+    }
+}
+
+// Alias avoids confusing the profile definition source with the DTO enum.
+use obd2_dash::profiles::SignalDisplaySource as ProfileSignalDisplaySource;
+
+fn profile_category(category: ProfileSignalCategory) -> &'static str {
+    match category {
+        ProfileSignalCategory::Powertrain => "Powertrain",
+        ProfileSignalCategory::Turbo => "Turbo",
+        ProfileSignalCategory::Fuel => "Fuel",
+        ProfileSignalCategory::Transmission => "Transmission",
+        ProfileSignalCategory::Body => "Body",
+        ProfileSignalCategory::Chassis => "Chassis",
+        ProfileSignalCategory::Emissions => "Emissions",
+        ProfileSignalCategory::Other => "Other",
+    }
+}
+
+fn profile_composition(composition: ProfileSignalComposition) -> SignalComposition {
+    match composition {
+        ProfileSignalComposition::Scalar => SignalComposition::Scalar,
+        ProfileSignalComposition::Pair { group_key, role } => SignalComposition::Pair {
+            group_key: group_key.to_string(),
+            role: match role {
+                PairRole::Actual => "actual",
+                PairRole::Desired => "desired",
+                PairRole::Error => "error",
+                PairRole::Delta => "delta",
+            }
+            .to_string(),
+        },
+        ProfileSignalComposition::TableRow {
+            table_key,
+            row_index,
+            row_label,
+        } => SignalComposition::TableRow {
+            table_key: table_key.to_string(),
+            row_index,
+            row_label: row_label.to_string(),
+        },
     }
 }
 
@@ -452,9 +627,13 @@ mod tests {
     use super::*;
     use obd2_dash::mode_runner::{
         snapshot::{DiagnosticDtcKey, DiagnosticDtcStatus, DiagnosticResult},
-        CapabilityState, CapabilityVerification,
+        CapabilityState, CapabilityVerification, ConnectionMetadata,
     };
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::{
+        collections::BTreeMap,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn runner_snapshot_conversion_retains_typed_dtc_details() {
@@ -465,6 +644,7 @@ mod tests {
             ("010D".to_string(), 64.4),
         ]));
         snapshot.diagnostic = Arc::new(DiagnosticResult {
+            completed: true,
             standard_dtcs: vec![DiagnosticDtc {
                 key: DiagnosticDtcKey {
                     code: "P0101".to_string(),
@@ -485,6 +665,12 @@ mod tests {
             persistence: CapabilityPersistence::Cached,
             verification: CapabilityVerification::Ready,
         };
+        snapshot.connection = ConnectionMetadata {
+            vin: Some("1GCHK23224F000001".to_string()),
+            protocol: Some("J1850 VPW".to_string()),
+        };
+        snapshot.adapter_voltage = Some(14.1);
+        snapshot.sample_at = Some(Instant::now() - Duration::from_millis(12));
 
         let dto = DiagnosticSnapshot::from(&snapshot);
 
@@ -494,10 +680,24 @@ mod tests {
         assert_eq!(dto.dtcs[0].module, "ecm");
         assert_eq!(dto.signals[0].key, "010C");
         assert_eq!(dto.statuses[0].value, "1");
+        assert_eq!(dto.vin, "1GCHK23224F000001");
+        assert_eq!(dto.protocol, "J1850 VPW");
+        assert_eq!(dto.voltage, Some(14.1));
+        assert!(dto.runner_sample_age_ms.is_some_and(|age| age >= 12));
+        assert!(dto.sample_at_unix_ms.is_some());
         let json = serde_json::to_value(dto).unwrap();
         assert!(json.get("active_tests_v2").is_some());
         assert_eq!(json["mode"]["state"], "telemetry");
         assert_eq!(json["capability_state"]["persistence"], "cached");
         assert!(json["foreground_result"].is_null());
+    }
+
+    #[test]
+    fn absent_identity_and_voltage_remain_explicitly_unavailable() {
+        let dto = DiagnosticSnapshot::from(&RunnerSnapshot::empty());
+
+        assert_eq!(dto.vin, "unread");
+        assert_eq!(dto.protocol, "unresolved");
+        assert_eq!(dto.voltage, None);
     }
 }

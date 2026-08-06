@@ -219,7 +219,7 @@ function initialSnapshot(): DiagnosticSnapshot {
   return {
     ...fallbackSnapshot,
     connection: "connecting live",
-    voltage: 0,
+    voltage: null,
     rpm: 0,
     speed_mph: 0,
     alerts: ["Opening live serial session"],
@@ -231,6 +231,10 @@ function initialSnapshot(): DiagnosticSnapshot {
 function formatSigned(value: number, digits = 1): string {
   const formatted = value.toFixed(digits);
   return value > 0 ? `+${formatted}` : formatted;
+}
+
+function formatAdapterVoltage(voltage: number | null): string {
+  return voltage == null ? "unavailable" : `${voltage.toFixed(1)} V`;
 }
 
 function psiToKpa(psi: number): number {
@@ -1010,8 +1014,8 @@ function StatusStrip({
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
-        <div className="text-[11px] text-zinc-400">Voltage</div>
-        <div className="mt-1 text-lg font-semibold text-zinc-100">{snapshot.voltage.toFixed(1)} V</div>
+        <div className="text-[11px] text-zinc-400">Adapter voltage</div>
+        <div className="mt-1 text-lg font-semibold text-zinc-100">{formatAdapterVoltage(snapshot.voltage)}</div>
       </div>
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
         <div className="text-[11px] text-zinc-400">Engine RPM</div>
@@ -1227,11 +1231,11 @@ function DiagnosticsView({
   return (
     <div className="grid gap-3 xl:grid-cols-[360px_minmax(0,1fr)_360px]">
       <div className="flex flex-col gap-3">
-        <DtcPanel dtcs={snapshot.dtcs} />
+        <DtcPanel dtcs={snapshot.dtcs} scanned={snapshot.dtc_scan_complete ?? true} />
         <Panel title="Diagnostic status" icon={<ShieldAlert size={14} />}>
           <div className="space-y-3 text-sm">
             <SettingRow label="MIL" value={snapshot.statuses.find((item) => item.label === "MIL")?.value ?? "--"} />
-            <SettingRow label="DTC count" value={snapshot.dtcs.length.toString()} />
+            <SettingRow label="DTC count" value={(snapshot.dtc_scan_complete ?? true) ? snapshot.dtcs.length.toString() : "not scanned"} />
             <SettingRow label="Modules" value={snapshot.modules.length.toString()} />
           </div>
           <div className="mt-4 flex flex-wrap gap-2 border-t border-zinc-800 pt-3">
@@ -1538,7 +1542,7 @@ function CapabilityOverviewView({ snapshot, unitMode }: { snapshot: DiagnosticSn
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
       <TelemetryBoard snapshot={snapshot} unitMode={unitMode} />
       <div className="flex flex-col gap-3">
-        <DtcPanel dtcs={snapshot.dtcs} />
+        <DtcPanel dtcs={snapshot.dtcs} scanned={snapshot.dtc_scan_complete ?? true} />
         <AlertsPanel alerts={snapshot.alerts} />
       </div>
     </div>
@@ -1563,14 +1567,18 @@ function AlertsPanel({ alerts }: { alerts: string[] }) {
   );
 }
 
-function DtcPanel({ dtcs }: { dtcs: DtcSnapshot[] }) {
+function DtcPanel({ dtcs, scanned }: { dtcs: DtcSnapshot[]; scanned: boolean }) {
   const pendingCount = dtcs.filter((dtc) => dtc.status.includes("pending")).length;
   const currentCount = dtcs.filter((dtc) => dtc.status.includes("current")).length;
   const storedCount = Math.max(0, dtcs.length - pendingCount);
 
   return (
     <Panel title="DTCs" icon={<FileText size={14} />}>
-      {dtcs.length === 0 ? (
+      {!scanned ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">
+          DTC scan has not run. Open Diagnostics and select Run diagnostic.
+        </div>
+      ) : dtcs.length === 0 ? (
         <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-3 text-sm text-emerald-200">
           No diagnostic codes
         </div>
@@ -1627,6 +1635,10 @@ function SettingsPanel({
   unitMode: UnitMode;
   setUnitMode: (mode: UnitMode) => void;
 }) {
+  const presentationAgeMs = snapshot.sample_at_unix_ms == null
+    ? null
+    : Math.max(0, Date.now() - snapshot.sample_at_unix_ms);
+
   return (
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_360px]">
       <Panel title="Runtime settings" icon={<Settings size={14} />} className="min-h-[420px]">
@@ -1666,6 +1678,14 @@ function SettingsPanel({
             <div className="text-[11px] font-semibold uppercase text-zinc-400">Polling</div>
             <div className="mt-3 space-y-3 text-sm">
               <SettingRow label="Standard PID poll" value={`${snapshot.poll_ms} ms`} />
+              <SettingRow
+                label="Runner sample age"
+                value={snapshot.runner_sample_age_ms == null ? "not sampled" : `${snapshot.runner_sample_age_ms} ms`}
+              />
+              <SettingRow
+                label="GUI presentation age"
+                value={presentationAgeMs == null ? "not sampled" : `${presentationAgeMs} ms`}
+              />
               <SettingRow label="Enhanced refresh" value="2.5 s live" />
               <SettingRow label="Mode" value="live snapshot" />
             </div>
@@ -1683,11 +1703,11 @@ function SettingsPanel({
           <section className="rounded-md border border-zinc-800 bg-black/25 p-3">
             <div className="text-[11px] font-semibold uppercase text-zinc-400">Diagnostics</div>
             <div className="mt-3 space-y-3 text-sm">
-              <SettingRow label="Enhanced DTC service" value="GM Class 2 $19" tone="ok" />
-              <SettingRow label="Desired fuel rail" value="GM $22 163D 01" tone="ok" />
-              <SettingRow label="Barometer" value="GM $22 1251 01 candidate" tone="warn" />
-              <SettingRow label="Desired MAP" value="GM $22 1542 01 candidate" tone="warn" />
-              <SettingRow label="Status byte map" value="GM status byte" />
+              <SettingRow label="Standard diagnostics" value="manual scan only" />
+              <SettingRow label="Profile telemetry" value="runner-owned when confirmed" tone="muted" />
+              <div className="text-xs leading-5 text-zinc-500">
+                Enhanced reads run only after explicit profile confirmation.
+              </div>
             </div>
           </section>
         </div>
@@ -1697,7 +1717,7 @@ function SettingsPanel({
         <div className="space-y-3 text-sm">
           <SettingRow label="Vehicle" value={snapshot.vehicle} />
           <SettingRow label="VIN" value={snapshot.vin} />
-          <SettingRow label="Voltage" value={`${snapshot.voltage.toFixed(1)} V`} />
+          <SettingRow label="Adapter voltage" value={formatAdapterVoltage(snapshot.voltage)} />
           <SettingRow label="Connection" value={snapshot.connection} tone="ok" />
         </div>
         <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs leading-5 text-amber-200">
@@ -1715,10 +1735,16 @@ function SettingRow({
 }: {
   label: string;
   value: string;
-  tone?: "default" | "ok" | "warn";
+  tone?: "default" | "ok" | "warn" | "muted";
 }) {
   const valueClass =
-    tone === "ok" ? "text-emerald-300" : tone === "warn" ? "text-amber-300" : "text-zinc-200";
+    tone === "ok"
+      ? "text-emerald-300"
+      : tone === "warn"
+        ? "text-amber-300"
+        : tone === "muted"
+          ? "text-zinc-500"
+          : "text-zinc-200";
   return (
     <div className="flex items-center justify-between gap-3 border-b border-zinc-800 pb-2 last:border-0 last:pb-0">
       <span className="text-zinc-400">{label}</span>

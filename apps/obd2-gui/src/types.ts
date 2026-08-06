@@ -167,13 +167,16 @@ export interface DiagnosticSnapshot {
   vin: string;
   protocol: string;
   connection: string;
-  voltage: number;
+  voltage: number | null;
   rpm: number;
   speed_mph: number;
   poll_ms: number;
+  runner_sample_age_ms?: number | null;
+  sample_at_unix_ms?: number | null;
   units: string;
   statuses: StatusValue[];
   alerts: string[];
+  dtc_scan_complete?: boolean;
   dtcs: DtcSnapshot[];
   modules: ModuleScan[];
   source_confidence: SignalEvidence[];

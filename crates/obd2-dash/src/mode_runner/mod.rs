@@ -17,8 +17,8 @@ pub mod testing;
 pub mod verifier;
 
 pub use capability::{
-    default_probe_fingerprint, protocol_token, CapabilityKey, CapabilityKind, CapabilityOutcome,
-    CapabilitySet,
+    default_probe_fingerprint, protocol_display, protocol_token, CapabilityKey, CapabilityKind,
+    CapabilityOutcome, CapabilitySet,
 };
 pub use command::{
     control_channel, reply_for, CommandReply, ControlCommand, ControlInput, QueuedCommand,
@@ -31,12 +31,14 @@ pub use diagnostic::{
     DiagnosticTransport, FuelClass, LockedActiveTestExecution, RequestExpansion, RequestTarget,
     ServiceGates, StepErrorKind, StepResult,
 };
-pub use lifecycle::{ConnectError, ModeRunner, NewSession, SessionConnector};
+pub use lifecycle::{
+    ConnectError, ManualProfileConfirmation, ModeRunner, NewSession, SessionConnector,
+};
 pub use persistence::Persistence;
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};
 pub use snapshot::{
-    CapabilityPersistence, CapabilityState, CapabilityVerification, DiagnosticDtc,
-    DiagnosticDtcOrigin, ModeState, RunnerSnapshot,
+    CapabilityPersistence, CapabilityState, CapabilityVerification, ConnectionMetadata,
+    DiagnosticDtc, DiagnosticDtcOrigin, ModeState, RunnerSnapshot,
 };
 pub use store::{CapabilityStore, SqliteCapabilityStore};
 pub use verifier::{ProbeError, VerificationResult, Verifier};

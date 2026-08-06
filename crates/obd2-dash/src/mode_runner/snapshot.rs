@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::profiles::ProfileId;
+
 /// One DTC as presented to a snapshot consumer.  This intentionally does
 /// not expose core's mutable protocol type: the runner owns a stable,
 /// transport-independent diagnostic result after the scan completes.
@@ -78,6 +80,9 @@ pub struct DiagnosticFreezeFrame {
 /// OEM decoder result for a generic Mode-03 response.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DiagnosticResult {
+    /// True only after an operator-initiated diagnostic pass reached its
+    /// normal completion. An empty pre-scan result is not a clean scan.
+    pub completed: bool,
     pub standard_dtcs: Vec<DiagnosticDtc>,
     pub profile_dtcs: Vec<DiagnosticDtc>,
     pub freeze_frames: Vec<DiagnosticFreezeFrame>,
@@ -135,10 +140,26 @@ pub struct CapabilityState {
     pub verification: CapabilityVerification,
 }
 
+/// Connection metadata that the runner has observed without exposing its
+/// session or adapter to snapshot consumers. Missing values are meaningful:
+/// an older vehicle may provide standard telemetry without answering Mode 09.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectionMetadata {
+    pub vin: Option<String>,
+    pub protocol: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RunnerSnapshot {
     pub mode: ModeState,
     pub capability: CapabilityState,
+    pub connection: ConnectionMetadata,
+    /// Profile selected by the runner. A manually confirmed profile remains
+    /// explicit so presentation consumers do not infer it from a VIN string.
+    pub selected_profile: Option<ProfileId>,
+    pub profile_manually_confirmed: bool,
+    /// Adapter-reported supply voltage from `ATRV`, not SAE PID 01 42.
+    pub adapter_voltage: Option<f64>,
     pub signals: Arc<BTreeMap<String, f64>>,
     pub diagnostic: Arc<DiagnosticResult>,
     pub sample_at: Option<Instant>,
@@ -152,6 +173,10 @@ impl RunnerSnapshot {
                 persistence: CapabilityPersistence::Pending,
                 verification: CapabilityVerification::Verifying { remaining: 0 },
             },
+            connection: ConnectionMetadata::default(),
+            selected_profile: None,
+            profile_manually_confirmed: false,
+            adapter_voltage: None,
             signals: Arc::new(BTreeMap::new()),
             diagnostic: Arc::new(DiagnosticResult::default()),
             sample_at: None,
@@ -190,5 +215,12 @@ mod tests {
         assert!(snapshot.diagnostic.standard_dtcs.is_empty());
         assert!(snapshot.diagnostic.profile_dtcs.is_empty());
         assert!(snapshot.diagnostic.freeze_frames.is_empty());
+    }
+
+    #[test]
+    fn empty_snapshot_does_not_invent_connection_metadata_or_voltage() {
+        let snapshot = RunnerSnapshot::empty();
+        assert_eq!(snapshot.connection, ConnectionMetadata::default());
+        assert_eq!(snapshot.adapter_voltage, None);
     }
 }
