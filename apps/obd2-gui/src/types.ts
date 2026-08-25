@@ -53,7 +53,7 @@ export type Confidence =
   | "Verified"
   | "Rejected";
 
-export type SignalRuntimeState = "ok" | "waiting" | "cached" | "unsupported" | "error";
+export type SignalRuntimeState = "ok" | "warn" | "waiting" | "cached" | "unsupported" | "error";
 
 export interface SignalRxdSource {
   raw: string;
@@ -74,6 +74,17 @@ export type SignalComposition =
   | { kind: "table_row"; table_key: string; table_label?: string; row_index: number; row_label: string }
   | { kind: "derived"; group_key: string; group_label?: string; formula_key: string; input_keys: string[] };
 
+export interface SignalOperatingRange {
+  evaluation: "absolute_magnitude";
+  desired_max: number;
+  caution_max: number;
+  desired_label: string;
+  caution_label: string;
+  outside_label: string;
+  conditions: string;
+  source_ref: string;
+}
+
 export interface SignalSnapshot {
   key: string;
   label: string;
@@ -92,6 +103,7 @@ export interface SignalSnapshot {
   preferred_over: string | null;
   evidence: SignalEvidence | null;
   composition: SignalComposition;
+  operating_range?: SignalOperatingRange | null;
 }
 
 export type CapabilitySectionCategory =

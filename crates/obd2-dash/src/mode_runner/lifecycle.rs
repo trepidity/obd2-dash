@@ -36,9 +36,10 @@ use crate::profiles::{
     acquire_identity, build_vehicle_context, next_generation, select_into_state, IdentityOutcome,
 };
 use crate::profiles::{
-    CapabilityId as ProfileCapabilityId, DiagnosticProfile, IdentityConfidence, NullEvidenceSink,
-    ProfileId, ProfileResponse, ProfileRuntime, RequestId as ProfileRequestId, SelectedProfile,
-    SignalCategory, SignalDisplaySource, VehicleContext,
+    CapabilityId as ProfileCapabilityId, Confidence, DiagnosticProfile, FailurePolicy,
+    IdentityConfidence, NullEvidenceSink, PollCadence, ProfileId, ProfileResponse, ProfileRuntime,
+    RequestId as ProfileRequestId, SelectedProfile, SignalCategory, SignalDisplaySource,
+    VehicleContext,
 };
 use tokio::sync::watch;
 
@@ -83,7 +84,18 @@ fn profile_probe_descriptors(profile: Option<&dyn DiagnosticProfile>) -> Vec<Req
     pids.into_iter().map(standard_pid_descriptor).collect()
 }
 
-const PROFILE_TURBO_SIGNAL_INTERVAL_CYCLES: u64 = 10;
+const PROFILE_FAST_SIGNAL_INTERVAL_CYCLES: u64 = 10;
+const PROFILE_MEDIUM_SIGNAL_INTERVAL_CYCLES: u64 = 20;
+/// Poll exactly one Fuel profile signal per interval. A complete LLY fuel
+/// sweep is nine requests; issuing that whole sweep together can starve the
+/// J1850 telemetry scheduler and make otherwise-working gauges appear dead.
+const PROFILE_FUEL_SIGNAL_INTERVAL_CYCLES: u64 = 4;
+const PROFILE_SLOW_SIGNAL_INTERVAL_CYCLES: u64 = 60;
+/// A transient Mode 09 failure must not strand a live vehicle in the generic
+/// profile for the rest of the session. Retry one read at a low cadence while
+/// VIN is absent; unlike startup acquisition this is deliberately a single
+/// request so identity recovery cannot monopolize a slow J1850 bus.
+const MISSING_IDENTITY_RETRY_INTERVAL_CYCLES: u64 = 20;
 
 /// Standard-PID cadence tiers per the design's §10 telemetry table. Tier C is
 /// the low-cadence remainder for secondary PIDs; view gating is reserved for
@@ -200,6 +212,10 @@ where
     profile_context: Option<VehicleContext>,
     selected_profile: Option<SelectedProfile>,
     manual_profile_confirmation: Option<ManualProfileConfirmation>,
+    /// A VIN read during a rescan remains trustworthy for the immediately
+    /// following reconnect, even if the adapter's second Mode 09 attempt is
+    /// transiently unreadable. It is consumed exactly once by `connect`.
+    rescan_identity: Option<IdentityOutcome>,
     foreground_cancel_requested: bool,
     diagnostic_no_data: BTreeSet<CapabilityKey>,
     control: Option<RunnerControlReceiver>,
@@ -231,6 +247,7 @@ where
             profile_context: None,
             selected_profile: None,
             manual_profile_confirmation: None,
+            rescan_identity: None,
             foreground_cancel_requested: false,
             diagnostic_no_data: BTreeSet::new(),
             control: None,
@@ -392,12 +409,19 @@ where
         self.snapshot.adapter_voltage = new_session.session.battery_voltage().await.ok().flatten();
 
         let observed_identity = acquire_identity(&mut new_session.session, 2).await;
-        let identity = match (&observed_identity.vin, &self.manual_profile_confirmation) {
-            (None, Some(confirmation)) => IdentityOutcome {
+        let rescan_identity = self.rescan_identity.take();
+        let identity = match (
+            &observed_identity.vin,
+            rescan_identity,
+            &self.manual_profile_confirmation,
+        ) {
+            (Some(_), _, _) => observed_identity,
+            (None, Some(identity), _) => identity,
+            (None, None, Some(confirmation)) => IdentityOutcome {
                 vin: Some(confirmation.vin.clone()),
                 confidence: IdentityConfidence::Single,
             },
-            _ => observed_identity,
+            (None, None, None) => observed_identity,
         };
         self.snapshot.connection.vin = identity.vin.clone();
         let Some(vin) = identity.vin.clone() else {
@@ -546,6 +570,12 @@ where
                     cached
                         .records
                         .iter()
+                        // Diagnostic service outcomes share the capability
+                        // store with PID outcomes, but only PIDs belong to
+                        // the live telemetry scheduler.  Scheduling a cached
+                        // service (for example "01") as a PID turns it into
+                        // an invalid request id and forces a reconnect loop.
+                        .filter(|entry| entry.kind == CapabilityKind::Pid)
                         .map(|entry| RequestDescriptor {
                             key: CapabilityKey::new(
                                 entry.kind,
@@ -560,12 +590,27 @@ where
                         .collect(),
                 );
                 for record in &cached.records {
-                    if record.outcome == CapabilityOutcome::Unverified {
-                        let key = CapabilityKey::new(
-                            record.kind,
-                            record.request_id.clone(),
-                            record.module.clone(),
-                        );
+                    if record.kind != CapabilityKind::Pid {
+                        continue;
+                    }
+                    let key = CapabilityKey::new(
+                        record.kind,
+                        record.request_id.clone(),
+                        record.module.clone(),
+                    );
+                    // A forced PID is part of the selected vehicle profile's
+                    // minimum live-data contract.  A previous transient NO
+                    // DATA must not suppress it indefinitely: re-verify an
+                    // old cached Unsupported result on each fresh session.
+                    // This matters on Class-2 where the initial supported-PID
+                    // sweep can be incomplete while the engine is waking up.
+                    let needs_forced_recheck = record.outcome == CapabilityOutcome::Unsupported
+                        && self.forced_standard_keys.contains(&key);
+                    if record.outcome == CapabilityOutcome::Unverified || needs_forced_recheck {
+                        if needs_forced_recheck {
+                            self.capabilities
+                                .insert(key.clone(), CapabilityOutcome::Unverified);
+                        }
                         if !self.verifier.contains(&key) {
                             self.verifier.insert(key, Tier::A, Some(ViewId::Gauges));
                         }
@@ -1000,6 +1045,26 @@ where
             return Ok(());
         }
 
+        // A successful VIN read after generic fallback changes both the
+        // profile and the probe schema. Reopen the session so `connect` can
+        // atomically select that profile and load its matching capability
+        // context. Preserve this just-read identity for that one reconnect:
+        // Mode 09 is known to be intermittently unreadable on this VPW truck.
+        let refreshed_identity = {
+            let session = self
+                .session
+                .as_mut()
+                .ok_or_else(|| anyhow!("rescan requested without an active session"))?;
+            acquire_identity(session, 2).await
+        };
+        if refreshed_identity.vin.is_some()
+            && refreshed_identity.vin.as_deref() != self.vin.as_deref()
+        {
+            self.rescan_identity = Some(refreshed_identity);
+            self.session = None;
+            return self.connect().await;
+        }
+
         let supported = match self
             .session
             .as_mut()
@@ -1190,6 +1255,15 @@ where
             return Ok(false);
         }
         self.cycle = self.cycle.saturating_add(1);
+
+        if self
+            .cycle
+            .is_multiple_of(MISSING_IDENTITY_RETRY_INTERVAL_CYCLES)
+            && self.retry_missing_identity().await?
+        {
+            return Ok(true);
+        }
+
         let plan = self
             .scheduler
             .plan_cycle(self.cycle, &ViewId::Gauges, &self.capabilities);
@@ -1251,12 +1325,7 @@ where
             }
         }
 
-        if self
-            .cycle
-            .is_multiple_of(PROFILE_TURBO_SIGNAL_INTERVAL_CYCLES)
-        {
-            did_work |= self.poll_profile_turbo_signals().await?;
-        }
+        did_work |= self.poll_profile_display_signals().await?;
 
         let Some(key) = self.verifier.next(Instant::now(), &ViewId::Gauges).cloned() else {
             return Ok(did_work);
@@ -1366,10 +1435,10 @@ where
         Ok(value)
     }
 
-    /// Poll only display-owned Turbo signals from a selected profile. This
-    /// keeps profile traffic bounded on J1850 and never dispatches active-test
-    /// capabilities; ProfileRuntime rejects those independently as well.
-    async fn poll_profile_turbo_signals(&mut self) -> Result<bool> {
+    /// Poll display-owned Turbo signals at their normal cadence and at most
+    /// one Fuel signal per pass. A full LLY injector sweep is deliberately
+    /// round-robin: it must not monopolize a J1850 request boundary.
+    async fn poll_profile_display_signals(&mut self) -> Result<bool> {
         let (context, selected) = match (&self.profile_context, &self.selected_profile) {
             (Some(context), Some(selected)) => (context.clone(), selected.clone()),
             _ => return Ok(false),
@@ -1378,14 +1447,51 @@ where
         let Some(profile) = registry.get(selected.profile_id()) else {
             return Ok(false);
         };
-        let keys = profile
+        let turbo_keys = profile
             .signal_display()
             .iter()
             .filter_map(|display| match (display.category, display.source) {
-                (SignalCategory::Turbo, SignalDisplaySource::ProfileSignal(key)) => Some(key),
+                (SignalCategory::Turbo, SignalDisplaySource::ProfileSignal(key)) => profile
+                    .signals()
+                    .iter()
+                    .find(|signal| signal.key == key)
+                    .filter(|signal| {
+                        Self::profile_signal_pollable(signal.confidence, signal.failure_policy)
+                    })
+                    .filter(|signal| Self::profile_signal_due(signal.cadence, self.cycle))
+                    .map(|signal| signal.key),
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let fuel_keys = profile
+            .signal_display()
+            .iter()
+            .filter_map(|display| match (display.category, display.source) {
+                (SignalCategory::Fuel, SignalDisplaySource::ProfileSignal(key)) => profile
+                    .signals()
+                    .iter()
+                    .find(|signal| signal.key == key)
+                    .filter(|signal| {
+                        Self::profile_signal_pollable(signal.confidence, signal.failure_policy)
+                    })
+                    .map(|signal| signal.key),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let fuel_key = if fuel_keys.is_empty()
+            || !self
+                .cycle
+                .is_multiple_of(PROFILE_FUEL_SIGNAL_INTERVAL_CYCLES)
+        {
+            None
+        } else {
+            fuel_keys
+                .get(
+                    ((self.cycle / PROFILE_FUEL_SIGNAL_INTERVAL_CYCLES) as usize) % fuel_keys.len(),
+                )
+                .copied()
+        };
+        let keys = turbo_keys.into_iter().chain(fuel_key).collect::<Vec<_>>();
         if keys.is_empty() {
             return Ok(false);
         }
@@ -1417,7 +1523,11 @@ where
                         // telemetry. Evidence and capability backoff are added
                         // by the profile-verifier phase; this bounded display
                         // poll merely withholds an unobserved value.
-                        tracing::debug!(?error, profile_signal = key, "profile turbo read failed");
+                        tracing::debug!(
+                            ?error,
+                            profile_signal = key,
+                            "profile display signal read failed"
+                        );
                     }
                 }
             }
@@ -1433,6 +1543,60 @@ where
         self.snapshot.sample_at = Some(Instant::now());
         self.publish();
         Ok(true)
+    }
+
+    fn profile_signal_pollable(confidence: Confidence, failure_policy: FailurePolicy) -> bool {
+        !matches!(confidence, Confidence::Candidate | Confidence::Rejected)
+            && !matches!(
+                failure_policy,
+                FailurePolicy::CandidateOnly | FailurePolicy::DoNotPoll
+            )
+    }
+
+    fn profile_signal_due(cadence: PollCadence, cycle: u64) -> bool {
+        let interval = match cadence {
+            PollCadence::Fast => PROFILE_FAST_SIGNAL_INTERVAL_CYCLES,
+            PollCadence::Medium => PROFILE_MEDIUM_SIGNAL_INTERVAL_CYCLES,
+            PollCadence::Slow => PROFILE_SLOW_SIGNAL_INTERVAL_CYCLES,
+            PollCadence::OnDemand => return false,
+        };
+        cycle.is_multiple_of(interval)
+    }
+
+    /// Recover automatically when startup Mode 09 was transiently unreadable.
+    /// The successful identity is carried across exactly one fresh connection,
+    /// because the reconnect's own Mode 09 read can fail independently on VPW.
+    async fn retry_missing_identity(&mut self) -> Result<bool> {
+        if self.vin.is_some() || self.snapshot.connection.vin.is_some() {
+            return Ok(false);
+        }
+        let Some(session) = self.session.as_mut() else {
+            return Ok(false);
+        };
+
+        match session.read_vin().await {
+            Ok(vin) if crate::profiles::validate_vin_charset(&vin) => {
+                self.rescan_identity = Some(IdentityOutcome {
+                    vin: Some(vin),
+                    confidence: IdentityConfidence::Single,
+                });
+                self.session = None;
+                self.connect().await?;
+                Ok(true)
+            }
+            Ok(vin) => {
+                tracing::warn!(%vin, "discarding malformed VIN returned during identity retry");
+                Ok(false)
+            }
+            Err(Obd2Error::Transport(error)) => {
+                Err(anyhow!("VIN recovery request failed: transport: {error}"))
+            }
+            Err(Obd2Error::Io(error)) => Err(anyhow!(error).context("VIN recovery serial I/O")),
+            Err(error) => {
+                tracing::debug!(%error, "VIN still unreadable during background retry");
+                Ok(false)
+            }
+        }
     }
 
     async fn refresh_adapter_voltage(&mut self) {
@@ -1460,6 +1624,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mode_runner::testing::{ScriptedConnector as TestConnector, ScriptedResponse};
     use crate::mode_runner::SqliteCapabilityStore;
     use obd2_core::adapter::mock::MockAdapter;
     use obd2_db::Database;
@@ -1519,6 +1684,38 @@ mod tests {
         runner.connect().await.unwrap();
         runner.reconnect().await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+    }
+
+    #[tokio::test]
+    async fn generic_session_retries_vin_and_selects_profile_after_recovery() {
+        let connector = TestConnector::new("1GTHK29294E391526")
+            .with_protocol(obd2_core::vehicle::Protocol::J1850Vpw);
+        for _ in 0..3 {
+            connector
+                .script
+                .push(0x09, Some(0x02), ScriptedResponse::NoData);
+        }
+        let calls = Arc::clone(&connector.calls);
+        let store = SqliteCapabilityStore::from_database(Database::open_in_memory().unwrap());
+        let mut runner = ModeRunner::new(connector, store);
+
+        runner.connect().await.unwrap();
+        assert_eq!(runner.snapshot().connection.vin, None);
+        assert_eq!(runner.snapshot().selected_profile, None);
+
+        runner.cycle = MISSING_IDENTITY_RETRY_INTERVAL_CYCLES - 1;
+        assert!(runner.poll_cycle().await.unwrap());
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            runner.snapshot().connection.vin.as_deref(),
+            Some("1GTHK29294E391526")
+        );
+        assert_eq!(
+            runner.snapshot().selected_profile,
+            Some(crate::profiles::gm::LLY_PROFILE_ID)
+        );
         assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
     }
 }

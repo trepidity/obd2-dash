@@ -199,9 +199,22 @@ function capabilitySectionIcon(category: CapabilitySectionCategory): React.React
 function runtimeTone(signal: CapabilitySignalSnapshot): "ok" | "warn" | "crit" | "muted" {
   if (signal.confidence === "Rejected" || signal.failure_policy === "DoNotPoll") return "muted";
   if (signal.state === "ok") return "ok";
-  if (signal.state === "cached" || signal.state === "waiting" || signal.confidence === "Candidate") return "warn";
+  if (signal.state === "warn" || signal.state === "cached" || signal.state === "waiting" || signal.confidence === "Candidate") return "warn";
   if (signal.state === "error") return "crit";
   return "muted";
+}
+
+function tableSignalTone(signal: CapabilitySignalSnapshot): StateKind {
+  const transportTone = runtimeTone(signal);
+  const range = signal.operating_range;
+  if (transportTone !== "ok" || range == null || signal.value == null) {
+    return transportTone;
+  }
+
+  const evaluated = range.evaluation === "absolute_magnitude" ? Math.abs(signal.value) : signal.value;
+  if (evaluated <= range.desired_max) return "ok";
+  if (evaluated <= range.caution_max) return "warn";
+  return "crit";
 }
 
 function isTauriRuntime(): boolean {
@@ -582,7 +595,7 @@ function Toolbar({
   snapshot,
   unitMode,
   setUnitMode,
-  refresh,
+  rescanVehicle,
   lastRefresh,
   sessionMode,
   selectedRecording,
@@ -600,7 +613,8 @@ function Toolbar({
   snapshot: DiagnosticSnapshot;
   unitMode: UnitMode;
   setUnitMode: (mode: UnitMode) => void;
-  refresh: () => void;
+  /** Starts a foreground vehicle capability rescan. */
+  rescanVehicle: () => void;
   lastRefresh: Date;
   sessionMode: SessionMode;
   selectedRecording: RecordingSummary | null;
@@ -836,10 +850,11 @@ function Toolbar({
           </button>
           <button
             className="inline-flex h-8 items-center gap-2 rounded-md border border-zinc-700 bg-zinc-900 px-3 text-xs font-semibold text-zinc-200 hover:border-zinc-500"
-            onClick={refresh}
+            onClick={rescanVehicle}
+            title="Rescan vehicle capabilities"
           >
             <RotateCcw size={14} />
-            Refresh
+            Rescan
           </button>
           <div className="hidden min-w-[112px] text-right text-[11px] text-zinc-400 xl:block">
             {lastRefresh.toLocaleTimeString()}
@@ -1410,6 +1425,7 @@ function GenericTablePanel({
   const title = sorted.find((signal): signal is TableRowSignal => isTableRowSignal(signal) && signal.composition.table_label != null)
     ?.composition.table_label ?? titleFromKey(tableKey);
   const unit = sorted.find((signal) => signal.unit)?.unit ?? "";
+  const operatingRange = sorted.find((signal) => signal.operating_range != null)?.operating_range ?? null;
 
   return (
     <Panel title={title} icon={<Table2 size={14} />}>
@@ -1436,15 +1452,43 @@ function GenericTablePanel({
           <tbody>
             <tr>
               <td className="border border-zinc-800 px-2 py-2 text-xs text-zinc-400">{unit}</td>
-              {sorted.map((signal) => (
-                <td className={`border border-zinc-800 px-2 py-2 text-center font-semibold ${stateClasses[runtimeTone(signal)]}`} key={signal.key}>
-                  {signalDisplayValue(signal, unitMode)}
-                </td>
-              ))}
+              {sorted.map((signal) => {
+                const tone = tableSignalTone(signal);
+                return (
+                  <td
+                    className={`border border-zinc-800 px-2 py-2 text-center font-semibold ${stateClasses[tone]}`}
+                    data-range-tone={tone}
+                    key={signal.key}
+                  >
+                    {signalDisplayValue(signal, unitMode)}
+                  </td>
+                );
+              })}
             </tr>
           </tbody>
         </table>
       </div>
+      {operatingRange ? (
+        <div
+          aria-label={`${title} operating range legend`}
+          className="mt-2 text-[10px]"
+        >
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <span className={stateClasses.ok}>
+              Green: {operatingRange.desired_label} |value| ≤ {operatingRange.desired_max}
+            </span>
+            <span className={stateClasses.warn}>
+              Yellow: {operatingRange.caution_label} {operatingRange.desired_max} &lt; |value| ≤ {operatingRange.caution_max}
+            </span>
+            <span className={stateClasses.crit}>
+              Red: {operatingRange.outside_label} |value| &gt; {operatingRange.caution_max}
+            </span>
+          </div>
+          <div className="mt-1 text-zinc-500" title={operatingRange.source_ref}>
+            Conditions: {operatingRange.conditions}
+          </div>
+        </div>
+      ) : null}
     </Panel>
   );
 }
@@ -2020,7 +2064,7 @@ function App() {
         snapshot={snapshot}
         unitMode={unitMode}
         setUnitMode={setUnitMode}
-        refresh={refresh}
+        rescanVehicle={() => void submitRunnerCommand("rescan_vehicle")}
         lastRefresh={lastRefresh}
         sessionMode={sessionMode}
         selectedRecording={selectedRecording}

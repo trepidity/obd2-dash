@@ -12,7 +12,8 @@ use obd2_dash::mode_runner::{
 };
 use obd2_dash::profiles::{
     builtin_profile, PairRole, SignalCategory as ProfileSignalCategory,
-    SignalComposition as ProfileSignalComposition, SignalDisplaySource,
+    SignalComposition as ProfileSignalComposition, SignalDisplaySource, SignalRangeDefinition,
+    SignalRangeEvaluation,
 };
 use serde::Serialize;
 
@@ -61,6 +62,19 @@ pub struct SignalSnapshot {
     pub preferred_over: Option<String>,
     pub evidence: Option<SignalEvidence>,
     pub composition: SignalComposition,
+    pub operating_range: Option<SignalOperatingRange>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct SignalOperatingRange {
+    pub evaluation: String,
+    pub desired_max: f64,
+    pub caution_max: f64,
+    pub desired_label: String,
+    pub caution_label: String,
+    pub outside_label: String,
+    pub conditions: String,
+    pub source_ref: String,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -206,7 +220,7 @@ impl From<&RunnerSnapshot> for DiagnosticSnapshot {
             .map(|(key, value)| profile_or_standard_signal(snapshot, key, *value))
             .collect::<Vec<_>>();
         append_profile_derived_signals(snapshot, &mut signals);
-        let signal_keys = signals.iter().map(|signal| signal.key.clone()).collect();
+        let capability_sections = capability_sections(&signals);
         let alerts = alerts(snapshot);
 
         let runner_sample_age_ms = sample_age_ms(snapshot.sample_at);
@@ -267,18 +281,43 @@ impl From<&RunnerSnapshot> for DiagnosticSnapshot {
             modules: Vec::new(),
             source_confidence: Vec::new(),
             signals,
-            capability_sections: vec![CapabilitySection {
-                id: "powertrain".to_string(),
-                category: "Powertrain".to_string(),
-                label: "Powertrain".to_string(),
+            capability_sections,
+            active_tests_v2: Vec::new(),
+        }
+    }
+}
+
+fn capability_sections(signals: &[SignalSnapshot]) -> Vec<CapabilitySection> {
+    const CATEGORIES: &[(&str, &str, &str)] = &[
+        ("powertrain", "Powertrain", "Powertrain"),
+        ("turbo", "Turbo", "Turbo"),
+        ("fuel", "Fuel", "Fuel"),
+        ("transmission", "Transmission", "Transmission"),
+        ("body", "Body", "Body"),
+        ("chassis", "Chassis", "Chassis"),
+        ("emissions", "Emissions", "Emissions"),
+        ("other", "Other", "Other"),
+    ];
+
+    CATEGORIES
+        .iter()
+        .filter_map(|(id, category, label)| {
+            let signal_keys = signals
+                .iter()
+                .filter(|signal| signal.category == *category)
+                .map(|signal| signal.key.clone())
+                .collect::<Vec<_>>();
+            (!signal_keys.is_empty()).then(|| CapabilitySection {
+                id: (*id).to_string(),
+                category: (*category).to_string(),
+                label: (*label).to_string(),
                 signal_keys,
                 active_test_keys: Vec::new(),
                 diagnostic_service_keys: Vec::new(),
                 visible: true,
-            }],
-            active_tests_v2: Vec::new(),
-        }
-    }
+            })
+        })
+        .collect()
 }
 
 fn sample_age_ms(sample_at: Option<Instant>) -> Option<u64> {
@@ -397,6 +436,7 @@ fn standard_signal(key: &str, value: f64) -> SignalSnapshot {
         preferred_over: None,
         evidence: None,
         composition: SignalComposition::Scalar,
+        operating_range: None,
     }
 }
 
@@ -427,6 +467,7 @@ fn profile_or_standard_signal(snapshot: &RunnerSnapshot, key: &str, value: f64) 
         preferred_over: None,
         evidence: None,
         composition: profile_composition(display.composition),
+        operating_range: display.operating_range.map(profile_operating_range),
     }
 }
 
@@ -442,13 +483,26 @@ fn append_profile_derived_signals(snapshot: &RunnerSnapshot, signals: &mut Vec<S
         else {
             continue;
         };
-        if formula_key != "actual_minus_desired" || input_keys.len() != 2 {
-            continue;
-        }
-        let Some(actual) = snapshot.signals.get(input_keys[0]) else {
-            continue;
+        let value_and_state = match formula_key {
+            // LLY actual rail pressure falls back to standard Mode 01 PID 23
+            // when the enhanced ECM read has not been observed.  That value
+            // is stored as kPa by the core decoder but the profile display is
+            // explicitly in psi.
+            "first_available" => input_keys
+                .iter()
+                .find_map(|input| derived_input_value(snapshot, signals, input))
+                .map(|(input, value)| (derived_display_value(input, display.unit, value), "ok")),
+            "actual_minus_desired" if input_keys.len() == 2 => {
+                let actual = derived_input_value(snapshot, signals, input_keys[0]);
+                let desired = derived_input_value(snapshot, signals, input_keys[1]);
+                actual.zip(desired).map(|((_, actual), (_, desired))| {
+                    let delta = actual - desired;
+                    (delta, rail_delta_state(delta, desired))
+                })
+            }
+            _ => None,
         };
-        let Some(desired) = snapshot.signals.get(input_keys[1]) else {
+        let Some((value, state)) = value_and_state else {
             continue;
         };
         signals.push(SignalSnapshot {
@@ -457,8 +511,8 @@ fn append_profile_derived_signals(snapshot: &RunnerSnapshot, signals: &mut Vec<S
             category: profile_category(display.category).to_string(),
             module: "derived".to_string(),
             unit: display.unit.to_string(),
-            value: Some(actual - desired),
-            state: "ok".to_string(),
+            value: Some(value),
+            state: state.to_string(),
             confidence: "LiveObserved".to_string(),
             provenance: vec!["derived from confirmed profile runtime".to_string()],
             source_fields: None,
@@ -469,7 +523,54 @@ fn append_profile_derived_signals(snapshot: &RunnerSnapshot, signals: &mut Vec<S
             preferred_over: None,
             evidence: None,
             composition: profile_composition(display.composition),
+            operating_range: display.operating_range.map(profile_operating_range),
         });
+    }
+}
+
+fn rail_delta_state(delta_psi: f64, desired_psi: f64) -> &'static str {
+    if !delta_psi.is_finite() || !desired_psi.is_finite() {
+        return "error";
+    }
+
+    // Allow normal control/transient error, but surface gross disagreement.
+    // A 20% relative band with a 500 psi floor avoids calling small idle
+    // fluctuations unhealthy while catching unit/decoder mismatches.
+    let tolerance_psi = (desired_psi.abs() * 0.20).max(500.0);
+    if delta_psi.abs() <= tolerance_psi {
+        "ok"
+    } else {
+        "warn"
+    }
+}
+
+fn derived_input_value<'a>(
+    snapshot: &RunnerSnapshot,
+    signals: &'a [SignalSnapshot],
+    input: &'a str,
+) -> Option<(&'a str, f64)> {
+    if let Some(value) = snapshot.signals.get(input) {
+        return Some((input, *value));
+    }
+    let standard_key = input
+        .strip_prefix("standard:")
+        .and_then(|pid| u8::from_str_radix(pid, 16).ok())
+        .map(|pid| format!("01{pid:02X}"));
+    if let Some(key) = standard_key.as_deref() {
+        if let Some(value) = snapshot.signals.get(key) {
+            return Some((input, *value));
+        }
+    }
+    signals
+        .iter()
+        .find(|signal| signal.key == input)
+        .and_then(|signal| signal.value.map(|value| (input, value)))
+}
+
+fn derived_display_value(input: &str, unit: &str, value: f64) -> f64 {
+    match (input, unit) {
+        ("standard:23", "psi") => value * 0.145_037_738,
+        _ => value,
     }
 }
 
@@ -511,6 +612,22 @@ fn profile_composition(composition: ProfileSignalComposition) -> SignalCompositi
             row_index,
             row_label: row_label.to_string(),
         },
+    }
+}
+
+fn profile_operating_range(range: SignalRangeDefinition) -> SignalOperatingRange {
+    SignalOperatingRange {
+        evaluation: match range.evaluation {
+            SignalRangeEvaluation::AbsoluteMagnitude => "absolute_magnitude",
+        }
+        .to_string(),
+        desired_max: range.desired_max,
+        caution_max: range.caution_max,
+        desired_label: range.desired_label.to_string(),
+        caution_label: range.caution_label.to_string(),
+        outside_label: range.outside_label.to_string(),
+        conditions: range.conditions.to_string(),
+        source_ref: range.source_ref.to_string(),
     }
 }
 
@@ -699,5 +816,80 @@ mod tests {
         assert_eq!(dto.vin, "unread");
         assert_eq!(dto.protocol, "unresolved");
         assert_eq!(dto.voltage, None);
+    }
+
+    #[test]
+    fn lly_fuel_rail_values_share_physical_psi_units() {
+        let mut snapshot = RunnerSnapshot::empty();
+        snapshot.selected_profile = Some(obd2_dash::profiles::gm::lly::LLY_PROFILE_ID);
+        snapshot.signals = Arc::new(BTreeMap::from([
+            ("0123".to_string(), 29_060.0),
+            ("lly.163D".to_string(), 4_350.0),
+        ]));
+
+        let dto = DiagnosticSnapshot::from(&snapshot);
+        let actual = dto
+            .signals
+            .iter()
+            .find(|signal| signal.key == "lly.fuel_rail.actual")
+            .unwrap();
+        let desired = dto
+            .signals
+            .iter()
+            .find(|signal| signal.key == "lly.163D")
+            .unwrap();
+        let delta = dto
+            .signals
+            .iter()
+            .find(|signal| signal.key == "lly.fuel_rail.delta")
+            .unwrap();
+
+        assert!((actual.value.unwrap() - 4_214.796).abs() < 0.01);
+        assert_eq!(desired.value, Some(4_350.0));
+        assert!((delta.value.unwrap() + 135.204).abs() < 0.01);
+        assert_eq!(delta.state, "ok");
+    }
+
+    #[test]
+    fn gross_fuel_rail_disagreement_is_not_reported_ok() {
+        let mut snapshot = RunnerSnapshot::empty();
+        snapshot.selected_profile = Some(obd2_dash::profiles::gm::lly::LLY_PROFILE_ID);
+        snapshot.signals = Arc::new(BTreeMap::from([
+            ("0123".to_string(), 29_060.0),
+            ("lly.163D".to_string(), 435.0),
+        ]));
+
+        let dto = DiagnosticSnapshot::from(&snapshot);
+        let delta = dto
+            .signals
+            .iter()
+            .find(|signal| signal.key == "lly.fuel_rail.delta")
+            .unwrap();
+
+        assert!((delta.value.unwrap() - 3_779.796).abs() < 0.01);
+        assert_eq!(delta.state, "warn");
+    }
+
+    #[test]
+    fn lly_injector_balance_carries_profile_operating_range() {
+        let mut snapshot = RunnerSnapshot::empty();
+        snapshot.selected_profile = Some(obd2_dash::profiles::gm::lly::LLY_PROFILE_ID);
+        snapshot.signals = Arc::new(BTreeMap::from([("lly.162F".to_string(), 4.5)]));
+
+        let dto = DiagnosticSnapshot::from(&snapshot);
+        let balance = dto
+            .signals
+            .iter()
+            .find(|signal| signal.key == "lly.162F")
+            .unwrap();
+        let range = balance.operating_range.as_ref().unwrap();
+
+        assert_eq!(range.evaluation, "absolute_magnitude");
+        assert_eq!(range.desired_max, 4.0);
+        assert_eq!(range.caution_max, 6.0);
+        assert_eq!(range.desired_label, "Park/Neutral range");
+        assert_eq!(range.caution_label, "Drive-only range");
+        assert!(range.conditions.contains("ECT above 180 F"));
+        assert!(range.source_ref.contains("GM 2005 LLY"));
     }
 }

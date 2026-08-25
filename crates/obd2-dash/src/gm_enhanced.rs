@@ -160,9 +160,42 @@ impl GmMth {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GmOutputScale {
+    /// Converts the source's displayed unit into the definition's physical unit.
+    pub unit_multiplier: u16,
+}
+
+impl GmOutputScale {
+    pub const IDENTITY: Self = Self::new(1);
+
+    pub const fn new(unit_multiplier: u16) -> Self {
+        Self { unit_multiplier }
+    }
+
+    fn apply(self, value: f64, rxf: Option<&str>) -> f64 {
+        value * f64::from(self.unit_multiplier) / 10_f64.powi(i32::from(xgauge_decimal_places(rxf)))
+    }
+}
+
+fn xgauge_decimal_places(rxf: Option<&str>) -> u8 {
+    match rxf.and_then(|raw| raw.as_bytes().get(4)).copied() {
+        // Upper nibble of RXF Offset 2: 8 = value is 10x, 4 = value is 100x.
+        Some(b'8') => 1,
+        Some(b'4') => 2,
+        _ => 0,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GmDecodeKind {
-    RxdMth { rxd: GmRxd, mth: GmMth },
-    RxdUnsigned { rxd: GmRxd },
+    RxdMth {
+        rxd: GmRxd,
+        mth: GmMth,
+        output_scale: GmOutputScale,
+    },
+    RxdUnsigned {
+        rxd: GmRxd,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,6 +371,8 @@ const RXD_3010: GmRxd = GmRxd::new("3010", 0, 16);
 const MTH_TEMP_F: GmMth = GmMth::new("00090005FFD8", 9, 5, -40);
 const MTH_OIL_PSI: GmMth = GmMth::new("001D00320000", 29, 50, 0);
 const MTH_RAIL_KPSI: GmMth = GmMth::new("0091000A0000", 145, 10, 0);
+const OUTPUT_IDENTITY: GmOutputScale = GmOutputScale::IDENTITY;
+const OUTPUT_RAIL_PSI: GmOutputScale = GmOutputScale::new(1_000);
 const MTH_PERCENT: GmMth = GmMth::new("006400FF0000", 100, 255, 0);
 const MTH_PULSE_MS: GmMth = GmMth::new("00C800830000", 200, 131, 0);
 const MTH_BALANCE_MM3: GmMth = GmMth::new("00050020EC00", 5, 32, -5120);
@@ -363,6 +398,7 @@ pub const LLY_ENHANCED_DIDS: &[GmDidDefinition] = &[
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3008,
             mth: MTH_TEMP_F,
+            output_scale: OUTPUT_IDENTITY,
         },
         confidence: Confidence::Community,
         provenance: PROV_SCANGAUGE,
@@ -386,6 +422,7 @@ pub const LLY_ENHANCED_DIDS: &[GmDidDefinition] = &[
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3008,
             mth: MTH_OIL_PSI,
+            output_scale: OUTPUT_IDENTITY,
         },
         confidence: Confidence::Community,
         provenance: PROV_SCANGAUGE,
@@ -409,14 +446,15 @@ pub const LLY_ENHANCED_DIDS: &[GmDidDefinition] = &[
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3008,
             mth: MTH_RAIL_KPSI,
+            output_scale: OUTPUT_RAIL_PSI,
         },
         confidence: Confidence::LiveObserved,
         provenance: PROV_SCANGAUGE_LIVE,
         evidence_id: None,
         cadence: PollCadence::Fast,
         failure_policy: FailurePolicy::SurfaceUnavailable,
-        range_suspect: true,
-        notes: "Range-suspect 8-bit ScanGauge scaling; vendor label is 1000's of PSI. Keep local bytes for cross-check.",
+        range_suspect: false,
+        notes: "Published as 1000's of PSI; the RXF 0x4 decimal-position flag and MTH combine to produce physical psi.",
     },
     GmDidDefinition {
         did: 0x163E,
@@ -432,14 +470,15 @@ pub const LLY_ENHANCED_DIDS: &[GmDidDefinition] = &[
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3008,
             mth: MTH_RAIL_KPSI,
+            output_scale: OUTPUT_RAIL_PSI,
         },
         confidence: Confidence::LiveObserved,
         provenance: PROV_SCANGAUGE_LIVE,
         evidence_id: None,
         cadence: PollCadence::Fast,
         failure_policy: FailurePolicy::PreferStandardPid,
-        range_suspect: true,
-        notes: "Prefer standard PID 01 23 for actual rail when available. Vendor label is 1000's of PSI; keep local bytes for range validation.",
+        range_suspect: false,
+        notes: "Prefer standard PID 01 23 for actual rail when available. Published RXF decimal positioning and MTH are normalized to physical psi.",
     },
     GmDidDefinition {
         did: 0x1540,
@@ -455,6 +494,7 @@ pub const LLY_ENHANCED_DIDS: &[GmDidDefinition] = &[
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3008,
             mth: MTH_PERCENT,
+            output_scale: OUTPUT_IDENTITY,
         },
         confidence: Confidence::LiveObserved,
         provenance: PROV_SCANGAUGE_LIVE,
@@ -478,6 +518,7 @@ pub const LLY_ENHANCED_DIDS: &[GmDidDefinition] = &[
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3008,
             mth: MTH_PERCENT,
+            output_scale: OUTPUT_IDENTITY,
         },
         confidence: Confidence::LiveObserved,
         provenance: PROV_SCANGAUGE_LIVE,
@@ -486,6 +527,30 @@ pub const LLY_ENHANCED_DIDS: &[GmDidDefinition] = &[
         failure_policy: FailurePolicy::SurfaceUnavailable,
         range_suspect: false,
         notes: "High value at idle/closed; lower value means more open.",
+    },
+    GmDidDefinition {
+        did: 0x114C,
+        selector: SELECTOR_01,
+        module: ECM,
+        name: "fuel temperature",
+        unit: "deg F",
+        service: MODE_22_READ_DATA_BY_ID,
+        txd: "6C10F122114C01",
+        rxf: None,
+        rxd: Some(RXD_3008),
+        raw_mth: None,
+        decode: GmDecodeKind::RxdMth {
+            rxd: RXD_3008,
+            mth: MTH_TEMP_F,
+            output_scale: OUTPUT_IDENTITY,
+        },
+        confidence: Confidence::Verified,
+        provenance: PROV_LIVE,
+        evidence_id: Some("gm-fuel-temp-discovery-20260825-031325"),
+        cadence: PollCadence::Medium,
+        failure_policy: FailurePolicy::SurfaceUnavailable,
+        range_suspect: false,
+        notes: "EFILive's official E60 catalog names the fourth supported enhanced PID after VOLTS, ACHPRS, and EGRS as FTEMP. A bounded live scan returned the same complete 29-PID ordering at DIDs 0x1141..0x11C1, placing FTEMP at 0x114C; the observed raw byte 0x5A decodes with the GM one-byte temperature scale A-40 C to 122 F.",
     },
     injector_pulse_width(1, 0x1193, "6C10F122119301", "046245110693"),
     injector_pulse_width(2, 0x1194, "6C10F122119401", "046245110694"),
@@ -683,9 +748,13 @@ pub fn decode_did_value<'a>(
 ) -> Result<GmDecodedValue<'a>, GmEnhancedDecodeError> {
     let data = selected_mode22_data(definition, payload)?;
     let (rxd, value) = match definition.decode {
-        GmDecodeKind::RxdMth { rxd, mth } => {
+        GmDecodeKind::RxdMth {
+            rxd,
+            mth,
+            output_scale,
+        } => {
             let raw = select_rxd_raw(definition.did, data, rxd)?;
-            let value = apply_mth(raw, mth)?;
+            let value = output_scale.apply(apply_mth(raw, mth)?, definition.rxf);
             (raw, value)
         }
         GmDecodeKind::RxdUnsigned { rxd } => {
@@ -782,6 +851,7 @@ const fn injector_pulse_width(
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3010,
             mth: MTH_PULSE_MS,
+            output_scale: OUTPUT_IDENTITY,
         },
         confidence: Confidence::Community,
         provenance: PROV_SCANGAUGE,
@@ -824,6 +894,7 @@ const fn injector_balance(
         decode: GmDecodeKind::RxdMth {
             rxd: RXD_3010,
             mth: MTH_BALANCE_MM3,
+            output_scale: OUTPUT_IDENTITY,
         },
         confidence: Confidence::LiveObserved,
         provenance: PROV_SCANGAUGE_LIVE,
@@ -831,7 +902,7 @@ const fn injector_balance(
         cadence: PollCadence::Medium,
         failure_policy: FailurePolicy::SurfaceUnavailable,
         range_suspect: false,
-        notes: "Warm idle diagnostic value; offset is signed MTH word 0xEC00.",
+        notes: "Warm idle diagnostic value; RXF 0x8 places one decimal and offset is signed MTH word 0xEC00.",
     }
 }
 
@@ -904,15 +975,45 @@ mod tests {
 
     #[test]
     fn registry_contains_lly_foundation_entries() {
-        assert_eq!(LLY_ENHANCED_DIDS.len(), 24);
+        assert_eq!(LLY_ENHANCED_DIDS.len(), 25);
         assert!(find_lly_did(0x1251).is_some());
         assert!(find_lly_did(0x1542).is_some());
+        assert!(find_lly_did(0x114C).is_some());
 
         let rail_desired = find_lly_did(0x163D).unwrap();
         let rail_actual = find_lly_did(0x163E).unwrap();
-        assert!(rail_desired.range_suspect);
-        assert!(rail_actual.range_suspect);
+        assert!(!rail_desired.range_suspect);
+        assert!(!rail_actual.range_suspect);
         assert_eq!(rail_actual.failure_policy, FailurePolicy::PreferStandardPid);
+    }
+
+    #[test]
+    fn decodes_lly_rail_pressure_into_physical_psi() {
+        for did in [0x163D, 0x163E] {
+            let definition = find_lly_did(did).unwrap();
+            let decoded = definition
+                .decode_value(&[0x62, 0x16, did as u8, 0x01, 0x1E])
+                .unwrap();
+
+            assert_eq!(decoded.selected_raw, 0x1E);
+            assert_eq!(decoded.value, 4_350.0);
+            assert_eq!(decoded.unit, "psi");
+        }
+    }
+
+    #[test]
+    fn decodes_lly_fuel_temperature_from_live_observed_byte() {
+        let definition = find_lly_did(0x114C).unwrap();
+        let decoded = definition.decode_value(&[0x62, 0x11, 0x4C, 0x5A]).unwrap();
+
+        assert_eq!(decoded.selected_raw, 0x5A);
+        assert_eq!(decoded.value, 122.0);
+        assert_eq!(decoded.unit, "deg F");
+        assert_eq!(definition.confidence, Confidence::Verified);
+        assert_eq!(
+            definition.evidence_id,
+            Some("gm-fuel-temp-discovery-20260825-031325")
+        );
     }
 
     #[test]
@@ -964,6 +1065,43 @@ mod tests {
         let decoded = definition.decode_value(&[0x01, 0x80, 0x00]).unwrap();
         assert_eq!(decoded.selected_raw, 0x8000);
         assert_eq!(decoded.value, 0.0);
+    }
+
+    #[test]
+    fn decodes_lly_balance_rates_with_rxf_decimal_position() {
+        let samples = [
+            (0x162F, 0x802F, 0.734_375),
+            (0x1630, 0x7FF4, -0.187_5),
+            (0x1631, 0x7F9A, -1.593_75),
+            (0x1632, 0x7FA0, -1.5),
+            (0x1633, 0x7FEC, -0.312_5),
+            (0x1634, 0x8086, 2.093_75),
+            (0x1635, 0x806A, 1.656_25),
+            (0x1636, 0x7FE4, -0.437_5),
+        ];
+
+        for (did, raw, expected) in samples {
+            let [high, low] = u16::to_be_bytes(raw);
+            let decoded = find_lly_did(did)
+                .unwrap()
+                .decode_value(&[0x01, high, low])
+                .unwrap();
+
+            assert_eq!(decoded.selected_raw, u32::from(raw));
+            assert!((decoded.value - expected).abs() < f64::EPSILON);
+            assert_eq!(decoded.unit, "mm3");
+        }
+    }
+
+    #[test]
+    fn applies_rxf_decimal_position_to_pulse_width() {
+        let decoded = find_lly_did(0x1193)
+            .unwrap()
+            .decode_value(&[0x01, 0x00, 0x64])
+            .unwrap();
+
+        assert!((decoded.value - 1.526_717_557).abs() < 0.000_001);
+        assert_eq!(decoded.unit, "ms");
     }
 
     #[test]

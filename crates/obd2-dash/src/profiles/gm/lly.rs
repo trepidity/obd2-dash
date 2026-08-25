@@ -17,7 +17,8 @@ use super::super::model::{
     ModuleSafetyClass, PairRole, PassiveMonitorDefinition, PollCadence, ProfileDecodeError,
     ProfileId, ProfileMatch, Provenance, RouteDefinition, RouteSet, RxdSource, SignalCategory,
     SignalComposition, SignalDefinition, SignalDisplayDefinition, SignalDisplaySource,
-    SourceFields, StandardPidOverride, StandardPidPolicy, VehicleContext,
+    SignalRangeDefinition, SignalRangeEvaluation, SourceFields, StandardPidOverride,
+    StandardPidPolicy, VehicleContext,
 };
 use super::super::selection::validate_vin_charset;
 use super::active;
@@ -155,6 +156,9 @@ macro_rules! lly_signal {
 
 macro_rules! display_profile {
     ($key:literal, $label:literal, $category:expr, $unit:literal, $composition:expr) => {
+        display_profile!($key, $label, $category, $unit, $composition, None)
+    };
+    ($key:literal, $label:literal, $category:expr, $unit:literal, $composition:expr, $range:expr) => {
         SignalDisplayDefinition {
             key: $key,
             label: $label,
@@ -162,6 +166,7 @@ macro_rules! display_profile {
             unit: $unit,
             source: SignalDisplaySource::ProfileSignal($key),
             composition: $composition,
+            operating_range: $range,
         }
     };
 }
@@ -175,6 +180,7 @@ macro_rules! display_standard {
             unit: $unit,
             source: SignalDisplaySource::StandardPid($pid),
             composition: $composition,
+            operating_range: None,
         }
     };
 }
@@ -199,6 +205,7 @@ macro_rules! display_derived {
                 input_keys: $inputs,
             },
             composition: $composition,
+            operating_range: None,
         }
     };
 }
@@ -275,6 +282,27 @@ pub const LLY_SIGNALS: &[SignalDefinition] = &[
         ),
         FailurePolicy::PreferStandardPid,
         Some("standard:23")
+    ),
+    lly_signal!(
+        "lly.114C",
+        "fuel temperature",
+        ModuleKey::Ecm,
+        [0x11, 0x4C, 0x01],
+        "deg F",
+        PollCadence::Medium,
+        Confidence::Verified,
+        PROV_LIVE,
+        SourceFields {
+            txd: "6C10F122114C01",
+            rxf: None,
+            rxd: Some(RXD_3008),
+            raw_mth: None,
+            source_ref: Some(
+                "EFILive E60 FTEMP catalog plus bounded live DID discovery 2026-08-25",
+            ),
+        },
+        FailurePolicy::SurfaceUnavailable,
+        None
     ),
     lly_signal!(
         "lly.1540",
@@ -634,6 +662,16 @@ const FUEL_RAIL_DELTA_INPUTS: &[&str] = &["lly.fuel_rail.actual", "lly.163D"];
 const BAROMETRIC_INPUTS: &[&str] = &["standard:33", "lly.1251"];
 const BOOST_INPUTS: &[&str] = &["standard:0B", "lly.barometric_pressure"];
 const DESIRED_MAP_INPUTS: &[&str] = &["lly.1542"];
+const LLY_INJECTOR_BALANCE_RANGE: SignalRangeDefinition = SignalRangeDefinition {
+    evaluation: SignalRangeEvaluation::AbsoluteMagnitude,
+    desired_max: 4.0,
+    caution_max: 6.0,
+    desired_label: "Park/Neutral range",
+    caution_label: "Drive-only range",
+    outside_label: "Outside service range",
+    conditions: "ECT above 180 F, accessories off, steady idle for at least 30 seconds",
+    source_ref: "GM 2005 LLY Fuel Injector Balance Test with Tech 2",
+};
 
 pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
     display_profile!(
@@ -703,6 +741,13 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
         }
     ),
     display_profile!(
+        "lly.114C",
+        "fuel temperature",
+        SignalCategory::Fuel,
+        "F",
+        SignalComposition::Scalar
+    ),
+    display_profile!(
         "lly.162F",
         "injector balance cyl 1",
         SignalCategory::Fuel,
@@ -711,7 +756,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 0,
             row_label: "1",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_profile!(
         "lly.1630",
@@ -722,7 +768,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 1,
             row_label: "2",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_profile!(
         "lly.1631",
@@ -733,7 +780,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 2,
             row_label: "3",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_profile!(
         "lly.1632",
@@ -744,7 +792,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 3,
             row_label: "4",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_profile!(
         "lly.1633",
@@ -755,7 +804,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 4,
             row_label: "5",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_profile!(
         "lly.1634",
@@ -766,7 +816,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 5,
             row_label: "6",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_profile!(
         "lly.1635",
@@ -777,7 +828,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 6,
             row_label: "7",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_profile!(
         "lly.1636",
@@ -788,7 +840,8 @@ pub const LLY_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[
             table_key: "lly.injector_balance",
             row_index: 7,
             row_label: "8",
-        }
+        },
+        Some(LLY_INJECTOR_BALANCE_RANGE)
     ),
     display_standard!(
         "standard:0B",
@@ -1170,7 +1223,7 @@ mod tests {
 
     #[test]
     fn lly_signals_match_backing_registry() {
-        assert_eq!(LLY_SIGNALS.len(), 24);
+        assert_eq!(LLY_SIGNALS.len(), 25);
         assert_eq!(LLY_SIGNALS.len(), LLY_ENHANCED_DIDS.len());
 
         for signal in LLY_SIGNALS {
@@ -1287,6 +1340,39 @@ mod tests {
     }
 
     #[test]
+    fn decode_lly_rail_pressure_uses_physical_psi() {
+        for did in [0x163D, 0x163E] {
+            let payload = [0x62, 0x16, did as u8, 0x01, 0x1E];
+            let decoded = decode_lly_signal(find_signal(did), &payload).unwrap();
+
+            assert_eq!(decoded.value, 4_350.0);
+            assert_eq!(decoded.unit, "psi");
+            assert_eq!(decoded.selected_raw, vec![0x1E]);
+        }
+    }
+
+    #[test]
+    fn decode_lly_balance_rate_uses_physical_mm3() {
+        let decoded = decode_lly_signal(find_signal(0x1634), &[0x01, 0x80, 0x86]).unwrap();
+
+        assert!((decoded.value - 2.093_75).abs() < f64::EPSILON);
+        assert_eq!(decoded.unit, "mm3");
+        assert_eq!(decoded.selected_raw, vec![0x80, 0x86]);
+    }
+
+    #[test]
+    fn decode_lly_fuel_temperature_uses_gm_temperature_scale() {
+        let signal = find_signal(0x114C);
+        let decoded = decode_lly_signal(signal, &[0x62, 0x11, 0x4C, 0x5A]).unwrap();
+
+        assert_eq!(decoded.value, 122.0);
+        assert_eq!(decoded.unit, "deg F");
+        assert_eq!(decoded.selected_raw, vec![0x5A]);
+        assert_eq!(signal.confidence, Confidence::Verified);
+        assert_eq!(signal.failure_policy, FailurePolicy::SurfaceUnavailable);
+    }
+
+    #[test]
     fn decode_signal_error_mapping() {
         let signal = find_signal(0x1542);
         let mismatched = decode_lly_signal(signal, &[0x62, 0x15, 0x43, 0x01, 0x64]).unwrap_err();
@@ -1390,6 +1476,14 @@ mod tests {
                 input_keys: FUEL_RAIL_DELTA_INPUTS,
             }
         );
+        let fuel_temp = find_display("lly.114C");
+        assert_eq!(
+            fuel_temp.source,
+            SignalDisplaySource::ProfileSignal("lly.114C")
+        );
+        assert_eq!(fuel_temp.category, SignalCategory::Fuel);
+        assert_eq!(fuel_temp.unit, "F");
+        assert_eq!(fuel_temp.composition, SignalComposition::Scalar);
 
         assert_eq!(
             find_display("lly.barometric_pressure").source,
@@ -1416,19 +1510,20 @@ mod tests {
                     table_key: "lly.injector_balance",
                     row_index,
                     row_label,
-                } => Some((display.key, row_index, row_label)),
+                } => Some((display.key, row_index, row_label, display.operating_range)),
                 _ => None,
             })
             .collect();
 
         assert_eq!(rows.len(), 8);
-        for (idx, (key, row_index, row_label)) in rows.iter().enumerate() {
+        for (idx, (key, row_index, row_label, operating_range)) in rows.iter().enumerate() {
             assert_eq!(*row_index, idx as u8);
             assert_eq!(*row_label, (idx + 1).to_string());
             assert!(
                 find_signal_by_key(key).is_some(),
                 "missing signal for {key}"
             );
+            assert_eq!(*operating_range, Some(LLY_INJECTOR_BALANCE_RANGE));
         }
     }
 

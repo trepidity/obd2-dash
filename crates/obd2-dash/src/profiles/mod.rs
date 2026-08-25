@@ -32,8 +32,8 @@ pub use model::{
     PassiveMonitorDefinition, PollCadence, ProfileDecodeError, ProfileId, ProfileMatch,
     ProfileRequestDefinition, Provenance, RouteDefinition, RouteScope, RouteSet, RxdSource,
     SafetyClass, SelectedProfile, Selection, SignalCategory, SignalComposition, SignalDefinition,
-    SignalDisplayDefinition, SignalDisplaySource, SourceFields, StandardPidOverride,
-    StandardPidPolicy, VehicleContext,
+    SignalDisplayDefinition, SignalDisplaySource, SignalRangeDefinition, SignalRangeEvaluation,
+    SourceFields, StandardPidOverride, StandardPidPolicy, VehicleContext,
 };
 pub use registry::{builtin_profile, ManualConfirmError, ProfileRegistry};
 pub use runtime::{

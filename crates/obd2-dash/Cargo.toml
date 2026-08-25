@@ -54,3 +54,7 @@ required-features = ["probe"]
 [[example]]
 name = "gm_pressure_probe"
 required-features = ["probe"]
+
+[[example]]
+name = "gm_fuel_temp_probe"
+required-features = ["probe"]

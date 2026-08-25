@@ -49,7 +49,11 @@ const runnerSnapshot = {
   active_tests_v2: [],
 };
 
-async function installTauriMock(page: Page, delayedSnapshots = false) {
+async function installTauriMock(
+  page: Page,
+  delayedSnapshots = false,
+  snapshot: Record<string, unknown> = runnerSnapshot,
+) {
   await page.addInitScript(
     ({ snapshot, delayed }) => {
       const state = {
@@ -78,7 +82,7 @@ async function installTauriMock(page: Page, delayedSnapshots = false) {
         },
       });
     },
-    { snapshot: runnerSnapshot, delayed: delayedSnapshots },
+    { snapshot, delayed: delayedSnapshots },
   );
 }
 
@@ -370,6 +374,74 @@ test("transmission-capable fixture exposes transmission without diesel controls"
   await expect(transmissionSection.getByText("184.6 F")).toBeVisible();
 
   expect(consoleIssues).toEqual([]);
+});
+
+test("profile operating ranges color injector balance values without UI signal keys", async ({ page }) => {
+  const operatingRange = {
+    evaluation: "absolute_magnitude",
+    desired_max: 4,
+    caution_max: 6,
+    desired_label: "Park/Neutral range",
+    caution_label: "Drive-only range",
+    outside_label: "Outside service range",
+    conditions: "ECT above 180 F, accessories off, steady idle for at least 30 seconds",
+    source_ref: "GM 2005 LLY Fuel Injector Balance Test with Tech 2",
+  } as const;
+  const balanceSignal = (key: string, rowIndex: number, value: number) => ({
+    key,
+    label: `Injector balance cyl ${rowIndex + 1}`,
+    category: "Fuel",
+    module: "ecm",
+    unit: "mm3",
+    value,
+    state: "ok",
+    confidence: "LiveObserved",
+    provenance: ["test profile"],
+    source_fields: null,
+    request: key,
+    decoder_id: "test",
+    evidence_policy: "normal",
+    failure_policy: "retain",
+    preferred_over: null,
+    evidence: null,
+    composition: {
+      kind: "table_row",
+      table_key: "test.profile.balance",
+      table_label: "Injector balance",
+      row_index: rowIndex,
+      row_label: `${rowIndex + 1}`,
+    },
+    operating_range: operatingRange,
+  });
+  const snapshot = {
+    ...runnerSnapshot,
+    signals: [
+      balanceSignal("test.balance.1", 0, 4),
+      balanceSignal("test.balance.2", 1, -5),
+      balanceSignal("test.balance.3", 2, 6.1),
+    ],
+    capability_sections: [{
+      id: "fuel",
+      category: "Fuel",
+      label: "Fuel",
+      signal_keys: ["test.balance.1", "test.balance.2", "test.balance.3"],
+      active_test_keys: [],
+      diagnostic_service_keys: [],
+      visible: true,
+    }],
+  };
+
+  await installTauriMock(page, false, snapshot);
+  await page.goto("http://127.0.0.1:5173/");
+  await page.getByRole("tab", { name: /Fuel/ }).click();
+
+  await expect(page.locator('td[data-range-tone="ok"]')).toContainText("+4.0 mm3");
+  await expect(page.locator('td[data-range-tone="warn"]')).toContainText("-5.0 mm3");
+  await expect(page.locator('td[data-range-tone="crit"]')).toContainText("+6.1 mm3");
+  const legend = page.getByLabel("Injector balance operating range legend");
+  await expect(legend).toContainText("Park/Neutral range |value| ≤ 4");
+  await expect(legend).toContainText("Drive-only range 4 < |value| ≤ 6");
+  await expect(legend).toContainText("ECT above 180 F");
 });
 
 test("Tauri polling runs at 500 ms without overlapping invokes and keeps the latest view", async ({ page }) => {

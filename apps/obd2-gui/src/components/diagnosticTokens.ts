@@ -52,6 +52,15 @@ const runtimeTokens: Record<SignalRuntimeState, DiagnosticRuntimeToken> = {
     surfaceClassName: "bg-zinc-900/60",
     description: "Fresh usable value. This is a transport/runtime state, not a health assertion.",
   },
+  warn: {
+    state: "warn",
+    label: "check",
+    valueClassName: "telemetry-value text-amber-300",
+    badgeClassName: "border-amber-400/40 bg-amber-400/10 text-amber-300",
+    borderClassName: "border-amber-500/30",
+    surfaceClassName: "bg-amber-500/10",
+    description: "Usable value with a derived consistency warning.",
+  },
   waiting: {
     state: "waiting",
     label: "waiting",

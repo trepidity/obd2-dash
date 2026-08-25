@@ -75,6 +75,7 @@ pub const FIXTURE_SIGNAL_DISPLAY: &[SignalDisplayDefinition] = &[SignalDisplayDe
     unit: "C",
     source: SignalDisplaySource::ProfileSignal(FIXTURE_SIGNAL_KEY),
     composition: SignalComposition::Scalar,
+    operating_range: None,
 }];
 
 const FIXTURE_DTC_SERVICES: &[DtcServiceDefinition] = &[DtcServiceDefinition {

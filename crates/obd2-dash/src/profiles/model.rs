@@ -457,6 +457,28 @@ pub enum SignalComposition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SignalRangeEvaluation {
+    AbsoluteMagnitude,
+}
+
+/// Profile-owned operating guidance for a displayed signal.
+///
+/// These bands describe service-manual interpretation, not transport health.
+/// The selected profile supplies them so presentation code never keys vehicle
+/// limits off signal names or VINs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SignalRangeDefinition {
+    pub evaluation: SignalRangeEvaluation,
+    pub desired_max: f64,
+    pub caution_max: f64,
+    pub desired_label: &'static str,
+    pub caution_label: &'static str,
+    pub outside_label: &'static str,
+    pub conditions: &'static str,
+    pub source_ref: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SignalDisplayDefinition {
     pub key: &'static str,
     pub label: &'static str,
@@ -464,6 +486,7 @@ pub struct SignalDisplayDefinition {
     pub unit: &'static str,
     pub source: SignalDisplaySource,
     pub composition: SignalComposition,
+    pub operating_range: Option<SignalRangeDefinition>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -991,6 +1014,7 @@ mod tests {
                     group_key: "signal.group",
                     role: PairRole::Actual,
                 },
+                operating_range: None,
             },
             SignalDisplayDefinition {
                 key: "signal.delta",
@@ -1005,6 +1029,7 @@ mod tests {
                     group_key: "signal.group",
                     role: PairRole::Delta,
                 },
+                operating_range: None,
             },
             SignalDisplayDefinition {
                 key: "signal.row.1",
@@ -1017,6 +1042,7 @@ mod tests {
                     row_index: 0,
                     row_label: "1",
                 },
+                operating_range: None,
             },
         ];
 

@@ -11,6 +11,7 @@ use obd2_core::error::Obd2Error;
 use obd2_core::protocol::pid::Pid;
 use obd2_core::protocol::service::ServiceRequest;
 use obd2_core::session::Session;
+use obd2_core::vehicle::Protocol;
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -90,6 +91,7 @@ impl RequestScript {
 pub struct ScriptedAdapter {
     inner: MockAdapter,
     script: RequestScript,
+    info: AdapterInfo,
 }
 
 impl std::fmt::Debug for ScriptedAdapter {
@@ -101,7 +103,9 @@ impl std::fmt::Debug for ScriptedAdapter {
 #[async_trait]
 impl Adapter for ScriptedAdapter {
     async fn initialize(&mut self) -> Result<InitializationReport, Obd2Error> {
-        self.inner.initialize().await
+        let mut report = self.inner.initialize().await?;
+        report.info = self.info.clone();
+        Ok(report)
     }
 
     async fn request(&mut self, req: &ServiceRequest) -> Result<Vec<u8>, Obd2Error> {
@@ -149,7 +153,7 @@ impl Adapter for ScriptedAdapter {
     }
 
     fn info(&self) -> &AdapterInfo {
-        self.inner.info()
+        &self.info
     }
 
     fn drain_events(&mut self) -> Vec<AdapterEvent> {
@@ -163,6 +167,7 @@ impl Adapter for ScriptedAdapter {
 pub struct ScriptedConnector {
     pub calls: Arc<AtomicUsize>,
     vin: Arc<std::sync::Mutex<String>>,
+    protocol: Protocol,
     pub script: RequestScript,
 }
 
@@ -171,8 +176,15 @@ impl ScriptedConnector {
         Self {
             calls: Arc::new(AtomicUsize::new(0)),
             vin: Arc::new(std::sync::Mutex::new(vin.into())),
+            protocol: Protocol::Can11Bit500,
             script: RequestScript::default(),
         }
+    }
+
+    /// Override the protocol advertised by adapters created for this test.
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        self.protocol = protocol;
+        self
     }
 
     pub fn call_count(&self) -> usize {
@@ -192,10 +204,14 @@ impl super::SessionConnector for ScriptedConnector {
     async fn connect(&self) -> Result<super::NewSession<Self::Adapter>, super::ConnectError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         let vin = self.vin.lock().expect("vin mutex poisoned").clone();
+        let inner = MockAdapter::with_vin(&vin);
+        let mut info = inner.info().clone();
+        info.protocol = self.protocol;
         Ok(super::NewSession {
             session: Session::new(ScriptedAdapter {
-                inner: MockAdapter::with_vin(&vin),
+                inner,
                 script: self.script.clone(),
+                info,
             }),
         })
     }
