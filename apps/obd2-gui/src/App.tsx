@@ -231,7 +231,11 @@ function initialSnapshot(): DiagnosticSnapshot {
   }
   return {
     ...fallbackSnapshot,
-    connection: "connecting live",
+    connection: "runner connecting",
+    connection_state: "connecting",
+    telemetry_fresh: false,
+    vin: "unread",
+    vin_source: "unread",
     voltage: null,
     rpm: 0,
     speed_mph: 0,
@@ -634,6 +638,16 @@ function Toolbar({
   const recordingInputRef = useRef<HTMLInputElement | null>(null);
   const isReplay = sessionMode === "replay";
   const isRecording = sessionMode === "recording";
+  const connectionLabel: Record<DiagnosticSnapshot["connection_state"], string> = {
+    connecting: "Connecting",
+    discovering: "Discovering",
+    waiting_for_telemetry: "Waiting",
+    live: "Live",
+    stale: "Stale",
+    diagnostic: "Diagnostic",
+    reconnecting: "Reconnecting",
+    shutting_down: "Offline",
+  };
   const modeTitle = isReplay
     ? selectedRecording?.name
       ? `Replay: ${selectedRecording.name}`
@@ -642,13 +656,21 @@ function Toolbar({
       ? "Recording"
       : snapshot.vehicle;
   const modeProtocol = isReplay ? "local playback" : snapshot.protocol;
-  const modeCadence = isReplay ? "recording controls" : `${snapshot.poll_ms} ms poll`;
-  const modeLabel = isReplay ? "Replay" : isRecording ? "Recording" : "Live";
+  const modeCadence = isReplay
+    ? "recording controls"
+    : snapshot.telemetry_fresh
+      ? `${snapshot.poll_ms} ms poll`
+      : snapshot.connection;
+  const modeLabel = isReplay ? "Replay" : isRecording ? "Recording" : connectionLabel[snapshot.connection_state];
   const modeButtonClass = isReplay
     ? "border-cyan-400/50 bg-cyan-400/15 text-cyan-100"
     : isRecording
       ? "border-red-400/50 bg-red-500/15 text-red-100"
-      : "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+      : snapshot.connection_state === "live"
+        ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-200"
+        : snapshot.connection_state === "stale" || snapshot.connection_state === "reconnecting"
+          ? "border-red-500/40 bg-red-500/10 text-red-200"
+          : "border-amber-500/40 bg-amber-500/10 text-amber-200";
   const modeIcon = isReplay ? <Radio size={14} /> : isRecording ? <Square size={14} /> : <Cable size={14} />;
   const replayState = selectedRecording == null ? "No file loaded" : replayRunning ? (replayPaused ? "Paused" : "Playing") : "Loaded";
 
@@ -714,7 +736,7 @@ function Toolbar({
           <div className="min-w-0">
             <div className="truncate text-sm font-semibold text-cyan-200">{modeTitle}</div>
             <div className="mt-0.5 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-zinc-400">
-              <span>VIN {snapshot.vin}</span>
+              <span>VIN {snapshot.vin}{snapshot.vin_source === "manual" ? " (manual)" : ""}</span>
               <span>{modeProtocol}</span>
               <span>{modeCadence}</span>
             </div>
@@ -762,7 +784,9 @@ function Toolbar({
                     {isReplay
                       ? selectedRecording?.name ?? replayState
                       : isRecording
-                        ? "Capturing live data"
+                        ? snapshot.telemetry_fresh
+                          ? "Capturing live data"
+                          : `Recording without fresh telemetry; ${snapshot.connection}`
                         : snapshot.connection}
                   </div>
                 </div>
@@ -1025,29 +1049,37 @@ function StatusStrip({
         }
       : item,
   );
+  const telemetryValueClass = snapshot.telemetry_fresh ? "text-emerald-300" : "text-amber-300";
+  const connectionValueClass = snapshot.connection_state === "live"
+    ? "text-cyan-200"
+    : snapshot.connection_state === "stale" || snapshot.connection_state === "reconnecting"
+      ? "text-red-400"
+      : "text-amber-300";
 
   return (
     <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-4 xl:grid-cols-8">
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
         <div className="text-[11px] text-zinc-400">Adapter voltage</div>
-        <div className="mt-1 text-lg font-semibold text-zinc-100">{formatAdapterVoltage(snapshot.voltage)}</div>
+        <div className={`mt-1 text-lg font-semibold ${snapshot.telemetry_fresh ? "text-zinc-100" : "text-amber-300"}`}>
+          {snapshot.telemetry_fresh ? formatAdapterVoltage(snapshot.voltage) : "unavailable"}
+        </div>
       </div>
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
         <div className="text-[11px] text-zinc-400">Engine RPM</div>
-        <div className="mt-1 text-lg font-semibold text-emerald-300">{snapshot.rpm}</div>
+        <div className={`mt-1 text-lg font-semibold ${telemetryValueClass}`}>
+          {snapshot.telemetry_fresh ? snapshot.rpm : "--"}
+        </div>
       </div>
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
         <div className="text-[11px] text-zinc-400">Speed</div>
-        <div className="mt-1 text-lg font-semibold text-zinc-100">{snapshot.speed_mph} mph</div>
+        <div className={`mt-1 text-lg font-semibold ${snapshot.telemetry_fresh ? "text-zinc-100" : "text-amber-300"}`}>
+          {snapshot.telemetry_fresh ? `${snapshot.speed_mph} mph` : "--"}
+        </div>
       </div>
       <div className="rounded-md border border-zinc-800 bg-zinc-900/60 px-3 py-2">
         <div className="text-[11px] text-zinc-400">Source</div>
         <div
-          className={`mt-1 line-clamp-2 text-sm font-medium leading-snug ${
-            /error|failed|busy|unavailable|denied/i.test(snapshot.connection)
-              ? "text-red-400"
-              : "text-cyan-200"
-          }`}
+          className={`mt-1 line-clamp-2 text-sm font-medium leading-snug ${connectionValueClass}`}
           title={snapshot.connection}
         >
           {snapshot.connection}

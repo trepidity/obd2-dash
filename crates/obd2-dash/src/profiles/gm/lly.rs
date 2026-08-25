@@ -284,27 +284,6 @@ pub const LLY_SIGNALS: &[SignalDefinition] = &[
         Some("standard:23")
     ),
     lly_signal!(
-        "lly.114C",
-        "fuel temperature",
-        ModuleKey::Ecm,
-        [0x11, 0x4C, 0x01],
-        "deg F",
-        PollCadence::Medium,
-        Confidence::Verified,
-        PROV_LIVE,
-        SourceFields {
-            txd: "6C10F122114C01",
-            rxf: None,
-            rxd: Some(RXD_3008),
-            raw_mth: None,
-            source_ref: Some(
-                "EFILive E60 FTEMP catalog plus bounded live DID discovery 2026-08-25",
-            ),
-        },
-        FailurePolicy::SurfaceUnavailable,
-        None
-    ),
-    lly_signal!(
         "lly.1540",
         "VGT vane desired",
         ModuleKey::Ecm,
@@ -337,6 +316,27 @@ pub const LLY_SIGNALS: &[SignalDefinition] = &[
             Some(RXD_3008),
             Some("006400FF0000")
         ),
+        FailurePolicy::SurfaceUnavailable,
+        None
+    ),
+    lly_signal!(
+        "lly.114C",
+        "fuel temperature",
+        ModuleKey::Ecm,
+        [0x11, 0x4C, 0x01],
+        "deg F",
+        PollCadence::Medium,
+        Confidence::Verified,
+        PROV_LIVE,
+        SourceFields {
+            txd: "6C10F122114C01",
+            rxf: None,
+            rxd: Some(RXD_3008),
+            raw_mth: None,
+            source_ref: Some(
+                "EFILive E60 FTEMP catalog plus bounded live DID discovery 2026-08-25",
+            ),
+        },
         FailurePolicy::SurfaceUnavailable,
         None
     ),

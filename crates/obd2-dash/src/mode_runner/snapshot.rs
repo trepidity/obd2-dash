@@ -143,9 +143,16 @@ pub struct CapabilityState {
 /// Connection metadata that the runner has observed without exposing its
 /// session or adapter to snapshot consumers. Missing values are meaningful:
 /// an older vehicle may provide standard telemetry without answering Mode 09.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VinSource {
+    Observed,
+    Manual,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConnectionMetadata {
     pub vin: Option<String>,
+    pub vin_source: Option<VinSource>,
     pub protocol: Option<String>,
 }
 

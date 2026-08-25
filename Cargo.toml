@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.dependencies]
-obd2-core = { git = "https://github.com/HaulLogic/obd2-core", rev = "0fe6e667f2f9361ed64c9ebd376d028153a14a17" }
+obd2-core = { git = "https://github.com/HaulLogic/obd2-core", rev = "6a68ceb2dce7d81f1f1c24383707f9729781d8cc" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

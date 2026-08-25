@@ -32,8 +32,11 @@ const runnerSnapshot = {
   foreground_result: null,
   vehicle: "Mock runner",
   vin: "TESTRUNNER0000001",
+  vin_source: "observed",
   protocol: "CAN 11-bit",
-  connection: "runner telemetry",
+  connection: "runner telemetry live",
+  connection_state: "live",
+  telemetry_fresh: true,
   voltage: 13.8,
   rpm: 700,
   speed_mph: 0,
@@ -48,6 +51,25 @@ const runnerSnapshot = {
   capability_sections: [],
   active_tests_v2: [],
 };
+
+test("stale runner data is never presented as a live session", async ({ page }) => {
+  await installTauriMock(page, false, {
+    ...runnerSnapshot,
+    vin_source: "manual",
+    connection: "runner telemetry stale (4200 ms since last vehicle response)",
+    connection_state: "stale",
+    telemetry_fresh: false,
+    runner_sample_age_ms: 4_200,
+  });
+
+  await page.goto("http://127.0.0.1:5173/");
+
+  await expect(sessionMenuButton(page)).toContainText("Session: Stale");
+  await expect(page.getByText("VIN TESTRUNNER0000001 (manual)")).toBeVisible();
+  await expect(page.getByText("Engine RPM", { exact: true }).first().locator("..")).toContainText("--");
+  await expect(page.getByText("Adapter voltage", { exact: true }).first().locator("..")).toContainText("unavailable");
+  await expect(page.getByText("Source", { exact: true }).first().locator("..")).toContainText("runner telemetry stale");
+});
 
 async function installTauriMock(
   page: Page,

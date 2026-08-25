@@ -171,14 +171,27 @@ export interface CapabilityRuntimeState {
   remaining: number | null;
 }
 
+export type ConnectionState =
+  | "connecting"
+  | "discovering"
+  | "waiting_for_telemetry"
+  | "live"
+  | "stale"
+  | "diagnostic"
+  | "reconnecting"
+  | "shutting_down";
+
 export interface DiagnosticSnapshot {
   mode: RunnerMode;
   capability_state: CapabilityRuntimeState;
   foreground_result: unknown | null;
   vehicle: string;
   vin: string;
+  vin_source: "observed" | "manual" | "unread";
   protocol: string;
   connection: string;
+  connection_state: ConnectionState;
+  telemetry_fresh: boolean;
   voltage: number | null;
   rpm: number;
   speed_mph: number;

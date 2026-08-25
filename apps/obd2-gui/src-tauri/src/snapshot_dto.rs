@@ -8,7 +8,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use obd2_dash::mode_runner::{
     CapabilityPersistence, CapabilityVerification, DiagnosticDtc, DiagnosticDtcOrigin, ModeState,
-    RunnerSnapshot,
+    RunnerSnapshot, VinSource,
 };
 use obd2_dash::profiles::{
     builtin_profile, PairRole, SignalCategory as ProfileSignalCategory,
@@ -18,6 +18,7 @@ use obd2_dash::profiles::{
 use serde::Serialize;
 
 const GUI_POLL_MS: u16 = 500;
+const LIVE_SAMPLE_MAX_AGE: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct StatusValue {
@@ -156,6 +157,19 @@ pub enum RunnerModeDto {
     ShuttingDown,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionStateDto {
+    Connecting,
+    Discovering,
+    WaitingForTelemetry,
+    Live,
+    Stale,
+    Diagnostic,
+    Reconnecting,
+    ShuttingDown,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct CapabilityStateDto {
     pub persistence: String,
@@ -177,8 +191,14 @@ pub struct DiagnosticSnapshot {
     pub foreground_result: Option<serde_json::Value>,
     pub vehicle: String,
     pub vin: String,
+    /// Distinguishes a Mode 09 observation from an operator-provided fallback.
+    pub vin_source: String,
     pub protocol: String,
     pub connection: String,
+    pub connection_state: ConnectionStateDto,
+    /// True only while the runner is in telemetry mode and its last vehicle
+    /// response is younger than the bounded freshness threshold.
+    pub telemetry_fresh: bool,
     /// Adapter supply voltage from `ATRV`, when the adapter reports it.
     pub voltage: Option<f64>,
     pub rpm: u16,
@@ -207,6 +227,9 @@ pub struct DiagnosticSnapshot {
 
 impl From<&RunnerSnapshot> for DiagnosticSnapshot {
     fn from(snapshot: &RunnerSnapshot) -> Self {
+        let runner_sample_age_ms = sample_age_ms(snapshot.sample_at);
+        let connection_state = connection_state(&snapshot.mode, runner_sample_age_ms);
+        let telemetry_fresh = connection_state == ConnectionStateDto::Live;
         let dtcs = snapshot
             .diagnostic
             .standard_dtcs
@@ -220,26 +243,36 @@ impl From<&RunnerSnapshot> for DiagnosticSnapshot {
             .map(|(key, value)| profile_or_standard_signal(snapshot, key, *value))
             .collect::<Vec<_>>();
         append_profile_derived_signals(snapshot, &mut signals);
+        if !telemetry_fresh {
+            mark_signals_cached(&mut signals);
+        }
         let capability_sections = capability_sections(&signals);
-        let alerts = alerts(snapshot);
+        let alerts = alerts(snapshot, connection_state);
 
-        let runner_sample_age_ms = sample_age_ms(snapshot.sample_at);
         Self {
             mode: mode_dto(&snapshot.mode),
             capability_state: capability_state_dto(snapshot),
             foreground_result: None,
-            vehicle: "Live OBD-II".to_string(),
+            vehicle: "OBD-II".to_string(),
             vin: snapshot
                 .connection
                 .vin
                 .clone()
                 .unwrap_or_else(|| "unread".to_string()),
+            vin_source: match snapshot.connection.vin_source {
+                Some(VinSource::Observed) => "observed",
+                Some(VinSource::Manual) => "manual",
+                None => "unread",
+            }
+            .to_string(),
             protocol: snapshot
                 .connection
                 .protocol
                 .clone()
                 .unwrap_or_else(|| "unresolved".to_string()),
-            connection: connection_label(&snapshot.mode),
+            connection: connection_label(connection_state, runner_sample_age_ms, &snapshot.mode),
+            connection_state,
+            telemetry_fresh,
             voltage: snapshot.adapter_voltage,
             rpm: rounded_signal(snapshot, "010C"),
             speed_mph: speed_mph(snapshot),
@@ -266,8 +299,8 @@ impl From<&RunnerSnapshot> for DiagnosticSnapshot {
                 },
                 StatusValue {
                     label: "Runner".to_string(),
-                    value: mode_label(&snapshot.mode),
-                    state: mode_status(&snapshot.mode).to_string(),
+                    value: connection_state_label(connection_state, &snapshot.mode),
+                    state: connection_state_status(connection_state).to_string(),
                 },
                 StatusValue {
                     label: "Capability".to_string(),
@@ -333,6 +366,21 @@ fn sample_at_unix_ms(age_ms: Option<u64>) -> Option<u64> {
 
 fn duration_millis(duration: Duration) -> u64 {
     duration.as_millis().min(u128::from(u64::MAX)) as u64
+}
+
+fn connection_state(mode: &ModeState, sample_age_ms: Option<u64>) -> ConnectionStateDto {
+    match mode {
+        ModeState::Connecting => ConnectionStateDto::Connecting,
+        ModeState::Discovering { .. } => ConnectionStateDto::Discovering,
+        ModeState::Telemetry => match sample_age_ms {
+            None => ConnectionStateDto::WaitingForTelemetry,
+            Some(age) if age < duration_millis(LIVE_SAMPLE_MAX_AGE) => ConnectionStateDto::Live,
+            Some(_) => ConnectionStateDto::Stale,
+        },
+        ModeState::Diagnostic { .. } => ConnectionStateDto::Diagnostic,
+        ModeState::Reconnecting { .. } => ConnectionStateDto::Reconnecting,
+        ModeState::ShuttingDown => ConnectionStateDto::ShuttingDown,
+    }
 }
 
 fn mode_dto(mode: &ModeState) -> RunnerModeDto {
@@ -468,6 +516,21 @@ fn profile_or_standard_signal(snapshot: &RunnerSnapshot, key: &str, value: f64) 
         evidence: None,
         composition: profile_composition(display.composition),
         operating_range: display.operating_range.map(profile_operating_range),
+    }
+}
+
+fn mark_signals_cached(signals: &mut [SignalSnapshot]) {
+    for signal in signals.iter_mut().filter(|signal| signal.value.is_some()) {
+        signal.state = "cached".to_string();
+        if !signal
+            .provenance
+            .iter()
+            .any(|item| item == "last observed; connection is not fresh")
+        {
+            signal
+                .provenance
+                .push("last observed; connection is not fresh".to_string());
+        }
     }
 }
 
@@ -662,44 +725,73 @@ fn display_value(key: &str, value: f64) -> f64 {
     }
 }
 
-fn connection_label(mode: &ModeState) -> String {
-    match mode {
-        ModeState::Telemetry => "runner telemetry".to_string(),
-        ModeState::Connecting => "runner connecting".to_string(),
-        ModeState::Discovering { .. } => "runner discovering".to_string(),
-        ModeState::Diagnostic { .. } => "runner diagnostic".to_string(),
-        ModeState::Reconnecting { attempt } => format!("runner reconnecting (attempt {attempt})"),
-        ModeState::ShuttingDown => "runner shutting down".to_string(),
-    }
-}
-
-fn mode_label(mode: &ModeState) -> String {
-    match mode {
-        ModeState::Telemetry => "telemetry".to_string(),
-        ModeState::Connecting => "connecting".to_string(),
-        ModeState::Discovering {
-            origin,
-            step,
-            total,
-        } => format!("discovering {origin:?} {step}/{total}"),
-        ModeState::Diagnostic {
-            phase,
-            phase_total,
-            step,
-            total,
-        } => format!("diagnostic {phase}/{phase_total}, step {step}/{total}"),
-        ModeState::Reconnecting { attempt } => format!("reconnecting {attempt}"),
-        ModeState::ShuttingDown => "shutting down".to_string(),
-    }
-}
-
-fn mode_status(mode: &ModeState) -> &'static str {
-    match mode {
-        ModeState::Telemetry => "ok",
-        ModeState::Connecting | ModeState::Discovering { .. } | ModeState::Diagnostic { .. } => {
-            "warn"
+fn connection_label(
+    state: ConnectionStateDto,
+    sample_age_ms: Option<u64>,
+    mode: &ModeState,
+) -> String {
+    match state {
+        ConnectionStateDto::Live => "runner telemetry live".to_string(),
+        ConnectionStateDto::Stale => format!(
+            "runner telemetry stale ({} ms since last vehicle response)",
+            sample_age_ms.unwrap_or_default()
+        ),
+        ConnectionStateDto::WaitingForTelemetry => {
+            "runner connected; waiting for vehicle telemetry".to_string()
         }
-        ModeState::Reconnecting { .. } | ModeState::ShuttingDown => "muted",
+        ConnectionStateDto::Connecting => "runner connecting".to_string(),
+        ConnectionStateDto::Discovering => "runner discovering".to_string(),
+        ConnectionStateDto::Diagnostic => "runner diagnostic".to_string(),
+        ConnectionStateDto::Reconnecting => match mode {
+            ModeState::Reconnecting { attempt } => {
+                format!("runner reconnecting (attempt {attempt})")
+            }
+            _ => "runner reconnecting".to_string(),
+        },
+        ConnectionStateDto::ShuttingDown => "runner shutting down".to_string(),
+    }
+}
+
+fn connection_state_label(state: ConnectionStateDto, mode: &ModeState) -> String {
+    match state {
+        ConnectionStateDto::Live => "live".to_string(),
+        ConnectionStateDto::Stale => "stale".to_string(),
+        ConnectionStateDto::WaitingForTelemetry => "waiting".to_string(),
+        ConnectionStateDto::Connecting => "connecting".to_string(),
+        ConnectionStateDto::Discovering => match mode {
+            ModeState::Discovering {
+                origin,
+                step,
+                total,
+            } => format!("discovering {origin:?} {step}/{total}"),
+            _ => "discovering".to_string(),
+        },
+        ConnectionStateDto::Diagnostic => match mode {
+            ModeState::Diagnostic {
+                phase,
+                phase_total,
+                step,
+                total,
+            } => format!("diagnostic {phase}/{phase_total}, step {step}/{total}"),
+            _ => "diagnostic".to_string(),
+        },
+        ConnectionStateDto::Reconnecting => match mode {
+            ModeState::Reconnecting { attempt } => format!("reconnecting {attempt}"),
+            _ => "reconnecting".to_string(),
+        },
+        ConnectionStateDto::ShuttingDown => "shutting down".to_string(),
+    }
+}
+
+fn connection_state_status(state: ConnectionStateDto) -> &'static str {
+    match state {
+        ConnectionStateDto::Live => "ok",
+        ConnectionStateDto::Connecting
+        | ConnectionStateDto::Discovering
+        | ConnectionStateDto::WaitingForTelemetry
+        | ConnectionStateDto::Stale
+        | ConnectionStateDto::Diagnostic => "warn",
+        ConnectionStateDto::Reconnecting | ConnectionStateDto::ShuttingDown => "muted",
     }
 }
 
@@ -722,8 +814,20 @@ fn capability_status(snapshot: &RunnerSnapshot) -> &'static str {
     }
 }
 
-fn alerts(snapshot: &RunnerSnapshot) -> Vec<String> {
+fn alerts(snapshot: &RunnerSnapshot, connection_state: ConnectionStateDto) -> Vec<String> {
     let mut alerts = Vec::new();
+    match connection_state {
+        ConnectionStateDto::Stale => alerts.push(
+            "vehicle telemetry is stale; displayed signal values are last observed".to_string(),
+        ),
+        ConnectionStateDto::WaitingForTelemetry => {
+            alerts.push("connected adapter is waiting for a vehicle response".to_string())
+        }
+        ConnectionStateDto::Reconnecting => {
+            alerts.push("vehicle connection was lost; reconnecting".to_string())
+        }
+        _ => {}
+    }
     if matches!(
         &snapshot.capability.persistence,
         CapabilityPersistence::SessionOnlyStoreError
@@ -784,6 +888,7 @@ mod tests {
         };
         snapshot.connection = ConnectionMetadata {
             vin: Some("1GCHK23224F000001".to_string()),
+            vin_source: Some(VinSource::Observed),
             protocol: Some("J1850 VPW".to_string()),
         };
         snapshot.adapter_voltage = Some(14.1);
@@ -798,6 +903,7 @@ mod tests {
         assert_eq!(dto.signals[0].key, "010C");
         assert_eq!(dto.statuses[0].value, "1");
         assert_eq!(dto.vin, "1GCHK23224F000001");
+        assert_eq!(dto.vin_source, "observed");
         assert_eq!(dto.protocol, "J1850 VPW");
         assert_eq!(dto.voltage, Some(14.1));
         assert!(dto.runner_sample_age_ms.is_some_and(|age| age >= 12));
@@ -805,6 +911,8 @@ mod tests {
         let json = serde_json::to_value(dto).unwrap();
         assert!(json.get("active_tests_v2").is_some());
         assert_eq!(json["mode"]["state"], "telemetry");
+        assert_eq!(json["connection_state"], "live");
+        assert_eq!(json["telemetry_fresh"], true);
         assert_eq!(json["capability_state"]["persistence"], "cached");
         assert!(json["foreground_result"].is_null());
     }
@@ -814,13 +922,58 @@ mod tests {
         let dto = DiagnosticSnapshot::from(&RunnerSnapshot::empty());
 
         assert_eq!(dto.vin, "unread");
+        assert_eq!(dto.vin_source, "unread");
         assert_eq!(dto.protocol, "unresolved");
         assert_eq!(dto.voltage, None);
     }
 
     #[test]
+    fn stale_telemetry_is_explicit_and_last_values_are_cached() {
+        let mut snapshot = RunnerSnapshot::empty();
+        snapshot.mode = ModeState::Telemetry;
+        snapshot.signals = Arc::new(BTreeMap::from([("010C".to_string(), 681.0)]));
+        snapshot.sample_at = Some(Instant::now() - Duration::from_secs(4));
+
+        let dto = DiagnosticSnapshot::from(&snapshot);
+
+        assert_eq!(dto.connection_state, ConnectionStateDto::Stale);
+        assert!(!dto.telemetry_fresh);
+        assert_eq!(dto.signals[0].state, "cached");
+        assert!(dto.connection.contains("stale"));
+        assert!(dto.alerts.iter().any(|alert| alert.contains("stale")));
+    }
+
+    #[test]
+    fn telemetry_mode_without_a_sample_is_waiting_not_live() {
+        let mut snapshot = RunnerSnapshot::empty();
+        snapshot.mode = ModeState::Telemetry;
+
+        let dto = DiagnosticSnapshot::from(&snapshot);
+
+        assert_eq!(
+            dto.connection_state,
+            ConnectionStateDto::WaitingForTelemetry
+        );
+        assert!(!dto.telemetry_fresh);
+        assert_eq!(dto.statuses[1].value, "waiting");
+    }
+
+    #[test]
+    fn manually_supplied_vin_is_labeled_as_manual() {
+        let mut snapshot = RunnerSnapshot::empty();
+        snapshot.connection.vin = Some("1GCHK23224F000001".to_string());
+        snapshot.connection.vin_source = Some(VinSource::Manual);
+
+        let dto = DiagnosticSnapshot::from(&snapshot);
+
+        assert_eq!(dto.vin_source, "manual");
+    }
+
+    #[test]
     fn lly_fuel_rail_values_share_physical_psi_units() {
         let mut snapshot = RunnerSnapshot::empty();
+        snapshot.mode = ModeState::Telemetry;
+        snapshot.sample_at = Some(Instant::now());
         snapshot.selected_profile = Some(obd2_dash::profiles::gm::lly::LLY_PROFILE_ID);
         snapshot.signals = Arc::new(BTreeMap::from([
             ("0123".to_string(), 29_060.0),
@@ -853,6 +1006,8 @@ mod tests {
     #[test]
     fn gross_fuel_rail_disagreement_is_not_reported_ok() {
         let mut snapshot = RunnerSnapshot::empty();
+        snapshot.mode = ModeState::Telemetry;
+        snapshot.sample_at = Some(Instant::now());
         snapshot.selected_profile = Some(obd2_dash::profiles::gm::lly::LLY_PROFILE_ID);
         snapshot.signals = Arc::new(BTreeMap::from([
             ("0123".to_string(), 29_060.0),
@@ -873,6 +1028,8 @@ mod tests {
     #[test]
     fn lly_injector_balance_carries_profile_operating_range() {
         let mut snapshot = RunnerSnapshot::empty();
+        snapshot.mode = ModeState::Telemetry;
+        snapshot.sample_at = Some(Instant::now());
         snapshot.selected_profile = Some(obd2_dash::profiles::gm::lly::LLY_PROFILE_ID);
         snapshot.signals = Arc::new(BTreeMap::from([("lly.162F".to_string(), 4.5)]));
 

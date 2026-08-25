@@ -38,7 +38,7 @@ pub use persistence::Persistence;
 pub use scheduler::{RequestDescriptor, RequestKey, Scheduler, Tier, ViewId};
 pub use snapshot::{
     CapabilityPersistence, CapabilityState, CapabilityVerification, ConnectionMetadata,
-    DiagnosticDtc, DiagnosticDtcOrigin, ModeState, RunnerSnapshot,
+    DiagnosticDtc, DiagnosticDtcOrigin, ModeState, RunnerSnapshot, VinSource,
 };
 pub use store::{CapabilityStore, SqliteCapabilityStore};
 pub use verifier::{ProbeError, VerificationResult, Verifier};

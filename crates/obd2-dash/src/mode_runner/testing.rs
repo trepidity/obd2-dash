@@ -24,6 +24,7 @@ pub enum ScriptedResponse {
     NoData,
     Timeout,
     Transport(String),
+    Adapter(String),
     Unsupported(u8),
 }
 
@@ -34,6 +35,7 @@ impl ScriptedResponse {
             Self::NoData => Err(Obd2Error::NoData),
             Self::Timeout => Err(Obd2Error::Timeout),
             Self::Transport(detail) => Err(Obd2Error::Transport(detail)),
+            Self::Adapter(detail) => Err(Obd2Error::Adapter(detail)),
             Self::Unsupported(pid) => Err(Obd2Error::UnsupportedPid { pid }),
         }
     }

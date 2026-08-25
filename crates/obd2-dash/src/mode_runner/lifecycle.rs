@@ -27,7 +27,7 @@ use super::persistence::Persistence;
 use super::scheduler::{RequestDescriptor, Scheduler, Tier, ViewId};
 use super::snapshot::{
     CapabilityPersistence, CapabilityVerification, ConnectionMetadata, DiagnosticResult, ModeState,
-    RunnerSnapshot,
+    RunnerSnapshot, VinSource,
 };
 use super::store::CapabilityStore;
 use super::verifier::Verifier;
@@ -96,6 +96,10 @@ const PROFILE_SLOW_SIGNAL_INTERVAL_CYCLES: u64 = 60;
 /// VIN is absent; unlike startup acquisition this is deliberately a single
 /// request so identity recovery cannot monopolize a slow J1850 bus.
 const MISSING_IDENTITY_RETRY_INTERVAL_CYCLES: u64 = 20;
+/// A connected adapter is not proof of a connected vehicle. If every ECU
+/// request stops producing observations for this long, drop the Session and
+/// let the runner's bounded reconnect loop re-establish the bus.
+const TELEMETRY_STALE_AFTER: Duration = Duration::from_secs(3);
 
 /// Standard-PID cadence tiers per the design's §10 telemetry table. Tier C is
 /// the low-cadence remainder for secondary PIDs; view gating is reserved for
@@ -207,6 +211,8 @@ where
     snapshot_tx: watch::Sender<RunnerSnapshot>,
     scheduler: Scheduler,
     cycle: u64,
+    telemetry_started_at: Option<Instant>,
+    telemetry_stale_after: Duration,
     profile_descriptors: Vec<RequestDescriptor>,
     forced_standard_keys: BTreeSet<CapabilityKey>,
     profile_context: Option<VehicleContext>,
@@ -242,6 +248,8 @@ where
             snapshot_tx: watch::channel(RunnerSnapshot::empty()).0,
             scheduler: Scheduler::default(),
             cycle: 0,
+            telemetry_started_at: None,
+            telemetry_stale_after: TELEMETRY_STALE_AFTER,
             profile_descriptors: Vec::new(),
             forced_standard_keys: BTreeSet::new(),
             profile_context: None,
@@ -383,6 +391,10 @@ where
         self.snapshot.mode = ModeState::Connecting;
         self.snapshot.connection = ConnectionMetadata::default();
         self.snapshot.adapter_voltage = None;
+        self.snapshot.signals = std::sync::Arc::new(Default::default());
+        self.snapshot.diagnostic = std::sync::Arc::new(DiagnosticResult::default());
+        self.snapshot.sample_at = None;
+        self.telemetry_started_at = None;
         self.cycle = 0;
         self.scheduler = Scheduler::default();
         self.profile_descriptors = profile_probe_descriptors(None);
@@ -391,6 +403,7 @@ where
         self.selected_profile = None;
         self.snapshot.selected_profile = None;
         self.snapshot.profile_manually_confirmed = false;
+        self.publish();
         let mut new_session = self
             .connector
             .connect()
@@ -410,20 +423,24 @@ where
 
         let observed_identity = acquire_identity(&mut new_session.session, 2).await;
         let rescan_identity = self.rescan_identity.take();
-        let identity = match (
+        let (identity, vin_source) = match (
             &observed_identity.vin,
             rescan_identity,
             &self.manual_profile_confirmation,
         ) {
-            (Some(_), _, _) => observed_identity,
-            (None, Some(identity), _) => identity,
-            (None, None, Some(confirmation)) => IdentityOutcome {
-                vin: Some(confirmation.vin.clone()),
-                confidence: IdentityConfidence::Single,
-            },
-            (None, None, None) => observed_identity,
+            (Some(_), _, _) => (observed_identity, Some(VinSource::Observed)),
+            (None, Some(identity), _) => (identity, Some(VinSource::Observed)),
+            (None, None, Some(confirmation)) => (
+                IdentityOutcome {
+                    vin: Some(confirmation.vin.clone()),
+                    confidence: IdentityConfidence::Single,
+                },
+                Some(VinSource::Manual),
+            ),
+            (None, None, None) => (observed_identity, None),
         };
         self.snapshot.connection.vin = identity.vin.clone();
+        self.snapshot.connection.vin_source = vin_source;
         let Some(vin) = identity.vin.clone() else {
             let candidates = match new_session.session.supported_pids().await {
                 Ok(pids) if !pids.is_empty() => pids.into_iter().collect::<Vec<_>>(),
@@ -459,8 +476,7 @@ where
             self.snapshot.capability.verification = CapabilityVerification::Verifying {
                 remaining: candidates.len(),
             };
-            self.snapshot.mode = ModeState::Telemetry;
-            self.publish();
+            self.enter_telemetry();
             return Ok(());
         };
 
@@ -738,8 +754,7 @@ where
             }
         }
         self.session = Some(new_session.session);
-        self.snapshot.mode = ModeState::Telemetry;
-        self.publish();
+        self.enter_telemetry();
         self.reconnect_attempt = 0;
         Ok(())
     }
@@ -749,7 +764,9 @@ where
         self.snapshot.mode = ModeState::Reconnecting {
             attempt: self.reconnect_attempt.saturating_add(1),
         };
+        self.telemetry_started_at = None;
         self.reconnect_attempt = self.reconnect_attempt.saturating_add(1);
+        self.publish();
         let delay = if self.reconnect_attempt <= 3 {
             Duration::from_millis(100 * u64::from(self.reconnect_attempt))
         } else {
@@ -1224,8 +1241,31 @@ where
 
     fn finish_foreground(&mut self) {
         self.foreground_cancel_requested = false;
+        self.enter_telemetry();
+    }
+
+    fn enter_telemetry(&mut self) {
+        self.telemetry_started_at = Some(Instant::now());
         self.snapshot.mode = ModeState::Telemetry;
         self.publish();
+    }
+
+    fn finish_poll_cycle(&self, did_work: bool) -> Result<bool> {
+        let freshness_reference = match (self.telemetry_started_at, self.snapshot.sample_at) {
+            (Some(started), Some(sampled)) => Some(started.max(sampled)),
+            (Some(started), None) => Some(started),
+            (None, Some(sampled)) => Some(sampled),
+            (None, None) => None,
+        };
+        if freshness_reference.is_some_and(|last_fresh| {
+            Instant::now().saturating_duration_since(last_fresh) >= self.telemetry_stale_after
+        }) {
+            return Err(anyhow!(
+                "telemetry stale: no successful vehicle response for {} ms",
+                self.telemetry_stale_after.as_millis()
+            ));
+        }
+        Ok(did_work)
     }
 
     /// Keep reconnecting until a complete identity/cache acquisition succeeds.
@@ -1328,7 +1368,7 @@ where
         did_work |= self.poll_profile_display_signals().await?;
 
         let Some(key) = self.verifier.next(Instant::now(), &ViewId::Gauges).cloned() else {
-            return Ok(did_work);
+            return self.finish_poll_cycle(did_work);
         };
         let pid = parse_standard_pid(&key.request_id)?;
         let result = self.read_pid_probe(pid).await;
@@ -1391,11 +1431,11 @@ where
             self.publish();
         }
         match result {
-            Ok(_) => Ok(true),
+            Ok(_) => self.finish_poll_cycle(true),
             Err(super::verifier::ProbeError::Transport) => {
                 Err(anyhow!("PID verifier request failed: transport"))
             }
-            Err(_) => Ok(true),
+            Err(_) => self.finish_poll_cycle(true),
         }
     }
 
@@ -1413,19 +1453,23 @@ where
             .session
             .as_mut()
             .ok_or(super::verifier::ProbeError::Transport)?;
-        let reading = session.read_pid(pid).await.map_err(|error| match error {
-            Obd2Error::NoData => super::verifier::ProbeError::NoData,
-            Obd2Error::Timeout => super::verifier::ProbeError::Timeout,
-            Obd2Error::Transport(_) => super::verifier::ProbeError::Transport,
-            Obd2Error::UnsupportedPid { .. } => super::verifier::ProbeError::UnsupportedPid,
-            Obd2Error::NegativeResponse {
-                nrc:
-                    NegativeResponse::RequestOutOfRange
-                    | NegativeResponse::ServiceNotSupported
-                    | NegativeResponse::SubFunctionNotSupported,
-                ..
-            } => super::verifier::ProbeError::ExplicitUnsupported,
-            _ => super::verifier::ProbeError::Decode,
+        let reading = session.read_pid(pid).await.map_err(|error| {
+            if error.is_connection_loss() {
+                return super::verifier::ProbeError::Transport;
+            }
+            match error {
+                Obd2Error::NoData => super::verifier::ProbeError::NoData,
+                Obd2Error::Timeout => super::verifier::ProbeError::Timeout,
+                Obd2Error::UnsupportedPid { .. } => super::verifier::ProbeError::UnsupportedPid,
+                Obd2Error::NegativeResponse {
+                    nrc:
+                        NegativeResponse::RequestOutOfRange
+                        | NegativeResponse::ServiceNotSupported
+                        | NegativeResponse::SubFunctionNotSupported,
+                    ..
+                } => super::verifier::ProbeError::ExplicitUnsupported,
+                _ => super::verifier::ProbeError::Decode,
+            }
         })?;
         let value = reading
             .value
@@ -1588,10 +1632,9 @@ where
                 tracing::warn!(%vin, "discarding malformed VIN returned during identity retry");
                 Ok(false)
             }
-            Err(Obd2Error::Transport(error)) => {
-                Err(anyhow!("VIN recovery request failed: transport: {error}"))
+            Err(error) if error.is_connection_loss() => {
+                Err(anyhow!(error).context("VIN recovery lost the vehicle connection"))
             }
-            Err(Obd2Error::Io(error)) => Err(anyhow!(error).context("VIN recovery serial I/O")),
             Err(error) => {
                 tracing::debug!(%error, "VIN still unreadable during background retry");
                 Ok(false)
@@ -1717,5 +1760,76 @@ mod tests {
             Some(crate::profiles::gm::LLY_PROFILE_ID)
         );
         assert!(matches!(runner.snapshot().mode, ModeState::Telemetry));
+    }
+
+    #[tokio::test]
+    async fn explicit_adapter_bus_loss_ends_the_telemetry_cycle() {
+        let connector = TestConnector::new("1HGCM82633A004352");
+        connector.script.push(
+            0x01,
+            Some(0x0C),
+            ScriptedResponse::Adapter("unable to connect to vehicle".to_string()),
+        );
+        let store = SqliteCapabilityStore::from_database(Database::open_in_memory().unwrap());
+        let mut runner = ModeRunner::new(connector, store);
+        runner.connect().await.unwrap();
+
+        let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+        runner.capabilities = CapabilitySet::default();
+        runner
+            .capabilities
+            .insert(key, CapabilityOutcome::Supported);
+        runner.scheduler = Scheduler::new(vec![standard_pid_descriptor(0x0C)]);
+        runner.verifier = Verifier::new();
+
+        let error = runner.poll_cycle().await.unwrap_err();
+        assert!(error.to_string().contains("transport"));
+    }
+
+    #[tokio::test]
+    async fn telemetry_without_any_successful_vehicle_response_becomes_stale() {
+        let connector = TestConnector::new("1HGCM82633A004352");
+        connector
+            .script
+            .push(0x01, Some(0x0C), ScriptedResponse::NoData);
+        connector
+            .script
+            .push(0x01, Some(0x0C), ScriptedResponse::NoData);
+        let store = SqliteCapabilityStore::from_database(Database::open_in_memory().unwrap());
+        let mut runner = ModeRunner::new(connector, store);
+        runner.connect().await.unwrap();
+
+        let key = CapabilityKey::new(CapabilityKind::Pid, "010C", "broadcast");
+        runner.capabilities = CapabilitySet::default();
+        runner
+            .capabilities
+            .insert(key, CapabilityOutcome::Supported);
+        runner.scheduler = Scheduler::new(vec![standard_pid_descriptor(0x0C)]);
+        runner.verifier = Verifier::new();
+        runner.telemetry_stale_after = Duration::ZERO;
+
+        let error = runner.poll_cycle().await.unwrap_err();
+        assert!(error.to_string().contains("telemetry stale"));
+    }
+
+    #[tokio::test]
+    async fn a_new_connection_discards_prior_session_values() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let connector = ScriptedConnector {
+            calls,
+            vin: "1HGCM82633A004352",
+        };
+        let store = SqliteCapabilityStore::from_database(Database::open_in_memory().unwrap());
+        let mut runner = ModeRunner::new(connector, store);
+        runner.snapshot.signals = std::sync::Arc::new(std::collections::BTreeMap::from([(
+            "010C".to_string(),
+            681.0,
+        )]));
+        runner.snapshot.sample_at = Some(Instant::now());
+
+        runner.connect().await.unwrap();
+
+        assert!(runner.snapshot().signals.is_empty());
+        assert!(runner.snapshot().sample_at.is_none());
     }
 }
